@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai_sns_postgres
+    environment:
+      POSTGRES_DB: ai_sns
+      POSTGRES_USER: ai_sns
+      POSTGRES_PASSWORD: ai_sns
+    ports:
+      - "5433:5432"
+    volumes:
+      - ai_sns_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_sns -d ai_sns"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ai_sns_postgres_data:
