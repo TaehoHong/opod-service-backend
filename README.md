@@ -21,3 +21,9 @@ npm run start:dev
 ```
 
 Admin API and admin UI live in `../opod-admin`.
+
+## Production
+
+```bash
+PORT=7000 DATABASE_URL='postgresql://opod:change-me@localhost:5432/opod?schema=opod' npm run start:prod
+```
