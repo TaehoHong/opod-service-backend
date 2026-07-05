@@ -24,6 +24,13 @@ Admin API and admin UI live in `../opod-admin`.
 
 ## Production
 
+The server owns `docker-compose.yml` and `.env`. Do not keep production
+compose files in this repo or overwrite them during deploy.
+
 ```bash
-PORT=7000 DATABASE_URL='postgresql://opod:change-me@opod-postgres:5432/opod?schema=opod&options=-c%20search_path%3Dopod' npm run start:prod
+rsync -a --delete --exclude-from=deploy/rsync-exclude.txt ./ taeho@121.141.156.200:~/opod-backend/
+ssh taeho@121.141.156.200 'cd ~/opod-backend && docker compose build api && docker compose up -d api'
 ```
+
+Keep ports, database URL, volumes, nginx, certificates, and PostgreSQL exposure
+in the server-local `~/opod-backend/docker-compose.yml` and `.env`.
