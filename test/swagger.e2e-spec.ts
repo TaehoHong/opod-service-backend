@@ -54,6 +54,24 @@ describe("service swagger", () => {
     expect(paths).toContain("/health");
     expect(paths).toContain("/auth/register");
     expect(paths.some((path) => path.startsWith("/admin"))).toBe(false);
+    expect(response.body.tags.map((tag: { name: string }) => tag.name)).toEqual(
+      [
+        "인증",
+        "캐릭터",
+        "피드",
+        "게시글",
+        "팔로우",
+        "메시지",
+        "크레딧",
+        "알림",
+        "신고",
+        "검색",
+        "이벤트",
+        "시스템",
+      ],
+    );
+    expect(response.body.paths["/auth/register"].post.tags).toEqual(["인증"]);
+    expect(response.body.paths["/health"].get.tags).toEqual(["시스템"]);
 
     await app.close();
   });
