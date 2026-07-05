@@ -1,0 +1,59 @@
+name: opod-backend
+
+services:
+  postgres:
+    image: postgres:18.4
+    container_name: opod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - opod_postgres_18_data:/var/lib/postgresql
+      - ./docker/init-opod.sql:/docker-entrypoint-initdb.d/10-opod.sql:ro
+    networks:
+      - opod_default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    image: opod-service-backend:latest
+    container_name: opod-service-backend
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      network: host
+    environment:
+      PORT: "7000"
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+      LLM_API_URL: ${LLM_API_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    ports:
+      - "7000:7000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - opod_default
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:7000/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+networks:
+  opod_default:
+    external: true
+
+volumes:
+  opod_postgres_18_data:
+    name: opod_postgres_18_data
