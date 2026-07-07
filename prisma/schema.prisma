@@ -445,4 +445,5 @@ model CharacterPersona {
 
   @@index([characterId, deletedAt, createdAt])
   @@map("character_personas")
+  @@schema("opod")
 }
