@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { APP_INTERCEPTOR } from "@nestjs/core";
 import { ServiceAuthModule } from "./auth/auth.module";
 import { ServiceCharactersModule } from "./characters/characters.module";
 import { ServiceCreditsModule } from "./credits/credits.module";
@@ -12,6 +13,7 @@ import { ServiceMessagesModule } from "./messages/messages.module";
 import { ServiceNoticesModule } from "./notices/notices.module";
 import { ServiceNotificationsModule } from "./notifications/notifications.module";
 import { ServicePostsModule } from "./posts/posts.module";
+import { RequestLoggingInterceptor } from "./request-logging.interceptor";
 import { ServiceReportsModule } from "./reports/reports.module";
 import { ServiceSearchModule } from "./search/search.module";
 
@@ -32,6 +34,9 @@ import { ServiceSearchModule } from "./search/search.module";
     ServicePostsModule,
     ServiceReportsModule,
     ServiceSearchModule,
+  ],
+  providers: [
+    { provide: APP_INTERCEPTOR, useClass: RequestLoggingInterceptor },
   ],
 })
 export class ServiceModule {}
