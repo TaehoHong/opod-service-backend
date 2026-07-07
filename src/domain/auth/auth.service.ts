@@ -174,6 +174,14 @@ export class AuthService {
     return payload.sub;
   }
 
+  async optionalUserIdFromAuthorization(
+    authorization?: string,
+  ): Promise<string | undefined> {
+    return authorization?.trim()
+      ? this.userIdFromAuthorization(authorization)
+      : undefined;
+  }
+
   async currentUserFromAuthorization(
     authorization?: string,
   ): Promise<PublicAuthUser> {

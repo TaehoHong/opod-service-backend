@@ -380,6 +380,15 @@ describe("auth", () => {
 
     await request(app.getHttpServer()).get("/auth/me").expect(401);
     await request(app.getHttpServer()).patch("/auth/me").expect(401);
-    await request(app.getHttpServer()).get("/feed").expect(401);
+    await request(app.getHttpServer())
+      .get("/feed")
+      .expect(200)
+      .expect((response) => {
+        expect(Array.isArray(response.body.items)).toBe(true);
+      });
+    await request(app.getHttpServer())
+      .get("/feed")
+      .set("Authorization", "Bearer invalid")
+      .expect(401);
   });
 });

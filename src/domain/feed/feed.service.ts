@@ -19,10 +19,13 @@ export class FeedService {
     private readonly eventsService?: EventsService,
   ) {}
 
-  async getFeed(userId: string): Promise<Post[]> {
-    const follows = await this.followsService.followedCharacterIdsFor(userId);
-    const hashtagPreferences =
-      (await this.eventsService?.hashtagPreferencesFor(userId)) ?? new Map();
+  async getFeed(userId?: string): Promise<Post[]> {
+    const follows = userId
+      ? await this.followsService.followedCharacterIdsFor(userId)
+      : new Set<string>();
+    const hashtagPreferences = userId
+      ? ((await this.eventsService?.hashtagPreferencesFor(userId)) ?? new Map())
+      : new Map();
 
     return (await this.postsService.listPosts()).sort((left, right) => {
       const scoreWithFollowBoost = (post: Post) =>
@@ -37,7 +40,10 @@ export class FeedService {
     });
   }
 
-  async getFeedPage(userId: string, input: PageInput): Promise<Page<Post>> {
+  async getFeedPage(
+    userId: string | undefined,
+    input: PageInput,
+  ): Promise<Page<Post>> {
     const posts = await this.getFeed(userId);
     const cursorId = decodeCursor(input.cursor);
     const cursorIndex = cursorId

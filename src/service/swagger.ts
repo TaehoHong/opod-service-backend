@@ -283,7 +283,7 @@ const operationSchemas: Record<string, OperationSchema> = {
     status: "202",
   },
 
-  FeedController_getFeed: { auth: true, response: page(post) },
+  FeedController_getFeed: { response: page(post) },
 
   FollowsController_followCharacter: {
     auth: true,

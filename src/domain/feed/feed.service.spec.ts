@@ -50,6 +50,42 @@ describe("FeedService", () => {
     expect(secondPage.items.map((post: Post) => post.id)).toEqual(["post-low"]);
   });
 
+  it("returns newest posts for anonymous feed without personalization", async () => {
+    const olderPost: Post = {
+      id: "post-older",
+      characterId: "character-1",
+      content: "older",
+      media,
+      hashtags: ["film"],
+      createdAt: "2026-06-30T00:00:00.000Z",
+    };
+    const newerPost: Post = {
+      id: "post-newer",
+      characterId: "character-2",
+      content: "newer",
+      media,
+      hashtags: [],
+      createdAt: "2026-06-30T00:01:00.000Z",
+    };
+    const followedCharacterIdsFor = jest.fn();
+    const hashtagPreferencesFor = jest.fn();
+    const feedService = new FeedService(
+      {
+        listPosts: jest.fn().mockResolvedValue([olderPost, newerPost]),
+      } as unknown as PostsService,
+      { followedCharacterIdsFor } as unknown as FollowsService,
+      { hashtagPreferencesFor } as unknown as EventsService,
+    );
+
+    await expect(
+      feedService
+        .getFeed(undefined)
+        .then((posts) => posts.map((post) => post.id)),
+    ).resolves.toEqual([newerPost.id, olderPost.id]);
+    expect(followedCharacterIdsFor).not.toHaveBeenCalled();
+    expect(hashtagPreferencesFor).not.toHaveBeenCalled();
+  });
+
   it("boosts followed character posts in the feed", async () => {
     const followedPost: Post = {
       id: "post-followed",

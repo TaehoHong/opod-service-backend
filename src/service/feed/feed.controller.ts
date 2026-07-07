@@ -17,7 +17,7 @@ export class FeedController {
     @Query("limit") limit?: string,
   ) {
     const userId =
-      await this.authService.userIdFromAuthorization(authorization);
+      await this.authService.optionalUserIdFromAuthorization(authorization);
     return this.feedService.getFeedPage(userId, parsePageQuery(cursor, limit));
   }
 }
