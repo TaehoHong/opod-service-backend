@@ -45,6 +45,27 @@ export class AuthController {
     );
   }
 
+  @Delete("me")
+  deleteMe(
+    @Headers("authorization") authorization: string | undefined,
+    @Body()
+    body: Parameters<AuthService["deleteAccountFromAuthorization"]>[1],
+  ) {
+    return this.authService.deleteAccountFromAuthorization(authorization, body);
+  }
+
+  @Patch("password")
+  changePassword(
+    @Headers("authorization") authorization: string | undefined,
+    @Body()
+    body: Parameters<AuthService["changePasswordFromAuthorization"]>[1],
+  ) {
+    return this.authService.changePasswordFromAuthorization(
+      authorization,
+      body,
+    );
+  }
+
   @Delete("session")
   revokeSession(
     @Body()

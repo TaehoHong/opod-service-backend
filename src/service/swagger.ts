@@ -71,6 +71,7 @@ const serviceTags: OpenApiTag[] = [
   { name: "크레딧", description: "크레딧 결제와 사용 내역 API" },
   { name: "알림", description: "사용자 알림 API" },
   { name: "신고", description: "콘텐츠 신고 API" },
+  { name: "고객지원", description: "FAQ, 공지사항, 1:1 문의 API" },
   { name: "검색", description: "통합 검색과 해시태그 API" },
   { name: "이벤트", description: "클라이언트 이벤트 수집 API" },
   { name: "시스템", description: "서비스 상태 확인 API" },
@@ -86,6 +87,9 @@ const tagByPathSegment: Record<string, string> = {
   credits: "크레딧",
   notifications: "알림",
   reports: "신고",
+  faqs: "고객지원",
+  notices: "고객지원",
+  inquiries: "고객지원",
   search: "검색",
   hashtags: "검색",
   events: "이벤트",
@@ -201,6 +205,23 @@ const operationSchemas: Record<string, OperationSchema> = {
     auth: true,
     request: { displayName: "새 이름" },
     response: user,
+  },
+  AuthController_deleteMe: {
+    auth: true,
+    request: {
+      password: "password1234",
+      reasonCategory: "low_usage",
+      reasonText: "자주 사용하지 않아요",
+    },
+    response: { deleted: true },
+  },
+  AuthController_changePassword: {
+    auth: true,
+    request: {
+      currentPassword: "password1234",
+      newPassword: "new-password5678",
+    },
+    response: authTokens,
   },
   AuthController_revokeSession: {
     request: { refreshToken: "refresh_abc123" },
@@ -352,6 +373,90 @@ const operationSchemas: Record<string, OperationSchema> = {
   },
   ReportsController_getReport: { auth: true, response: report },
 
+  InquiriesController_createInquiry: {
+    auth: true,
+    request: { category: "credit", body: "결제했는데 크레딧이 안 들어와요." },
+    response: {
+      id: "inquiry_01",
+      category: "credit",
+      body: "결제했는데 크레딧이 안 들어와요.",
+      status: "submitted",
+      answeredAt: null,
+      createdAt: isoDate,
+    },
+    status: "201",
+  },
+  InquiriesController_listInquiries: {
+    auth: true,
+    response: page({
+      id: "inquiry_01",
+      category: "credit",
+      body: "결제했는데 크레딧이 안 들어와요.",
+      status: "submitted",
+      answeredAt: null,
+      createdAt: isoDate,
+    }),
+  },
+  InquiriesController_getInquiry: {
+    auth: true,
+    response: {
+      id: "inquiry_01",
+      category: "credit",
+      body: "결제했는데 크레딧이 안 들어와요.",
+      status: "answered",
+      answerBody: "확인 후 크레딧을 지급해 드렸어요.",
+      answeredAt: isoDate,
+      createdAt: isoDate,
+    },
+  },
+  InquiriesController_deleteInquiry: {
+    auth: true,
+    response: { deleted: true },
+  },
+  NoticesController_listNotices: {
+    response: {
+      pinned: [
+        {
+          id: "notice_01",
+          title: "서비스 점검 안내",
+          isPinned: true,
+          publishedAt: isoDate,
+        },
+      ],
+      items: [
+        {
+          id: "notice_02",
+          title: "업데이트 소식",
+          isPinned: false,
+          publishedAt: isoDate,
+        },
+      ],
+      nextCursor: "cursor_abc123",
+    },
+  },
+  NoticesController_getNotice: {
+    response: {
+      id: "notice_01",
+      title: "서비스 점검 안내",
+      body: "7월 10일 새벽 2시부터 점검이 진행됩니다.",
+      isPinned: true,
+      publishedAt: isoDate,
+    },
+  },
+  FaqsController_listFaqs: {
+    response: {
+      items: [
+        {
+          id: "faq_01",
+          category: "credit",
+          question: "크레딧은 어떻게 충전하나요?",
+          answer: "크레딧 탭에서 패키지를 선택해 충전할 수 있어요.",
+          sortOrder: 0,
+        },
+      ],
+    },
+  },
+
   SearchController_search: {
     response: { characters: [character], posts: [post], hashtags: ["travel"] },
   },
@@ -410,6 +515,7 @@ function sortSwaggerTags(left: string, right: string) {
     "크레딧",
     "알림",
     "신고",
+    "고객지원",
     "검색",
     "이벤트",
     "시스템",

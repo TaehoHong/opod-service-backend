@@ -42,6 +42,15 @@ enum CreditPurchaseStatus {
   @@schema("opod")
 }
 
+enum CreditReservationStatus {
+  reserved
+  captured
+  released
+
+  @@map("credit_reservation_status")
+  @@schema("opod")
+}
+
 enum GenerationJobStatus {
   queued
   running
@@ -78,6 +87,14 @@ enum CharacterStatus {
   @@schema("opod")
 }
 
+enum InquiryStatus {
+  submitted
+  answered
+
+  @@map("inquiry_status")
+  @@schema("opod")
+}
+
 model User {
   id                   String                  @id @default(uuid(7)) @db.Uuid
   email                String?                 @unique
@@ -85,10 +102,15 @@ model User {
   passwordSalt         String?                 @map("password_salt")
   displayName          String                  @map("display_name")
   createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt            DateTime?               @map("deleted_at") @db.Timestamptz(6)
   characterFollows     UserCharacterFollow[]
+  creditCheckIns       CreditCheckIn[]
   creditLedgerEntries  CreditLedgerEntry[]
   creditPurchases      CreditPurchase[]
+  creditReservations   CreditReservation[]
   events               UserEvent[]
+  inquiries            Inquiry[]
   messageConversations MessageConversation[]
   notifications        Notification[]
   refreshTokens        UserRefreshToken[]
@@ -109,6 +131,72 @@ model UserRefreshToken {
 
   @@index([userId, createdAt])
   @@map("user_refresh_tokens")
+  @@schema("opod")
+}
+
+model UserWithdrawal {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  // 익명화된 users 행을 느슨하게 가리키는 평문 uuid (FK 없음).
+  userId         String   @map("user_id") @db.Uuid
+  // HMAC-SHA256(email, AUTH_EMAIL_HASH_PEPPER). 원문 이메일은 저장하지 않는다.
+  // 30일 내 동일 이메일 재가입 시 가입 보너스 차단용. 30일 경과분은 파기 대상.
+  emailHash      String   @map("email_hash")
+  reasonCategory String?  @map("reason_category")
+  reasonText     String?  @map("reason_text")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([emailHash, createdAt])
+  @@map("user_withdrawals")
+  @@schema("opod")
+}
+
+model Faq {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  category    String
+  question    String
+  answer      String
+  sortOrder   Int      @default(0) @map("sort_order")
+  isPublished Boolean  @default(false) @map("is_published")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([isPublished, category, sortOrder])
+  @@map("faqs")
+  @@schema("opod")
+}
+
+model Notice {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  title       String
+  body        String
+  isPinned    Boolean   @default(false) @map("is_pinned")
+  // null = 초안, 미래 시각 = 예약 발행. 발행분만 서비스에 노출된다.
+  publishedAt DateTime? @map("published_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([isPinned, publishedAt])
+  @@map("notices")
+  @@schema("opod")
+}
+
+model Inquiry {
+  id         String        @id @default(uuid(7)) @db.Uuid
+  // 탈퇴 후에도 익명화된 users 행에 연결을 유지한다 (분쟁처리 기록 보존).
+  userId     String        @map("user_id") @db.Uuid
+  category   String
+  body       String
+  status     InquiryStatus @default(submitted)
+  // 답변은 opod-admin이 기록한다. 답변 저장 시 inquiry.answered 알림 계약 참조.
+  answerBody String?       @map("answer_body")
+  answeredAt DateTime?     @map("answered_at") @db.Timestamptz(6)
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user       User          @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("inquiries")
   @@schema("opod")
 }
 
@@ -341,12 +429,17 @@ model CreditLedgerEntry {
   userId            String          @map("user_id") @db.Uuid
   entryType         CreditEntryType @map("entry_type")
   amount            Int
+  // grant-only: unconsumed credits left in this grant bucket.
+  remainingAmount   Int?            @map("remaining_amount")
+  // grant-only: free credits expire; null means no expiry (paid credits).
+  expiresAt         DateTime?       @map("expires_at") @db.Timestamptz(6)
   reason            String
   externalReference String?         @map("external_reference")
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   user              User            @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([userId, entryType, expiresAt])
   @@map("credit_ledger_entries")
   @@schema("opod")
 }
@@ -365,6 +458,36 @@ model CreditPurchase {
 
   @@index([userId, createdAt])
   @@map("credit_purchases")
+  @@schema("opod")
+}
+
+model CreditReservation {
+  id         String                  @id @default(uuid(7)) @db.Uuid
+  userId     String                  @map("user_id") @db.Uuid
+  actionType String                  @map("action_type")
+  amount     Int
+  status     CreditReservationStatus @default(reserved)
+  reference  String                  @unique
+  expiresAt  DateTime                @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user       User                    @relation(fields: [userId], references: [id])
+
+  @@index([userId, status, expiresAt])
+  @@map("credit_reservations")
+  @@schema("opod")
+}
+
+model CreditCheckIn {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  // KST calendar date the user checked in, formatted YYYY-MM-DD.
+  checkInDate String   @map("check_in_date")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, checkInDate])
+  @@map("credit_check_ins")
   @@schema("opod")
 }
 
@@ -438,12 +561,15 @@ model CharacterPersona {
   characterId String    @map("character_id") @db.Uuid
   title       String
   content     String
+  // Assembly order when personas are stitched into a prompt; lower comes first.
+  // Assigned in steps of 10 so entries can be inserted between without renumber.
+  sortOrder   Int       @default(0) @map("sort_order")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
   character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
-  @@index([characterId, deletedAt, createdAt])
+  @@index([characterId, deletedAt, sortOrder])
   @@map("character_personas")
   @@schema("opod")
 }

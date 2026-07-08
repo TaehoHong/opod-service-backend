@@ -11,3 +11,4 @@ if (!envFile.DATABASE_URL) {
 
 process.env.DATABASE_URL = envFile.DATABASE_URL;
 process.env.AUTH_JWT_SECRET = "test-auth-secret";
+process.env.AUTH_EMAIL_HASH_PEPPER = "test-email-hash-pepper";

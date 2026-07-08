@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { CharactersModule } from "../characters/characters.module";
+import { CreditsModule } from "../credits/credits.module";
 import { PrismaModule } from "../database/prisma.module";
 import { EventsModule } from "../events/events.module";
 import { UsersModule } from "../users/users.module";
@@ -14,6 +15,7 @@ import { MessagesService } from "./messages.service";
   imports: [
     AuthModule,
     CharactersModule,
+    CreditsModule,
     EventsModule,
     PrismaModule,
     UsersModule,

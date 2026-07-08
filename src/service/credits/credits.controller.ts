@@ -48,6 +48,13 @@ export class CreditsController {
     return this.creditsService.spendCredits({ ...body, userId });
   }
 
+  @Post("check-in")
+  async checkIn(@Headers("authorization") authorization?: string) {
+    const userId =
+      await this.authService.userIdFromAuthorization(authorization);
+    return this.creditsService.checkIn({ userId });
+  }
+
   @Get("balance")
   async getBalance(@Headers("authorization") authorization?: string) {
     const userId =

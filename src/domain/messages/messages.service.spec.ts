@@ -1,8 +1,41 @@
 import { EventsService } from "../events/events.service";
+import { InsufficientCreditsException } from "../credits/insufficient-credits.exception";
 import { MessagesService } from "./messages.service";
 
+type MessagesServiceCtor = new (
+  usersService: unknown,
+  charactersService: unknown,
+  prisma: unknown,
+  creditsService: unknown,
+  eventsService?: unknown,
+  replyProvider?: unknown,
+) => MessagesService;
+
+function createCreditsStub() {
+  return {
+    reserveCredits: jest.fn().mockResolvedValue({
+      id: "reservation-1",
+      reference: "chat_reply:test",
+      status: "reserved",
+      amount: 2,
+    }),
+    captureReservation: jest.fn().mockResolvedValue({
+      id: "reservation-1",
+      reference: "chat_reply:test",
+      status: "captured",
+      amount: 2,
+    }),
+    releaseReservation: jest.fn().mockResolvedValue({
+      id: "reservation-1",
+      reference: "chat_reply:test",
+      status: "released",
+      amount: 2,
+    }),
+  };
+}
+
 describe("MessagesService", () => {
-  it("stores the reply returned by the message reply provider", async () => {
+  it("stores the reply and captures the reserved credits", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const create = jest
       .fn()
@@ -23,15 +56,8 @@ describe("MessagesService", () => {
     const replyProvider = {
       createReply: jest.fn().mockResolvedValue("provider says hi"),
     };
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-        replyProvider: unknown,
-      ) => MessagesService
-    )(
+    const credits = createCreditsStub();
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {
@@ -44,6 +70,7 @@ describe("MessagesService", () => {
         },
         message: { create },
       },
+      credits,
       undefined,
       replyProvider,
     );
@@ -65,16 +92,17 @@ describe("MessagesService", () => {
       userId: "human-1",
       messageBody: "hello",
     });
-    expect(create).toHaveBeenNthCalledWith(2, {
-      data: {
-        conversationId: "conversation-1",
-        senderType: "character",
-        body: "provider says hi",
-      },
+    expect(credits.reserveCredits).toHaveBeenCalledWith({
+      userId: "human-1",
+      actionType: "chat_reply",
     });
+    expect(credits.captureReservation).toHaveBeenCalledWith({
+      reference: "chat_reply:test",
+    });
+    expect(credits.releaseReservation).not.toHaveBeenCalled();
   });
 
-  it("does not store an AI reply when the reply provider fails", async () => {
+  it("releases the reservation when the reply provider fails", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const create = jest.fn().mockResolvedValueOnce({
       id: "message-human",
@@ -83,15 +111,8 @@ describe("MessagesService", () => {
       body: "hello",
       createdAt,
     });
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-        replyProvider: unknown,
-      ) => MessagesService
-    )(
+    const credits = createCreditsStub();
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {
@@ -104,6 +125,7 @@ describe("MessagesService", () => {
         },
         message: { create },
       },
+      credits,
       undefined,
       { createReply: jest.fn().mockRejectedValue(new Error("provider down")) },
     );
@@ -116,6 +138,36 @@ describe("MessagesService", () => {
       }),
     ).rejects.toThrow("provider down");
     expect(create).toHaveBeenCalledTimes(1);
+    expect(credits.captureReservation).not.toHaveBeenCalled();
+    expect(credits.releaseReservation).toHaveBeenCalledWith({
+      reference: "chat_reply:test",
+    });
+  });
+
+  it("blocks the message before any write when credits are insufficient", async () => {
+    const upsert = jest.fn();
+    const create = jest.fn();
+    const credits = createCreditsStub();
+    credits.reserveCredits.mockRejectedValue(
+      new InsufficientCreditsException(),
+    );
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser: jest.fn().mockResolvedValue(true) },
+      { hasCharacter: jest.fn().mockResolvedValue(true) },
+      { messageConversation: { upsert }, message: { create } },
+      credits,
+    );
+
+    await expect(
+      service.sendMessage({
+        userId: "human-1",
+        characterId: "ai-1",
+        body: "hello",
+      }),
+    ).rejects.toThrow(InsufficientCreditsException);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(credits.releaseReservation).not.toHaveBeenCalled();
   });
 
   it("creates conversations and messages through Prisma", async () => {
@@ -141,17 +193,11 @@ describe("MessagesService", () => {
         body: "AI reply to: hello",
         createdAt,
       });
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService?: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       { messageConversation: { upsert }, message: { create } },
+      createCreditsStub(),
     );
 
     await expect(
@@ -220,20 +266,14 @@ describe("MessagesService", () => {
         createdAt,
       },
     ]);
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService?: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {
         messageConversation: { findUnique },
         message: { findMany },
       },
+      createCreditsStub(),
     );
 
     await expect(
@@ -284,20 +324,14 @@ describe("MessagesService", () => {
         createdAt,
       },
     ]);
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService?: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {
         messageConversation: { findUnique },
         message: { findMany },
       },
+      createCreditsStub(),
     );
 
     const page = await service.getMessagesPage({
@@ -357,19 +391,13 @@ describe("MessagesService", () => {
         messages: [],
       },
     ]);
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService?: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn() },
       {
         messageConversation: { findMany },
       },
+      createCreditsStub(),
     );
 
     await expect(
@@ -423,13 +451,12 @@ describe("MessagesService", () => {
   });
 
   it("rejects empty human messages", async () => {
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => MessagesService
-    )({ hasUser: jest.fn() }, { hasCharacter: jest.fn() }, {});
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser: jest.fn() },
+      { hasCharacter: jest.fn() },
+      {},
+      createCreditsStub(),
+    );
 
     await expect(
       service.sendMessage({
@@ -441,16 +468,11 @@ describe("MessagesService", () => {
   });
 
   it("rejects unknown users", async () => {
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(false) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {},
+      createCreditsStub(),
     );
 
     await expect(
@@ -467,14 +489,7 @@ describe("MessagesService", () => {
     const eventsService = {
       recordEvent: jest.fn(),
     } as unknown as EventsService;
-    const service = new (
-      MessagesService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-      ) => MessagesService
-    )(
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       {
@@ -504,6 +519,7 @@ describe("MessagesService", () => {
             }),
         },
       },
+      createCreditsStub(),
       eventsService,
     );
 

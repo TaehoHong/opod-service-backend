@@ -1,17 +1,36 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
+import {
+  checkInMilestoneBonuses,
+  CreditActionType,
+  creditActionPrices,
+  creditPackages,
+  dailyCheckInCredits,
+  freeCreditTtlDays,
+  reservationTtlMs,
+  signupBonusCredits,
+} from "./credit-pricing";
+import { InsufficientCreditsException } from "./insufficient-credits.exception";
 
 type CreditEntryType = "grant" | "debit";
 type CreditPurchaseStatus =
   "pending" | "paid" | "failed" | "canceled" | "refunded";
 type PaymentWebhookStatus = Exclude<CreditPurchaseStatus, "pending">;
+type CreditReservationStatus = "reserved" | "captured" | "released";
 
 type CreditEntry = {
   id: string;
   userId: string;
   entryType: CreditEntryType;
   amount: number;
+  remainingAmount?: number;
+  expiresAt?: string;
   reason: string;
   externalReference?: string;
   createdAt: string;
@@ -19,8 +38,10 @@ type CreditEntry = {
 
 type PrismaCreditEntry = Omit<
   CreditEntry,
-  "createdAt" | "externalReference"
+  "createdAt" | "externalReference" | "remainingAmount" | "expiresAt"
 > & {
+  remainingAmount: number | null;
+  expiresAt: Date | null;
   externalReference: string | null;
   createdAt: Date;
 };
@@ -40,13 +61,44 @@ type PrismaCreditPurchase = Omit<CreditPurchase, "createdAt"> & {
   createdAt: Date;
 };
 
-const creditPackages = {
-  credits_100: {
-    creditAmount: 100,
-    paidAmount: 9900,
-    currency: "KRW",
-  },
-} as const;
+type CreditReservation = {
+  id: string;
+  userId: string;
+  actionType: string;
+  amount: number;
+  status: CreditReservationStatus;
+  reference: string;
+  expiresAt: string;
+  createdAt: string;
+};
+
+type PrismaCreditReservation = Omit<
+  CreditReservation,
+  "expiresAt" | "createdAt"
+> & {
+  expiresAt: Date;
+  createdAt: Date;
+};
+
+type CheckInResult = {
+  checkInDate: string;
+  creditsGranted: number;
+  milestoneBonus: number;
+  monthCheckInCount: number;
+};
+
+// Subset of the Prisma client used inside credit transactions, so the same
+// helpers run on both the root client and interactive transaction clients.
+type CreditClient = Pick<
+  PrismaService,
+  "creditLedgerEntry" | "creditReservation" | "creditCheckIn" | "$executeRaw"
+>;
+
+const activeGrantWhere = (userId: string, now: Date) => ({
+  userId,
+  entryType: "grant" as const,
+  OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+});
 
 @Injectable()
 export class CreditsService {
@@ -86,6 +138,202 @@ export class CreditsService {
     };
   }
 
+  async reserveCredits(input: {
+    userId: string;
+    actionType: CreditActionType;
+    reference?: string;
+  }): Promise<CreditReservation> {
+    const amount = creditActionPrices[input.actionType];
+
+    if (!amount) {
+      throw new BadRequestException("Unknown credit action");
+    }
+
+    const reference = input.reference ?? `${input.actionType}:${randomUUID()}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserCredits(tx, input.userId);
+
+      if ((await this.availableBalance(tx, input.userId)) < amount) {
+        throw new InsufficientCreditsException();
+      }
+
+      const reservation = await tx.creditReservation.create({
+        data: {
+          userId: input.userId,
+          actionType: input.actionType,
+          amount,
+          reference,
+          expiresAt: new Date(Date.now() + reservationTtlMs),
+        },
+      });
+      return this.toCreditReservation(reservation as PrismaCreditReservation);
+    });
+  }
+
+  async captureReservation(input: {
+    reference: string;
+  }): Promise<CreditReservation> {
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.creditReservation.findUnique({
+        where: { reference: input.reference },
+      });
+
+      if (!found) {
+        throw new BadRequestException("Credit reservation not found");
+      }
+
+      await this.lockUserCredits(tx, found.userId);
+
+      const reservation = (await tx.creditReservation.findUnique({
+        where: { reference: input.reference },
+      })) as PrismaCreditReservation;
+
+      if (reservation.status === "captured") {
+        return this.toCreditReservation(reservation);
+      }
+      if (reservation.status === "released") {
+        throw new ConflictException("Credit reservation was released");
+      }
+      if (reservation.expiresAt <= new Date()) {
+        await tx.creditReservation.update({
+          where: { id: reservation.id },
+          data: { status: "released" },
+        });
+        throw new ConflictException("Credit reservation expired");
+      }
+
+      const consumed = await this.consumeGrantBuckets(
+        tx,
+        reservation.userId,
+        reservation.amount,
+      );
+
+      if (consumed > 0) {
+        await tx.creditLedgerEntry.create({
+          data: {
+            userId: reservation.userId,
+            entryType: "debit",
+            amount: consumed,
+            reason: reservation.actionType,
+            externalReference: `credit_reservation:${reservation.id}`,
+          },
+        });
+      }
+
+      const captured = await tx.creditReservation.update({
+        where: { id: reservation.id },
+        data: { status: "captured" },
+      });
+      return this.toCreditReservation(captured as PrismaCreditReservation);
+    });
+  }
+
+  async releaseReservation(input: {
+    reference: string;
+  }): Promise<CreditReservation> {
+    // reserved -> released only; captured/released reservations stay as-is so
+    // release stays safe to call from error paths.
+    await this.prisma.creditReservation.updateMany({
+      where: { reference: input.reference, status: "reserved" },
+      data: { status: "released" },
+    });
+
+    const reservation = await this.prisma.creditReservation.findUnique({
+      where: { reference: input.reference },
+    });
+
+    if (!reservation) {
+      throw new BadRequestException("Credit reservation not found");
+    }
+    return this.toCreditReservation(reservation as PrismaCreditReservation);
+  }
+
+  async grantCredits(input: {
+    userId: string;
+    amount: number;
+    reason: string;
+    externalReference?: string;
+    expiresAt?: Date;
+  }): Promise<CreditEntry> {
+    this.validateEntryInput(input);
+
+    if (input.externalReference) {
+      const existing = await this.prisma.creditLedgerEntry.findFirst({
+        where: {
+          entryType: "grant",
+          externalReference: input.externalReference,
+        },
+      });
+      if (existing) {
+        return this.toCreditEntry(existing as PrismaCreditEntry);
+      }
+    }
+
+    const entry = await this.prisma.creditLedgerEntry.create({
+      data: {
+        userId: input.userId,
+        entryType: "grant",
+        amount: input.amount,
+        remainingAmount: input.amount,
+        expiresAt: input.expiresAt,
+        reason: input.reason.trim(),
+        externalReference: input.externalReference,
+      },
+    });
+    return this.toCreditEntry(entry as PrismaCreditEntry);
+  }
+
+  async grantSignupBonus(userId: string): Promise<CreditEntry> {
+    return this.grantCredits({
+      userId,
+      amount: signupBonusCredits,
+      reason: "signup bonus",
+      externalReference: `signup_bonus:${userId}`,
+      expiresAt: this.freeCreditExpiry(),
+    });
+  }
+
+  async checkIn(input: { userId: string }): Promise<CheckInResult> {
+    const checkInDate = this.kstDateString(new Date());
+
+    return this.prisma.$transaction(async (tx) => {
+      try {
+        await tx.creditCheckIn.create({
+          data: { userId: input.userId, checkInDate },
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code === "P2002") {
+          throw new ConflictException("Already checked in today");
+        }
+        throw error;
+      }
+
+      const monthCheckInCount = await tx.creditCheckIn.count({
+        where: {
+          userId: input.userId,
+          checkInDate: { startsWith: `${checkInDate.slice(0, 7)}-` },
+        },
+      });
+      const milestoneBonus = checkInMilestoneBonuses[monthCheckInCount] ?? 0;
+      const creditsGranted = dailyCheckInCredits + milestoneBonus;
+
+      await tx.creditLedgerEntry.create({
+        data: {
+          userId: input.userId,
+          entryType: "grant",
+          amount: creditsGranted,
+          remainingAmount: creditsGranted,
+          expiresAt: this.freeCreditExpiry(),
+          reason: "daily check-in",
+          externalReference: `check_in:${input.userId}:${checkInDate}`,
+        },
+      });
+
+      return { checkInDate, creditsGranted, milestoneBonus, monthCheckInCount };
+    });
+  }
+
   async spendCredits(input: {
     userId: string;
     amount: number;
@@ -93,25 +341,33 @@ export class CreditsService {
   }): Promise<CreditEntry> {
     this.validateEntryInput(input);
 
-    if ((await this.getBalance(input.userId)).balance < input.amount) {
-      throw new BadRequestException("Insufficient credits");
-    }
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserCredits(tx, input.userId);
 
-    return this.appendEntry("debit", input);
+      if ((await this.availableBalance(tx, input.userId)) < input.amount) {
+        throw new InsufficientCreditsException();
+      }
+
+      await this.consumeGrantBuckets(tx, input.userId, input.amount);
+
+      const entry = await tx.creditLedgerEntry.create({
+        data: {
+          userId: input.userId,
+          entryType: "debit",
+          amount: input.amount,
+          reason: input.reason.trim(),
+        },
+      });
+      return this.toCreditEntry(entry as PrismaCreditEntry);
+    });
   }
 
   async getBalance(
     userId: string,
   ): Promise<{ userId: string; balance: number }> {
-    const entries = await this.listEntries(userId);
-
     return {
       userId,
-      balance: entries.reduce((balance, entry) => {
-        return entry.entryType === "grant"
-          ? balance + entry.amount
-          : balance - entry.amount;
-      }, 0),
+      balance: Math.max(0, await this.availableBalance(this.prisma, userId)),
     };
   }
 
@@ -120,7 +376,9 @@ export class CreditsService {
       where: { userId },
       orderBy: { createdAt: "asc" },
     });
-    return entries.map((entry) => this.toCreditEntry(entry));
+    return entries.map((entry) =>
+      this.toCreditEntry(entry as PrismaCreditEntry),
+    );
   }
 
   async listEntriesPage(
@@ -145,7 +403,7 @@ export class CreditsService {
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
     });
     return pageFromRows(
-      entries.map((entry) => this.toCreditEntry(entry)),
+      entries.map((entry) => this.toCreditEntry(entry as PrismaCreditEntry)),
       input.limit,
     );
   }
@@ -210,33 +468,77 @@ export class CreditsService {
     });
 
     if (status === "paid") {
-      await this.grantPaidPurchaseOnce(purchase);
+      // Paid credits never expire.
+      await this.grantCredits({
+        userId: purchase.userId,
+        amount: purchase.creditAmount,
+        reason: "credit purchase paid",
+        externalReference: `credit_purchase:${purchase.id}`,
+      });
     }
 
     return { received: true };
   }
 
-  private async appendEntry(
-    entryType: CreditEntryType,
-    input: {
-      userId: string;
-      amount: number;
-      reason: string;
-      externalReference?: string;
-    },
-  ): Promise<CreditEntry> {
-    this.validateEntryInput(input);
+  private freeCreditExpiry(): Date {
+    return new Date(Date.now() + freeCreditTtlDays * 24 * 60 * 60 * 1000);
+  }
 
-    const entry = await this.prisma.creditLedgerEntry.create({
-      data: {
-        userId: input.userId,
-        entryType,
-        amount: input.amount,
-        reason: input.reason.trim(),
-        externalReference: input.externalReference,
-      },
+  private async lockUserCredits(tx: CreditClient, userId: string) {
+    // Serializes credit mutations per user for the transaction lifetime, so a
+    // balance check and the write that follows it stay race-free. $executeRaw
+    // because pg_advisory_xact_lock returns void, which $queryRaw rejects.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+  }
+
+  private async availableBalance(
+    client: CreditClient,
+    userId: string,
+  ): Promise<number> {
+    const now = new Date();
+    const grants = await client.creditLedgerEntry.aggregate({
+      _sum: { remainingAmount: true },
+      where: activeGrantWhere(userId, now),
     });
-    return this.toCreditEntry(entry);
+    const reservations = await client.creditReservation.aggregate({
+      _sum: { amount: true },
+      where: { userId, status: "reserved", expiresAt: { gt: now } },
+    });
+
+    return (grants._sum.remainingAmount ?? 0) - (reservations._sum.amount ?? 0);
+  }
+
+  private async consumeGrantBuckets(
+    tx: CreditClient,
+    userId: string,
+    amount: number,
+  ): Promise<number> {
+    const buckets = (await tx.creditLedgerEntry.findMany({
+      where: {
+        ...activeGrantWhere(userId, new Date()),
+        remainingAmount: { gt: 0 },
+      },
+      // Expiring free credits burn first; paid credits (no expiry) burn last.
+      orderBy: [
+        { expiresAt: { sort: "asc", nulls: "last" } },
+        { createdAt: "asc" },
+      ],
+    })) as PrismaCreditEntry[];
+
+    let leftToConsume = amount;
+    for (const bucket of buckets) {
+      if (leftToConsume <= 0) {
+        break;
+      }
+      const take = Math.min(bucket.remainingAmount ?? 0, leftToConsume);
+      await tx.creditLedgerEntry.update({
+        where: { id: bucket.id },
+        data: { remainingAmount: (bucket.remainingAmount ?? 0) - take },
+      });
+      leftToConsume -= take;
+    }
+
+    return amount - leftToConsume;
   }
 
   private toCreditEntry(entry: PrismaCreditEntry): CreditEntry {
@@ -245,9 +547,26 @@ export class CreditsService {
       userId: entry.userId,
       entryType: entry.entryType,
       amount: entry.amount,
+      remainingAmount: entry.remainingAmount ?? undefined,
+      expiresAt: entry.expiresAt?.toISOString(),
       reason: entry.reason,
       externalReference: entry.externalReference ?? undefined,
       createdAt: entry.createdAt.toISOString(),
+    };
+  }
+
+  private toCreditReservation(
+    reservation: PrismaCreditReservation,
+  ): CreditReservation {
+    return {
+      id: reservation.id,
+      userId: reservation.userId,
+      actionType: reservation.actionType,
+      amount: reservation.amount,
+      status: reservation.status,
+      reference: reservation.reference,
+      expiresAt: reservation.expiresAt.toISOString(),
+      createdAt: reservation.createdAt.toISOString(),
     };
   }
 
@@ -278,29 +597,11 @@ export class CreditsService {
     throw new BadRequestException("Unsupported payment status");
   }
 
-  private async grantPaidPurchaseOnce(purchase: PrismaCreditPurchase) {
-    const externalReference = `credit_purchase:${purchase.id}`;
-    const existingEntry = await this.prisma.creditLedgerEntry.findFirst({
-      where: {
-        entryType: "grant",
-        externalReference,
-      },
-      select: { id: true },
-    });
-
-    if (existingEntry) {
-      return;
-    }
-
-    await this.prisma.creditLedgerEntry.create({
-      data: {
-        userId: purchase.userId,
-        entryType: "grant",
-        amount: purchase.creditAmount,
-        reason: "credit purchase paid",
-        externalReference,
-      },
-    });
+  private kstDateString(now: Date): string {
+    // KST is a fixed UTC+9 offset with no daylight saving.
+    return new Date(now.getTime() + 9 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   private validateEntryInput(input: { amount: number; reason: string }) {

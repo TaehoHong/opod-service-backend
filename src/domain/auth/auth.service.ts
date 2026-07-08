@@ -12,6 +12,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
+import { CreditsService } from "../credits/credits.service";
 import { PrismaService } from "../database/prisma.service";
 
 const scrypt = promisify(scryptCallback);
@@ -67,9 +68,24 @@ const publicUserFields = {
   email: true,
 } as const;
 
+const withdrawalReasonCategories = [
+  "low_usage",
+  "credit_cost",
+  "content",
+  "privacy",
+  "etc",
+];
+
+const deletedUserDisplayName = "탈퇴한 사용자";
+
+const signupBonusBlockDays = 30;
+
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditsService: CreditsService,
+  ) {}
 
   async register(input: {
     email: string;
@@ -93,6 +109,10 @@ export class AuthService {
       passwordHash,
       passwordSalt,
     });
+    // 탈퇴 후 30일 내 동일 이메일 재가입은 가입 보너스를 다시 주지 않는다.
+    if (!(await this.hasRecentWithdrawal(email))) {
+      await this.creditsService.grantSignupBonus(user.id);
+    }
 
     return this.issueTokens(this.toPublicUser(user));
   }
@@ -169,6 +189,125 @@ export class AuthService {
     };
   }
 
+  async changePasswordFromAuthorization(
+    authorization: string | undefined,
+    input: { currentPassword?: unknown; newPassword?: unknown } | undefined,
+  ): Promise<AuthTokens> {
+    const userId = await this.userIdFromAuthorization(authorization);
+
+    const currentPassword = input?.currentPassword;
+    if (typeof currentPassword !== "string" || !currentPassword) {
+      throw new BadRequestException("currentPassword is required");
+    }
+    this.assertPassword(input?.newPassword);
+    const newPassword = input?.newPassword as string;
+    if (newPassword === currentPassword) {
+      throw new BadRequestException("New password must be different");
+    }
+
+    const user = (await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: authUserFields,
+    })) as AuthUser | null;
+    if (!user?.email) {
+      throw new UnauthorizedException("Access token is invalid");
+    }
+    if (
+      !user.passwordHash ||
+      !user.passwordSalt ||
+      !(await this.passwordMatches(currentPassword, user))
+    ) {
+      throw new BadRequestException("Current password is incorrect");
+    }
+
+    const passwordSalt = randomBytes(16).toString("base64url");
+    const passwordHash = await this.hashPassword(newPassword, passwordSalt);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash, passwordSalt },
+        select: { id: true },
+      }),
+      this.prisma.userRefreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+      this.prisma.userEvent.create({
+        data: {
+          userId,
+          eventType: "auth.password_changed",
+          targetType: "user",
+          targetId: userId,
+        },
+      }),
+    ]);
+
+    return this.issueTokens(this.toPublicUser(user));
+  }
+
+  async deleteAccountFromAuthorization(
+    authorization: string | undefined,
+    input:
+      | { password?: unknown; reasonCategory?: unknown; reasonText?: unknown }
+      | undefined,
+  ): Promise<{ deleted: true }> {
+    const userId = await this.userIdFromAuthorization(authorization);
+
+    const password = input?.password;
+    if (typeof password !== "string" || !password) {
+      throw new BadRequestException("password is required");
+    }
+    const reasonCategory = this.optionalWithdrawalReason(input?.reasonCategory);
+    const reasonText = this.optionalReasonText(input?.reasonText);
+
+    const user = (await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: authUserFields,
+    })) as AuthUser | null;
+    if (!user?.email) {
+      throw new UnauthorizedException("Access token is invalid");
+    }
+    if (
+      !user.passwordHash ||
+      !user.passwordSalt ||
+      !(await this.passwordMatches(password, user))
+    ) {
+      throw new BadRequestException("Password is incorrect");
+    }
+
+    // 익명화 전에 미리 계산한다 — user.email은 아래 update로 null이 된다.
+    const emailHash = this.hashEmail(user.email);
+
+    // 정책 §2.3 데이터 처리 매트릭스. users 행은 유지하므로 cascade가
+    // 발동하지 않는다 — 삭제는 전부 명시적으로 수행한다.
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          email: null,
+          passwordHash: null,
+          passwordSalt: null,
+          displayName: deletedUserDisplayName,
+          deletedAt: new Date(),
+        },
+        select: { id: true },
+      }),
+      this.prisma.userRefreshToken.deleteMany({ where: { userId } }),
+      // 메시지는 conversation FK cascade로 함께 삭제된다.
+      this.prisma.messageConversation.deleteMany({ where: { userId } }),
+      this.prisma.notification.deleteMany({ where: { userId } }),
+      this.prisma.userCharacterFollow.deleteMany({ where: { userId } }),
+      this.prisma.userHashtagPreference.deleteMany({ where: { userId } }),
+      this.prisma.userWithdrawal.create({
+        data: { userId, emailHash, reasonCategory, reasonText },
+        select: { id: true },
+      }),
+    ]);
+
+    return { deleted: true };
+  }
+
   async updateCurrentUserFromAuthorization(
     authorization: string | undefined,
     input: { displayName?: unknown } | undefined,
@@ -235,10 +374,20 @@ export class AuthService {
   private async findPublicUserById(
     id: string,
   ): Promise<(PublicAuthUser & { email: string | null }) | null> {
-    return (await this.prisma.user.findUnique({
+    const user = (await this.prisma.user.findUnique({
       where: { id },
-      select: publicUserFields,
-    })) as (PublicAuthUser & { email: string | null }) | null;
+      select: { ...publicUserFields, deletedAt: true },
+    })) as
+      | (PublicAuthUser & { email: string | null; deletedAt: Date | null })
+      | null;
+    if (!user || user.deletedAt) {
+      return null;
+    }
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      email: user.email,
+    };
   }
 
   private async findRefreshToken(
@@ -361,6 +510,63 @@ export class AuthService {
     return secret;
   }
 
+  private optionalWithdrawalReason(value: unknown): string | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (
+      typeof value !== "string" ||
+      !withdrawalReasonCategories.includes(value)
+    ) {
+      throw new BadRequestException("reasonCategory is invalid");
+    }
+    return value;
+  }
+
+  private optionalReasonText(value: unknown): string | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (typeof value !== "string") {
+      throw new BadRequestException("reasonText must be a string");
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (trimmed.length > 500) {
+      throw new BadRequestException(
+        "reasonText must be at most 500 characters",
+      );
+    }
+    return trimmed;
+  }
+
+  private async hasRecentWithdrawal(email: string): Promise<boolean> {
+    const cutoff = new Date(
+      Date.now() - signupBonusBlockDays * 24 * 60 * 60 * 1000,
+    );
+    const row = await this.prisma.userWithdrawal.findFirst({
+      where: { emailHash: this.hashEmail(email), createdAt: { gte: cutoff } },
+      select: { id: true },
+    });
+    return row !== null;
+  }
+
+  private hashEmail(email: string): string {
+    return createHmac("sha256", this.emailHashPepper())
+      .update(email)
+      .digest("hex");
+  }
+
+  private emailHashPepper(): string {
+    const pepper = process.env.AUTH_EMAIL_HASH_PEPPER?.trim();
+    if (!pepper) {
+      throw new Error("AUTH_EMAIL_HASH_PEPPER is required");
+    }
+    return pepper;
+  }
+
   private normalizeEmail(email: string): string {
     const normalized = this.requiredString(email, "email").toLowerCase();
     if (!normalized.includes("@")) {
@@ -369,9 +575,13 @@ export class AuthService {
     return normalized;
   }
 
-  private assertPassword(password: string) {
-    if (typeof password !== "string" || password.length < 8) {
-      throw new BadRequestException("Password must be at least 8 characters");
+  private assertPassword(password: unknown) {
+    if (
+      typeof password !== "string" ||
+      password.length < 8 ||
+      password.length > 128
+    ) {
+      throw new BadRequestException("Password must be 8 to 128 characters");
     }
   }
 

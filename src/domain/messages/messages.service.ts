@@ -5,6 +5,7 @@ import {
   Optional,
 } from "@nestjs/common";
 import { CharactersService } from "../characters/characters.service";
+import { CreditsService } from "../credits/credits.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
 import { EventsService } from "../events/events.service";
@@ -59,6 +60,7 @@ export class MessagesService {
     private readonly usersService: UsersService,
     private readonly charactersService: CharactersService,
     private readonly prisma: PrismaService,
+    private readonly creditsService: CreditsService,
     @Optional()
     @Inject(EventsService)
     private readonly eventsService?: EventsService,
@@ -80,23 +82,39 @@ export class MessagesService {
 
     await this.assertUserAndCharacter(input);
 
-    const conversation = await this.findOrCreateConversation(input);
-    const humanMessage = await this.addMessage(conversation.id, "user", body);
-    const reply = await this.addMessage(
-      conversation.id,
-      "character",
-      await this.createReply({
-        userId: input.userId,
-        characterId: input.characterId,
-        messageBody: body,
-      }),
-    );
-    this.recordMessageEvent(input);
+    // Reserve before any write so an insufficient balance leaves no trace.
+    const reservation = await this.creditsService.reserveCredits({
+      userId: input.userId,
+      actionType: "chat_reply",
+    });
 
-    return {
-      conversationId: conversation.id,
-      messages: [humanMessage, reply],
-    };
+    try {
+      const conversation = await this.findOrCreateConversation(input);
+      const humanMessage = await this.addMessage(conversation.id, "user", body);
+      const reply = await this.addMessage(
+        conversation.id,
+        "character",
+        await this.createReply({
+          userId: input.userId,
+          characterId: input.characterId,
+          messageBody: body,
+        }),
+      );
+      await this.creditsService.captureReservation({
+        reference: reservation.reference,
+      });
+      this.recordMessageEvent(input);
+
+      return {
+        conversationId: conversation.id,
+        messages: [humanMessage, reply],
+      };
+    } catch (error) {
+      await this.creditsService
+        .releaseReservation({ reference: reservation.reference })
+        .catch(() => undefined);
+      throw error;
+    }
   }
 
   async getMessages(input: {

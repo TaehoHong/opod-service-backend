@@ -220,6 +220,9 @@ Use action-based pricing:
 Credit flow is `reserved -> captured` on success or `reserved -> released` on
 failure/timeout. The ledger records final grants and debits.
 
+Full pricing policy (credit unit, action prices, packages, free credits,
+reservation rules) is defined in `docs/credit-policy.md`.
+
 ### Content Generation
 
 AI content is generated automatically but published only after admin review in
