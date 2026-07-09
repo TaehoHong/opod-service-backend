@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
+import { publicMediaUrl } from "../media/media-url";
 
 type MediaType = "image" | "video";
 export type PostContentType = "feed" | "reel";
@@ -8,6 +9,7 @@ export type PostContentType = "feed" | "reel";
 type DirectMediaInput = {
   mediaType: MediaType;
   url: string;
+  storageKey?: string | null;
   width?: number;
   height?: number;
   durationSeconds?: number;
@@ -371,7 +373,7 @@ export class PostsService {
       content: post.content,
       media: post.postMedia.map((item) => ({
         mediaType: item.media.mediaType,
-        url: item.media.url,
+        url: publicMediaUrl(item.media),
         ...(item.media.width ? { width: item.media.width } : {}),
         ...(item.media.height ? { height: item.media.height } : {}),
         ...(item.media.durationSeconds

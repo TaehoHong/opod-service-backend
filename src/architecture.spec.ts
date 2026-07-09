@@ -54,6 +54,7 @@ describe("source layout", () => {
       "feed",
       "follows",
       "inquiries",
+      "media",
       "messages",
       "notices",
       "notifications",

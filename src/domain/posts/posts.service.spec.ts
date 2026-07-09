@@ -1,6 +1,23 @@
 import { PostsService } from "./posts.service";
 
+const s3PublicBaseUrl =
+  "https://dev-opod-public.s3.ap-northeast-2.amazonaws.com";
+let previousS3PublicBaseUrl: string | undefined;
+
 describe("PostsService", () => {
+  beforeEach(() => {
+    previousS3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL;
+    process.env.S3_PUBLIC_BASE_URL = s3PublicBaseUrl;
+  });
+
+  afterEach(() => {
+    if (previousS3PublicBaseUrl === undefined) {
+      delete process.env.S3_PUBLIC_BASE_URL;
+    } else {
+      process.env.S3_PUBLIC_BASE_URL = previousS3PublicBaseUrl;
+    }
+  });
+
   it("lists and reads posts with media through Prisma", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const row = {
@@ -14,7 +31,8 @@ describe("PostsService", () => {
         {
           media: {
             mediaType: "image",
-            url: "https://cdn.local/a.png",
+            url: "pod/reels/character/character-1/a.png",
+            storageKey: "pod/reels/character/character-1/a.png",
             width: 1024,
             height: 768,
             durationSeconds: null,
@@ -46,7 +64,7 @@ describe("PostsService", () => {
         media: [
           {
             mediaType: "image",
-            url: "https://cdn.local/a.png",
+            url: `${s3PublicBaseUrl}/pod/reels/character/character-1/a.png`,
             width: 1024,
             height: 768,
           },

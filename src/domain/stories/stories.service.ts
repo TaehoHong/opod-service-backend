@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
+import { publicMediaUrl } from "../media/media-url";
 import { PrismaService } from "../database/prisma.service";
 
 type MediaType = "image" | "video";
@@ -7,6 +8,7 @@ type MediaType = "image" | "video";
 type StoryMedia = {
   mediaType: MediaType;
   url: string;
+  storageKey?: string | null;
   width?: number;
   height?: number;
   durationSeconds?: number;
@@ -85,7 +87,7 @@ export class StoriesService {
       caption: story.caption,
       media: {
         mediaType: story.media.mediaType,
-        url: story.media.url,
+        url: publicMediaUrl(story.media),
         ...(story.media.width ? { width: story.media.width } : {}),
         ...(story.media.height ? { height: story.media.height } : {}),
         ...(story.media.durationSeconds

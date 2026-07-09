@@ -1,6 +1,23 @@
 import { StoriesService } from "./stories.service";
 
+const s3PublicBaseUrl =
+  "https://dev-opod-public.s3.ap-northeast-2.amazonaws.com";
+let previousS3PublicBaseUrl: string | undefined;
+
 describe("StoriesService", () => {
+  beforeEach(() => {
+    previousS3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL;
+    process.env.S3_PUBLIC_BASE_URL = s3PublicBaseUrl;
+  });
+
+  afterEach(() => {
+    if (previousS3PublicBaseUrl === undefined) {
+      delete process.env.S3_PUBLIC_BASE_URL;
+    } else {
+      process.env.S3_PUBLIC_BASE_URL = previousS3PublicBaseUrl;
+    }
+  });
+
   it("returns a cursor page of active stories with media", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const expiresAt = new Date("2999-06-30T00:00:00.000Z");
@@ -12,7 +29,8 @@ describe("StoriesService", () => {
       expiresAt,
       media: {
         mediaType: "video",
-        url: "https://cdn.local/story.mp4",
+        url: "pod/stories/character/character-1/story.mp4",
+        storageKey: "pod/stories/character/character-1/story.mp4",
         width: 720,
         height: 1280,
         durationSeconds: 12,
@@ -36,7 +54,7 @@ describe("StoriesService", () => {
         caption: "today",
         media: {
           mediaType: "video",
-          url: "https://cdn.local/story.mp4",
+          url: `${s3PublicBaseUrl}/pod/stories/character/character-1/story.mp4`,
           width: 720,
           height: 1280,
           durationSeconds: 12,
