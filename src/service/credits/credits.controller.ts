@@ -9,7 +9,7 @@ import {
 } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import { CreditsService } from "../../domain/credits/credits.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("credits")
 export class CreditsController {

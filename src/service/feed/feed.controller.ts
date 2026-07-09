@@ -1,7 +1,7 @@
 import { Controller, Get, Headers, Query } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import { FeedService } from "../../domain/feed/feed.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("feed")
 export class FeedController {

@@ -6,7 +6,7 @@ import {
   Query,
 } from "@nestjs/common";
 import { NoticesService } from "../../domain/notices/notices.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("notices")
 export class NoticesController {

@@ -6,7 +6,7 @@ import {
   Query,
 } from "@nestjs/common";
 import { PostsService } from "../../domain/posts/posts.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("posts")
 export class PostsController {

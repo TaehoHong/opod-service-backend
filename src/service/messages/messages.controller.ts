@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import { MessagesService } from "../../domain/messages/messages.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("messages")
 export class MessagesController {

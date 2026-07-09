@@ -10,7 +10,7 @@ import { AuthService } from "../../domain/auth/auth.service";
 import { CharactersService } from "../../domain/characters/characters.service";
 import { FollowsService } from "../../domain/follows/follows.service";
 import { PostsService } from "../../domain/posts/posts.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("characters")
 export class CharactersController {

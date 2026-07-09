@@ -7,7 +7,7 @@ import {
 } from "@nestjs/common";
 import { CharactersService } from "../../domain/characters/characters.service";
 import { PostsService } from "../../domain/posts/posts.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 type SearchTargetType = "character" | "post" | "hashtag";
 

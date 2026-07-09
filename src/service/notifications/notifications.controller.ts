@@ -10,7 +10,7 @@ import {
 } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import { NotificationsService } from "../../domain/notifications/notifications.service";
-import { parsePageQuery } from "../pagination";
+import { parsePageQuery } from "../../domain/database/page";
 
 @Controller("notifications")
 export class NotificationsController {
