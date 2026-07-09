@@ -10,6 +10,7 @@ describe("FeedService", () => {
     const highPost: Post = {
       id: "post-high",
       characterId: "character-1",
+      contentType: "feed",
       content: "high",
       media,
       hashtags: ["film"],
@@ -18,6 +19,7 @@ describe("FeedService", () => {
     const lowPost: Post = {
       id: "post-low",
       characterId: "character-1",
+      contentType: "feed",
       content: "low",
       media,
       hashtags: [],
@@ -54,6 +56,7 @@ describe("FeedService", () => {
     const olderPost: Post = {
       id: "post-older",
       characterId: "character-1",
+      contentType: "feed",
       content: "older",
       media,
       hashtags: ["film"],
@@ -62,6 +65,7 @@ describe("FeedService", () => {
     const newerPost: Post = {
       id: "post-newer",
       characterId: "character-2",
+      contentType: "feed",
       content: "newer",
       media,
       hashtags: [],
@@ -86,10 +90,49 @@ describe("FeedService", () => {
     expect(hashtagPreferencesFor).not.toHaveBeenCalled();
   });
 
+  it("does not include reel posts in the feed", async () => {
+    const feedPost: Post = {
+      id: "post-feed",
+      characterId: "character-feed",
+      contentType: "feed",
+      content: "feed",
+      media,
+      hashtags: [],
+      createdAt: "2026-06-30T00:00:00.000Z",
+    };
+    const reelPost: Post = {
+      id: "post-reel",
+      characterId: "character-reel",
+      contentType: "reel",
+      content: "reel",
+      media,
+      hashtags: [],
+      createdAt: "2026-06-30T00:01:00.000Z",
+    };
+    const feedService = new FeedService(
+      {
+        listPosts: jest.fn().mockResolvedValue([reelPost, feedPost]),
+      } as unknown as PostsService,
+      {
+        followedCharacterIdsFor: jest.fn().mockResolvedValue(new Set()),
+      } as unknown as FollowsService,
+      {
+        hashtagPreferencesFor: jest.fn().mockResolvedValue(new Map()),
+      } as unknown as EventsService,
+    );
+
+    await expect(
+      feedService
+        .getFeed(undefined)
+        .then((posts) => posts.map((post) => post.id)),
+    ).resolves.toEqual(["post-feed"]);
+  });
+
   it("boosts followed character posts in the feed", async () => {
     const followedPost: Post = {
       id: "post-followed",
       characterId: "character-followed",
+      contentType: "feed",
       content: "followed",
       media,
       hashtags: [],
@@ -98,6 +141,7 @@ describe("FeedService", () => {
     const otherPost: Post = {
       id: "post-other",
       characterId: "character-other",
+      contentType: "feed",
       content: "other",
       media,
       hashtags: [],
@@ -128,6 +172,7 @@ describe("FeedService", () => {
     const olderArtPost: Post = {
       id: "post-art",
       characterId: "character-art",
+      contentType: "feed",
       content: "gallery",
       media,
       hashtags: ["art"],
@@ -136,6 +181,7 @@ describe("FeedService", () => {
     const newerTravelPost: Post = {
       id: "post-travel",
       characterId: "character-travel",
+      contentType: "feed",
       content: "airport",
       media,
       hashtags: ["travel"],

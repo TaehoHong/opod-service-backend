@@ -20,6 +20,8 @@ const scrypt = promisify(scryptCallback);
 type AuthUser = {
   id: string;
   displayName: string;
+  bio: string;
+  profileImageUrl: string | null;
   email: string;
   passwordHash: string;
   passwordSalt: string;
@@ -28,6 +30,8 @@ type AuthUser = {
 type PublicAuthUser = {
   id: string;
   displayName: string;
+  bio: string;
+  profileImageUrl?: string;
   email: string;
 };
 
@@ -38,6 +42,8 @@ type RefreshTokenRow = {
   user?: {
     id: string;
     displayName: string;
+    bio: string;
+    profileImageUrl: string | null;
     email: string | null;
   };
 };
@@ -65,6 +71,8 @@ const authUserFields = {
 const publicUserFields = {
   id: true,
   displayName: true,
+  bio: true,
+  profileImageUrl: true,
   email: true,
 } as const;
 
@@ -193,6 +201,10 @@ export class AuthService {
     return {
       id: user.id,
       displayName: user.displayName,
+      bio: user.bio,
+      ...(user.profileImageUrl
+        ? { profileImageUrl: user.profileImageUrl }
+        : {}),
       email: user.email,
     };
   }
@@ -297,6 +309,8 @@ export class AuthService {
           passwordHash: null,
           passwordSalt: null,
           displayName: deletedUserDisplayName,
+          bio: "",
+          profileImageUrl: null,
           deletedAt: new Date(),
         },
         select: { id: true },
@@ -318,23 +332,38 @@ export class AuthService {
 
   async updateCurrentUserFromAuthorization(
     authorization: string | undefined,
-    input: { displayName?: unknown } | undefined,
+    input:
+      | { displayName?: unknown; bio?: unknown; profileImageUrl?: unknown }
+      | undefined,
   ): Promise<PublicAuthUser> {
     const userId = await this.userIdFromAuthorization(authorization);
-    const displayName = this.requiredString(input?.displayName, "displayName");
+    const data: {
+      displayName?: string;
+      bio?: string;
+      profileImageUrl?: string | null;
+    } = {};
+    if (input?.displayName !== undefined) {
+      data.displayName = this.requiredString(input.displayName, "displayName");
+    }
+    if (input?.bio !== undefined) {
+      data.bio = this.profileBio(input.bio);
+    }
+    if (input?.profileImageUrl !== undefined) {
+      data.profileImageUrl = this.profileImageUrl(input.profileImageUrl);
+    }
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException("profile update is required");
+    }
+
     const user = (await this.prisma.user.update({
       where: { id: userId },
-      data: { displayName },
+      data,
       select: publicUserFields,
-    })) as PublicAuthUser & { email: string | null };
+    })) as AuthUser;
     if (!user.email) {
       throw new UnauthorizedException("Access token is invalid");
     }
-    return {
-      id: user.id,
-      displayName: user.displayName,
-      email: user.email,
-    };
+    return this.toPublicUser(user);
   }
 
   private async issueTokens(user: PublicAuthUser): Promise<AuthTokens> {
@@ -379,23 +408,15 @@ export class AuthService {
     })) as AuthUser | null;
   }
 
-  private async findPublicUserById(
-    id: string,
-  ): Promise<(PublicAuthUser & { email: string | null }) | null> {
+  private async findPublicUserById(id: string): Promise<PublicAuthUser | null> {
     const user = (await this.prisma.user.findUnique({
       where: { id },
       select: { ...publicUserFields, deletedAt: true },
-    })) as
-      | (PublicAuthUser & { email: string | null; deletedAt: Date | null })
-      | null;
-    if (!user || user.deletedAt) {
+    })) as (AuthUser & { deletedAt: Date | null }) | null;
+    if (!user || user.deletedAt || !user.email) {
       return null;
     }
-    return {
-      id: user.id,
-      displayName: user.displayName,
-      email: user.email,
-    };
+    return this.toPublicUser(user);
   }
 
   private async findRefreshToken(
@@ -600,10 +621,47 @@ export class AuthService {
     return value.trim();
   }
 
+  private profileBio(value: unknown): string {
+    if (typeof value !== "string") {
+      throw new BadRequestException("bio must be a string");
+    }
+    const bio = value.trim();
+    if (bio.length > 160) {
+      throw new BadRequestException("bio must be at most 160 characters");
+    }
+    return bio;
+  }
+
+  private profileImageUrl(value: unknown): string | null {
+    if (value === null) {
+      return null;
+    }
+    if (typeof value !== "string") {
+      throw new BadRequestException("profileImageUrl must be a string");
+    }
+    const url = value.trim();
+    if (!url) {
+      return null;
+    }
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("unsupported protocol");
+      }
+      return url;
+    } catch {
+      throw new BadRequestException("profileImageUrl must be an http URL");
+    }
+  }
+
   private toPublicUser(user: AuthUser): PublicAuthUser {
     return {
       id: user.id,
       displayName: user.displayName,
+      bio: user.bio,
+      ...(user.profileImageUrl
+        ? { profileImageUrl: user.profileImageUrl }
+        : {}),
       email: user.email,
     };
   }
@@ -615,6 +673,10 @@ export class AuthService {
     return {
       id: row.user.id,
       displayName: row.user.displayName,
+      bio: row.user.bio,
+      ...(row.user.profileImageUrl
+        ? { profileImageUrl: row.user.profileImageUrl }
+        : {}),
       email: row.user.email,
     };
   }

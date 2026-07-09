@@ -9,6 +9,7 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { InquiriesService } from "../../domain/inquiries/inquiries.service";
 import { parsePageQuery } from "../../domain/database/page";
@@ -35,6 +36,8 @@ export class InquiriesController {
   }
 
   @Get()
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   async listInquiries(
     @Headers("authorization") authorization: string | undefined,
     @Query("cursor") cursor?: string,

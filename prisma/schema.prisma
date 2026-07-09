@@ -15,6 +15,14 @@ enum MediaType {
   @@schema("opod")
 }
 
+enum PostContentType {
+  feed
+  reel
+
+  @@map("post_content_type")
+  @@schema("opod")
+}
+
 enum MessageSenderType {
   user
   character
@@ -101,6 +109,8 @@ model User {
   passwordHash         String?                 @map("password_hash")
   passwordSalt         String?                 @map("password_salt")
   displayName          String                  @map("display_name")
+  bio                  String                  @default("")
+  profileImageUrl      String?                 @map("profile_image_url")
   createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt            DateTime?               @map("deleted_at") @db.Timestamptz(6)
@@ -113,6 +123,8 @@ model User {
   inquiries            Inquiry[]
   messageConversations MessageConversation[]
   notifications        Notification[]
+  postComments         PostComment[]
+  postReactions        PostReaction[]
   refreshTokens        UserRefreshToken[]
   reports              Report[]
   hashtagPreferences   UserHashtagPreference[]
@@ -231,6 +243,7 @@ model Character {
   personas       CharacterPersona[]
   posts          Post[]
   reactions      PostReaction[]
+  stories        Story[]
   userFollowers  UserCharacterFollow[]
 
   @@map("characters")
@@ -263,17 +276,19 @@ model Media {
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   generationJobs  GenerationJob[]
   postMedia       PostMedia[]
+  stories         Story[]
 
   @@map("media")
   @@schema("opod")
 }
 
 model Post {
-  id          String         @id @default(uuid(7)) @db.Uuid
-  characterId String         @map("character_id") @db.Uuid
-  character   Character      @relation(fields: [characterId], references: [id])
-  content     String         @default("")
-  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          String          @id @default(uuid(7)) @db.Uuid
+  characterId String          @map("character_id") @db.Uuid
+  character   Character       @relation(fields: [characterId], references: [id])
+  contentType PostContentType @default(feed) @map("content_type")
+  content     String          @default("")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   comments    PostComment[]
   hashtags    PostHashtag[]
   postMedia   PostMedia[]
@@ -319,17 +334,36 @@ model PostMedia {
   @@schema("opod")
 }
 
+model Story {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  characterId String    @map("character_id") @db.Uuid
+  mediaId     String    @map("media_id") @db.Uuid
+  caption     String    @default("")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  media       Media     @relation(fields: [mediaId], references: [id])
+
+  @@index([expiresAt, createdAt])
+  @@index([characterId, expiresAt, createdAt])
+  @@map("stories")
+  @@schema("opod")
+}
+
 model PostComment {
   id          String    @id @default(uuid(7)) @db.Uuid
   postId      String    @map("post_id") @db.Uuid
-  characterId String    @map("character_id") @db.Uuid
+  characterId String?   @map("character_id") @db.Uuid
+  userId      String?   @map("user_id") @db.Uuid
   body        String
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
-  character   Character @relation(fields: [characterId], references: [id])
+  character   Character? @relation(fields: [characterId], references: [id])
+  user        User?     @relation(fields: [userId], references: [id])
 
   @@index([postId, createdAt])
   @@index([characterId, createdAt])
+  @@index([userId, createdAt])
   @@map("post_comments")
   @@schema("opod")
 }
@@ -337,14 +371,18 @@ model PostComment {
 model PostReaction {
   id           String    @id @default(uuid(7)) @db.Uuid
   postId       String    @map("post_id") @db.Uuid
-  characterId  String    @map("character_id") @db.Uuid
+  characterId  String?   @map("character_id") @db.Uuid
+  userId       String?   @map("user_id") @db.Uuid
   reactionType String    @map("reaction_type")
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   post         Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
-  character    Character @relation(fields: [characterId], references: [id])
+  character    Character? @relation(fields: [characterId], references: [id])
+  user         User?     @relation(fields: [userId], references: [id])
 
+  @@unique([postId, userId, reactionType])
   @@index([postId, createdAt])
   @@index([characterId, createdAt])
+  @@index([userId, createdAt])
   @@map("post_reactions")
   @@schema("opod")
 }

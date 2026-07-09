@@ -8,6 +8,7 @@ import {
   Patch,
   Query,
 } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { NotificationsService } from "../../domain/notifications/notifications.service";
 import { parsePageQuery } from "../../domain/database/page";
@@ -20,6 +21,9 @@ export class NotificationsController {
   ) {}
 
   @Get()
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
+  @ApiQuery({ name: "unreadOnly", required: false, enum: ["true", "false"] })
   async listNotifications(
     @Headers("authorization") authorization: string | undefined,
     @Query("cursor") cursor?: string,

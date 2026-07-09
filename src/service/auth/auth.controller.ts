@@ -7,7 +7,9 @@ import {
   Patch,
   Post,
 } from "@nestjs/common";
+import { ApiOkResponse } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
+import { AuthUserDto, UpdateAuthUserDto } from "./auth.dto";
 
 @Controller("auth")
 export class AuthController {
@@ -29,15 +31,16 @@ export class AuthController {
   }
 
   @Get("me")
+  @ApiOkResponse({ type: AuthUserDto })
   me(@Headers("authorization") authorization?: string) {
     return this.authService.currentUserFromAuthorization(authorization);
   }
 
   @Patch("me")
+  @ApiOkResponse({ type: AuthUserDto })
   updateMe(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<AuthService["updateCurrentUserFromAuthorization"]>[1],
+    @Body() body: UpdateAuthUserDto,
   ) {
     return this.authService.updateCurrentUserFromAuthorization(
       authorization,

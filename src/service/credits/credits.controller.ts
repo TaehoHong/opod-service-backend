@@ -7,9 +7,11 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
+import { ApiCreatedResponse, ApiOkResponse, ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { CreditsService } from "../../domain/credits/credits.service";
 import { parsePageQuery } from "../../domain/database/page";
+import { CreditCheckInDto, CreditEntryPageDto } from "./credit.dto";
 
 @Controller("credits")
 export class CreditsController {
@@ -49,6 +51,7 @@ export class CreditsController {
   }
 
   @Post("check-in")
+  @ApiCreatedResponse({ type: CreditCheckInDto })
   async checkIn(@Headers("authorization") authorization?: string) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
@@ -63,6 +66,9 @@ export class CreditsController {
   }
 
   @Get("ledger")
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
+  @ApiOkResponse({ type: CreditEntryPageDto })
   async listEntries(
     @Headers("authorization") authorization?: string,
     @Query("cursor") cursor?: string,
@@ -77,6 +83,8 @@ export class CreditsController {
   }
 
   @Get("purchases")
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   async listPurchases(
     @Headers("authorization") authorization?: string,
     @Query("cursor") cursor?: string,

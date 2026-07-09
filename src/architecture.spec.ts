@@ -59,6 +59,7 @@ describe("source layout", () => {
       "notifications",
       "posts",
       "reports",
+      "stories",
       "users",
     ];
 

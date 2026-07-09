@@ -7,8 +7,10 @@ import {
   Param,
   Post,
 } from "@nestjs/common";
+import { ApiCreatedResponse } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { ReportsService } from "../../domain/reports/reports.service";
+import { CreateReportDto, ReportReceiptDto } from "./report.dto";
 
 @Controller("reports")
 export class ReportsController {
@@ -18,9 +20,10 @@ export class ReportsController {
   ) {}
 
   @Post()
+  @ApiCreatedResponse({ type: ReportReceiptDto })
   async createReport(
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: Parameters<ReportsService["createReport"]>[0],
+    @Body() body: CreateReportDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);

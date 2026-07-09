@@ -16,6 +16,7 @@ import { ServicePostsModule } from "./posts/posts.module";
 import { RequestLoggingInterceptor } from "./request-logging.interceptor";
 import { ServiceReportsModule } from "./reports/reports.module";
 import { ServiceSearchModule } from "./search/search.module";
+import { ServiceStoriesModule } from "./stories/stories.module";
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { ServiceSearchModule } from "./search/search.module";
     ServicePostsModule,
     ServiceReportsModule,
     ServiceSearchModule,
+    ServiceStoriesModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: RequestLoggingInterceptor },

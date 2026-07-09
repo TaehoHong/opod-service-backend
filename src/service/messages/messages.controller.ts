@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { MessagesService } from "../../domain/messages/messages.service";
 import { parsePageQuery } from "../../domain/database/page";
@@ -22,6 +23,8 @@ export class MessagesController {
   }
 
   @Get("conversations")
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   async listConversations(
     @Headers("authorization") authorization: string | undefined,
     @Query("cursor") cursor?: string,
@@ -36,6 +39,9 @@ export class MessagesController {
   }
 
   @Get()
+  @ApiQuery({ name: "characterId", required: true })
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   async getMessages(
     @Headers("authorization") authorization: string | undefined,
     @Query("characterId") characterId: string,

@@ -5,6 +5,7 @@ import {
   Param,
   Query,
 } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { NoticesService } from "../../domain/notices/notices.service";
 import { parsePageQuery } from "../../domain/database/page";
 
@@ -14,6 +15,8 @@ export class NoticesController {
 
   // 비로그인 공개 (정책 §4).
   @Get()
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   listNotices(
     @Query("cursor") cursor?: string,
     @Query("limit") limit?: string,

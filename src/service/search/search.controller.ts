@@ -5,6 +5,7 @@ import {
   Param,
   Query,
 } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { CharactersService } from "../../domain/characters/characters.service";
 import { PostsService } from "../../domain/posts/posts.service";
 import { parsePageQuery } from "../../domain/database/page";
@@ -19,6 +20,13 @@ export class SearchController {
   ) {}
 
   @Get()
+  @ApiQuery({ name: "q", required: true })
+  @ApiQuery({
+    name: "targetType",
+    required: false,
+    enum: ["character", "post", "hashtag"],
+  })
+  @ApiQuery({ name: "limit", required: false })
   async search(
     @Query("q") rawQuery?: string,
     @Query("targetType") rawTargetType?: string,
@@ -93,6 +101,8 @@ export class HashtagsController {
   constructor(private readonly postsService: PostsService) {}
 
   @Get(":tag/posts")
+  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "limit", required: false })
   listHashtagPosts(
     @Param("tag") rawTag: string,
     @Query("cursor") cursor?: string,

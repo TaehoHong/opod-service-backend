@@ -3,6 +3,7 @@ import { PrismaService } from "../database/prisma.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 
 type MediaType = "image" | "video";
+export type PostContentType = "feed" | "reel";
 
 type DirectMediaInput = {
   mediaType: MediaType;
@@ -15,6 +16,7 @@ type DirectMediaInput = {
 export type Post = {
   id: string;
   characterId: string;
+  contentType: PostContentType;
   content: string;
   media: DirectMediaInput[];
   hashtags: string[];
@@ -24,7 +26,8 @@ export type Post = {
 export type PostComment = {
   id: string;
   postId: string;
-  characterId: string;
+  characterId?: string;
+  userId?: string;
   body: string;
   createdAt: string;
 };
@@ -32,7 +35,8 @@ export type PostComment = {
 export type PostReaction = {
   id: string;
   postId: string;
-  characterId: string;
+  characterId?: string;
+  userId?: string;
   reactionType: string;
   createdAt: string;
 };
@@ -40,6 +44,7 @@ export type PostReaction = {
 type PrismaPost = {
   id: string;
   characterId: string;
+  contentType: PostContentType;
   content: string;
   createdAt: Date;
   hashtags: Array<{
@@ -52,16 +57,27 @@ type PrismaPost = {
   }>;
 };
 
-type PrismaPostComment = Omit<PostComment, "createdAt"> & {
+type PrismaPostComment = Omit<
+  PostComment,
+  "createdAt" | "characterId" | "userId"
+> & {
+  characterId: string | null;
+  userId: string | null;
   createdAt: Date;
 };
 
-type PrismaPostReaction = Omit<PostReaction, "createdAt"> & {
+type PrismaPostReaction = Omit<
+  PostReaction,
+  "createdAt" | "characterId" | "userId"
+> & {
+  characterId: string | null;
+  userId: string | null;
   createdAt: Date;
 };
 
 type PostFilters = {
   characterId?: string;
+  contentType?: PostContentType;
   hashtag?: string;
   mediaType?: MediaType;
 };
@@ -210,6 +226,26 @@ export class PostsService {
     );
   }
 
+  async createUserComment(input: {
+    postId: string;
+    userId: string;
+    body: string;
+  }): Promise<PostComment> {
+    const body = input.body.trim();
+    if (!body) {
+      throw new BadRequestException("Comment body is required");
+    }
+
+    const comment = await this.prisma.postComment.create({
+      data: {
+        postId: input.postId,
+        userId: input.userId,
+        body,
+      },
+    });
+    return this.toPostComment(comment as PrismaPostComment);
+  }
+
   async listPostReactions(
     postId: string,
   ): Promise<{ items: PostReaction[]; counts: Record<string, number> }> {
@@ -230,6 +266,56 @@ export class PostsService {
     };
   }
 
+  async createUserReaction(input: {
+    postId: string;
+    userId: string;
+    reactionType: string;
+  }): Promise<PostReaction> {
+    const reactionType = this.requiredReactionType(input.reactionType);
+    const reaction = await this.prisma.postReaction.upsert({
+      where: {
+        postId_userId_reactionType: {
+          postId: input.postId,
+          userId: input.userId,
+          reactionType,
+        },
+      },
+      update: {},
+      create: {
+        postId: input.postId,
+        userId: input.userId,
+        reactionType,
+      },
+    });
+    return this.toPostReaction(reaction as PrismaPostReaction);
+  }
+
+  async deleteUserReaction(input: {
+    postId: string;
+    userId: string;
+    reactionType: string;
+  }): Promise<{
+    postId: string;
+    userId: string;
+    reactionType: string;
+    deleted: boolean;
+  }> {
+    const reactionType = this.requiredReactionType(input.reactionType);
+    const result = await this.prisma.postReaction.deleteMany({
+      where: {
+        postId: input.postId,
+        userId: input.userId,
+        reactionType,
+      },
+    });
+    return {
+      postId: input.postId,
+      userId: input.userId,
+      reactionType,
+      deleted: result.count > 0,
+    };
+  }
+
   private readonly postWithMedia = {
     postMedia: {
       include: { media: true },
@@ -244,11 +330,18 @@ export class PostsService {
   private postWhere(input: PostFilters) {
     const where: {
       characterId?: string;
+      contentType?: PostContentType;
       hashtags?: { some: { hashtag: { name: string } } };
       postMedia?: { some: { media: { mediaType: MediaType } } };
     } = {};
     if (input.characterId?.trim()) {
       where.characterId = input.characterId.trim();
+    }
+    if (input.contentType) {
+      if (input.contentType !== "feed" && input.contentType !== "reel") {
+        throw new BadRequestException("Invalid content type");
+      }
+      where.contentType = input.contentType;
     }
     if (input.hashtag?.trim()) {
       where.hashtags = {
@@ -274,6 +367,7 @@ export class PostsService {
     return {
       id: post.id,
       characterId: post.characterId,
+      contentType: post.contentType,
       content: post.content,
       media: post.postMedia.map((item) => ({
         mediaType: item.media.mediaType,
@@ -293,7 +387,8 @@ export class PostsService {
     return {
       id: comment.id,
       postId: comment.postId,
-      characterId: comment.characterId,
+      ...(comment.characterId ? { characterId: comment.characterId } : {}),
+      ...(comment.userId ? { userId: comment.userId } : {}),
       body: comment.body,
       createdAt: comment.createdAt.toISOString(),
     };
@@ -303,9 +398,18 @@ export class PostsService {
     return {
       id: reaction.id,
       postId: reaction.postId,
-      characterId: reaction.characterId,
+      ...(reaction.characterId ? { characterId: reaction.characterId } : {}),
+      ...(reaction.userId ? { userId: reaction.userId } : {}),
       reactionType: reaction.reactionType,
       createdAt: reaction.createdAt.toISOString(),
     };
+  }
+
+  private requiredReactionType(reactionType: string): string {
+    const trimmed = reactionType.trim();
+    if (!trimmed) {
+      throw new BadRequestException("Reaction type is required");
+    }
+    return trimmed;
   }
 }

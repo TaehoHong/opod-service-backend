@@ -10,6 +10,8 @@ import { AuthService } from "./auth.service";
 type TestUser = {
   id: string;
   displayName: string;
+  bio: string;
+  profileImageUrl: string | null;
   email: string;
   passwordHash: string;
   passwordSalt: string;
@@ -41,6 +43,8 @@ function createAuthHarness() {
           }
           const user = {
             id: `user-${users.length + 1}`,
+            bio: "",
+            profileImageUrl: null,
             ...data,
           };
           users.push(user);
@@ -301,6 +305,37 @@ describe("AuthService", () => {
         { displayName: " " },
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it("updates the current user's profile fields", async () => {
+    const service = createAuthService() as AuthService & {
+      updateCurrentUserFromAuthorization(
+        authorization: string,
+        input: {
+          bio?: string;
+          profileImageUrl?: string;
+        },
+      ): Promise<unknown>;
+    };
+    const registered = await service.register({
+      email: "reader@example.com",
+      password: "password123",
+      displayName: "Reader",
+    });
+
+    await expect(
+      service.updateCurrentUserFromAuthorization(
+        `Bearer ${registered.accessToken}`,
+        {
+          bio: " hello ",
+          profileImageUrl: " https://cdn.local/me.png ",
+        },
+      ),
+    ).resolves.toEqual({
+      ...registered.user,
+      bio: "hello",
+      profileImageUrl: "https://cdn.local/me.png",
+    });
   });
 
   it("changes the password, revokes old sessions, and issues new tokens", async () => {

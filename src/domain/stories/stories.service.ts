@@ -1,0 +1,99 @@
+import { BadRequestException, Injectable } from "@nestjs/common";
+import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
+import { PrismaService } from "../database/prisma.service";
+
+type MediaType = "image" | "video";
+
+type StoryMedia = {
+  mediaType: MediaType;
+  url: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+};
+
+export type Story = {
+  id: string;
+  characterId: string;
+  caption: string;
+  media: StoryMedia;
+  createdAt: string;
+  expiresAt: string;
+};
+
+type PrismaStory = Omit<Story, "createdAt" | "expiresAt" | "media"> & {
+  createdAt: Date;
+  expiresAt: Date;
+  media: StoryMedia;
+};
+
+type StoryWhere = {
+  characterId?: string;
+  expiresAt: { gt: Date };
+};
+
+@Injectable()
+export class StoriesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async listStoriesPage(input: PageInput): Promise<Page<Story>> {
+    return this.listActiveStoriesPage({ expiresAt: { gt: new Date() } }, input);
+  }
+
+  async listCharacterStoriesPage(
+    characterId: string,
+    input: PageInput,
+  ): Promise<Page<Story>> {
+    return this.listActiveStoriesPage(
+      { characterId, expiresAt: { gt: new Date() } },
+      input,
+    );
+  }
+
+  private async listActiveStoriesPage(
+    where: StoryWhere,
+    input: PageInput,
+  ): Promise<Page<Story>> {
+    const cursorId = decodeCursor(input.cursor);
+    if (
+      cursorId &&
+      !(await this.prisma.story.findFirst({
+        where: { id: cursorId, ...where },
+        select: { id: true },
+      }))
+    ) {
+      throw new BadRequestException("Invalid cursor");
+    }
+
+    const stories = await this.prisma.story.findMany({
+      where,
+      include: { media: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: input.limit + 1,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+    });
+    return pageFromRows(
+      stories.map((story) => this.toStory(story as PrismaStory)),
+      input.limit,
+    );
+  }
+
+  private toStory(story: PrismaStory): Story {
+    return {
+      id: story.id,
+      characterId: story.characterId,
+      caption: story.caption,
+      media: {
+        mediaType: story.media.mediaType,
+        url: story.media.url,
+        ...(story.media.width ? { width: story.media.width } : {}),
+        ...(story.media.height ? { height: story.media.height } : {}),
+        ...(story.media.durationSeconds
+          ? { durationSeconds: story.media.durationSeconds }
+          : {}),
+      },
+      createdAt: story.createdAt.toISOString(),
+      expiresAt: story.expiresAt.toISOString(),
+    };
+  }
+}

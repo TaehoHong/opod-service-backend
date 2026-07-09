@@ -6,6 +6,7 @@ describe("PostsService", () => {
     const row = {
       id: "post-1",
       characterId: "character-1",
+      contentType: "reel",
       content: "hello",
       createdAt,
       hashtags: [{ hashtag: { name: "art" } }],
@@ -40,6 +41,7 @@ describe("PostsService", () => {
       {
         id: "post-1",
         characterId: "character-1",
+        contentType: "reel",
         content: "hello",
         media: [
           {
@@ -64,6 +66,7 @@ describe("PostsService", () => {
     const row = {
       id: "post-new",
       characterId: "character-1",
+      contentType: "feed",
       content: "new",
       createdAt,
       hashtags: [{ hashtag: { name: "art" } }],
@@ -84,6 +87,7 @@ describe("PostsService", () => {
       {
         id: "post-new",
         characterId: "character-1",
+        contentType: "feed",
         content: "new",
         media: [],
         hashtags: ["art"],
@@ -113,6 +117,7 @@ describe("PostsService", () => {
     const row = {
       id: "post-new",
       characterId: "character-1",
+      contentType: "feed",
       content: "new",
       createdAt,
       hashtags: [{ hashtag: { name: "art" } }],
@@ -135,6 +140,7 @@ describe("PostsService", () => {
       {
         id: "post-new",
         characterId: "character-1",
+        contentType: "feed",
         content: "new",
         media: [],
         hashtags: ["art"],
@@ -164,6 +170,7 @@ describe("PostsService", () => {
     const row = {
       id: "post-filtered",
       characterId: "character-1",
+      contentType: "reel",
       content: "filtered",
       createdAt,
       hashtags: [{ hashtag: { name: "film" } }],
@@ -190,6 +197,7 @@ describe("PostsService", () => {
         {
           id: "post-filtered",
           characterId: "character-1",
+          contentType: "reel",
           content: "filtered",
           media: [],
           hashtags: ["film"],
@@ -224,11 +232,238 @@ describe("PostsService", () => {
     });
   });
 
+  it("returns a cursor page of posts filtered by content type", async () => {
+    const createdAt = new Date("2026-06-30T00:00:00.000Z");
+    const row = {
+      id: "post-reel",
+      characterId: "character-1",
+      contentType: "reel",
+      content: "reel",
+      createdAt,
+      hashtags: [],
+      postMedia: [],
+    };
+    const findMany = jest.fn().mockResolvedValue([row]);
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        post: {
+          findMany,
+        },
+      },
+    );
+
+    await expect(
+      service.listPostsPage({ limit: 1, contentType: "reel" }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: "post-reel",
+          characterId: "character-1",
+          contentType: "reel",
+          content: "reel",
+          media: [],
+          hashtags: [],
+          createdAt: createdAt.toISOString(),
+        },
+      ],
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { contentType: "reel" },
+      include: {
+        hashtags: {
+          include: { hashtag: true },
+          orderBy: { hashtag: { name: "asc" } },
+        },
+        postMedia: {
+          include: { media: true },
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
+  });
+
+  it("rejects invalid post content type filters", async () => {
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        post: {
+          findMany: jest.fn(),
+        },
+      },
+    );
+
+    await expect(
+      service.listPostsPage({
+        limit: 1,
+        contentType: "story" as Parameters<
+          PostsService["listPostsPage"]
+        >[0]["contentType"],
+      }),
+    ).rejects.toThrow("Invalid content type");
+  });
+
+  it("creates user comments with trimmed body", async () => {
+    const createdAt = new Date("2026-06-30T00:00:00.000Z");
+    const create = jest.fn().mockResolvedValue({
+      id: "comment-1",
+      postId: "post-1",
+      userId: "user-1",
+      characterId: null,
+      body: "hello",
+      createdAt,
+    });
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postComment: {
+          create,
+        },
+      },
+    );
+
+    await expect(
+      service.createUserComment({
+        postId: "post-1",
+        userId: "user-1",
+        body: " hello ",
+      }),
+    ).resolves.toEqual({
+      id: "comment-1",
+      postId: "post-1",
+      userId: "user-1",
+      body: "hello",
+      createdAt: createdAt.toISOString(),
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        postId: "post-1",
+        userId: "user-1",
+        body: "hello",
+      },
+    });
+  });
+
+  it("rejects blank user comments", async () => {
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postComment: {
+          create: jest.fn(),
+        },
+      },
+    );
+
+    await expect(
+      service.createUserComment({
+        postId: "post-1",
+        userId: "user-1",
+        body: " ",
+      }),
+    ).rejects.toThrow("Comment body is required");
+  });
+
+  it("creates user reactions idempotently", async () => {
+    const createdAt = new Date("2026-06-30T00:00:00.000Z");
+    const upsert = jest.fn().mockResolvedValue({
+      id: "reaction-1",
+      postId: "post-1",
+      userId: "user-1",
+      characterId: null,
+      reactionType: "like",
+      createdAt,
+    });
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postReaction: {
+          upsert,
+        },
+      },
+    );
+
+    await expect(
+      service.createUserReaction({
+        postId: "post-1",
+        userId: "user-1",
+        reactionType: " like ",
+      }),
+    ).resolves.toEqual({
+      id: "reaction-1",
+      postId: "post-1",
+      userId: "user-1",
+      reactionType: "like",
+      createdAt: createdAt.toISOString(),
+    });
+    expect(upsert).toHaveBeenCalledWith({
+      where: {
+        postId_userId_reactionType: {
+          postId: "post-1",
+          userId: "user-1",
+          reactionType: "like",
+        },
+      },
+      update: {},
+      create: {
+        postId: "post-1",
+        userId: "user-1",
+        reactionType: "like",
+      },
+    });
+  });
+
+  it("deletes user reactions", async () => {
+    const deleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postReaction: {
+          deleteMany,
+        },
+      },
+    );
+
+    await expect(
+      service.deleteUserReaction({
+        postId: "post-1",
+        userId: "user-1",
+        reactionType: "like",
+      }),
+    ).resolves.toEqual({
+      postId: "post-1",
+      userId: "user-1",
+      reactionType: "like",
+      deleted: true,
+    });
+    expect(deleteMany).toHaveBeenCalledWith({
+      where: {
+        postId: "post-1",
+        userId: "user-1",
+        reactionType: "like",
+      },
+    });
+  });
+
+  it("rejects blank user reactions", async () => {
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postReaction: {
+          upsert: jest.fn(),
+        },
+      },
+    );
+
+    await expect(
+      service.createUserReaction({
+        postId: "post-1",
+        userId: "user-1",
+        reactionType: " ",
+      }),
+    ).rejects.toThrow("Reaction type is required");
+  });
+
   it("searches posts and hashtags by text", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const row = {
       id: "post-1",
       characterId: "character-1",
+      contentType: "feed",
       content: "film diary",
       createdAt,
       hashtags: [{ hashtag: { name: "film" } }, { hashtag: { name: "noir" } }],
@@ -247,6 +482,7 @@ describe("PostsService", () => {
       {
         id: "post-1",
         characterId: "character-1",
+        contentType: "feed",
         content: "film diary",
         media: [],
         hashtags: ["film", "noir"],

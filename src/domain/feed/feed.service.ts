@@ -27,17 +27,19 @@ export class FeedService {
       ? ((await this.eventsService?.hashtagPreferencesFor(userId)) ?? new Map())
       : new Map();
 
-    return (await this.postsService.listPosts()).sort((left, right) => {
-      const scoreWithFollowBoost = (post: Post) =>
-        this.hashtagAffinityFor(post, hashtagPreferences) +
-        (follows.has(post.characterId) ? 1 : 0);
-      const scoreDelta =
-        scoreWithFollowBoost(right) - scoreWithFollowBoost(left);
-      if (scoreDelta !== 0) {
-        return scoreDelta;
-      }
-      return right.createdAt.localeCompare(left.createdAt);
-    });
+    return (await this.postsService.listPosts())
+      .filter((post) => post.contentType === "feed")
+      .sort((left, right) => {
+        const scoreWithFollowBoost = (post: Post) =>
+          this.hashtagAffinityFor(post, hashtagPreferences) +
+          (follows.has(post.characterId) ? 1 : 0);
+        const scoreDelta =
+          scoreWithFollowBoost(right) - scoreWithFollowBoost(left);
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return right.createdAt.localeCompare(left.createdAt);
+      });
   }
 
   async getFeedPage(
