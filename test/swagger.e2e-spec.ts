@@ -200,6 +200,72 @@ describe("service swagger", () => {
     expect(paths).toContain("/health");
     expect(paths).toContain("/auth/register");
     expect(paths.some((path) => path.startsWith("/admin"))).toBe(false);
+    expect(response.body.tags.map((tag: { name: string }) => tag.name)).toEqual(
+      [
+        "인증",
+        "캐릭터",
+        "피드",
+        "게시글",
+        "팔로우",
+        "메시지",
+        "크레딧",
+        "알림",
+        "신고",
+        "고객지원",
+        "검색",
+        "이벤트",
+        "시스템",
+      ],
+    );
+    expect(response.body.paths["/auth/register"].post.tags).toEqual(["인증"]);
+    expect(response.body.paths["/health"].get.tags).toEqual(["시스템"]);
+
+    await app.close();
+  });
+
+  it("documents request, response, and auth examples", async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AuthRealDocModule],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+
+    setupServiceSwagger(app, [AuthRealDocModule]);
+    await app.init();
+
+    const response = await request(app.getHttpServer())
+      .get("/docs-json")
+      .expect(200);
+    const registerOperation = response.body.paths["/auth/register"].post;
+    const meOperation = response.body.paths["/auth/me"].get;
+
+    expect(
+      registerOperation.requestBody.content["application/json"].example,
+    ).toMatchObject({
+      email: "taeho@example.com",
+      password: "password1234",
+      displayName: "홍태호",
+    });
+    expect(
+      registerOperation.responses["201"].content["application/json"].example,
+    ).toMatchObject({
+      accessToken: "eyJhbGciOi...",
+      refreshToken: "refresh_abc123",
+    });
+    expect(
+      meOperation.parameters.find(
+        (parameter: { name: string }) => parameter.name === "Authorization",
+      ),
+    ).toMatchObject({
+      in: "header",
+      required: true,
+      schema: { type: "string", example: "Bearer eyJhbGciOi..." },
+    });
+    expect(
+      meOperation.responses["200"].content["application/json"].example,
+    ).toMatchObject({
+      id: "user_01",
+      email: "taeho@example.com",
+    });
 
     await app.close();
   });
@@ -318,6 +384,20 @@ describe("service swagger", () => {
         "application/json"
       ].schema,
     ).toEqual({ $ref: "#/components/schemas/PostCommentDto" });
+    expect(
+      response.body.paths["/posts/{id}/comments"].post.requestBody.content[
+        "application/json"
+      ].example,
+    ).toEqual({ body: "좋아요" });
+    expect(
+      response.body.paths["/posts/{id}/comments"].post.responses["201"].content[
+        "application/json"
+      ].example,
+    ).toMatchObject({
+      id: "comment_01",
+      postId: "post_01",
+      body: "좋아요",
+    });
     for (const name of ["cursor", "limit"]) {
       expect(
         response.body.paths["/posts/{id}/comments"].get.parameters.find(
