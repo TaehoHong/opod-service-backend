@@ -1,7 +1,7 @@
 import { StoriesService } from "./stories.service";
 
 const s3PublicBaseUrl =
-  "https://dev-opod-public.s3.ap-northeast-2.amazonaws.com";
+  "https://media.example.test";
 let previousS3PublicBaseUrl: string | undefined;
 
 describe("StoriesService", () => {
