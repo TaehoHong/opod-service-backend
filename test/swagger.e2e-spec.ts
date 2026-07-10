@@ -223,6 +223,25 @@ describe("service swagger", () => {
     await app.close();
   });
 
+  it("does not inject tag sorting into swagger ui", async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [TestAppModule],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+
+    setupServiceSwagger(app, [ServiceDocModule]);
+    await app.init();
+
+    const response = await request(app.getHttpServer())
+      .get("/docs/swagger-ui-init.js")
+      .expect(200);
+
+    expect(response.text).not.toContain("tagsSorter");
+    expect(response.text).not.toContain("swaggerTagOrder");
+
+    await app.close();
+  });
+
   it("documents request, response, and auth examples", async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AuthRealDocModule],

@@ -56,7 +56,6 @@ export function setupServiceSwagger(
       docExpansion: "none",
       operationsSorter: "alpha",
       persistAuthorization: true,
-      tagsSorter: sortSwaggerTags,
     },
   });
 }
@@ -76,8 +75,6 @@ const serviceTags: OpenApiTag[] = [
   { name: "이벤트", description: "클라이언트 이벤트 수집 API" },
   { name: "시스템", description: "서비스 상태 확인 API" },
 ];
-
-const swaggerTagOrder = serviceTags.map((tag) => tag.name);
 
 const tagByPathSegment: Record<string, string> = {
   auth: "인증",
@@ -563,22 +560,6 @@ function addOperationExamples(document: OpenApiDocument) {
 function tagForPath(path: string) {
   const segment = path.split("/").filter(Boolean)[0];
   return segment ? tagByPathSegment[segment] : undefined;
-}
-
-function sortSwaggerTags(left: string, right: string) {
-  const leftIndex = swaggerTagOrder.indexOf(left);
-  const rightIndex = swaggerTagOrder.indexOf(right);
-
-  if (leftIndex === -1 && rightIndex === -1) {
-    return left.localeCompare(right);
-  }
-  if (leftIndex === -1) {
-    return 1;
-  }
-  if (rightIndex === -1) {
-    return -1;
-  }
-  return leftIndex - rightIndex;
 }
 
 function isHttpMethod(method: string) {
