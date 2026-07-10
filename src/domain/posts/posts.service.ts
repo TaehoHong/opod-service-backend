@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
+import { isUuid } from "../database/uuid";
 import { publicMediaUrl } from "../media/media-url";
 
 type MediaType = "image" | "video";
@@ -84,13 +85,24 @@ type PostFilters = {
   mediaType?: MediaType;
 };
 
+const activeCharacterWhere = {
+  character: { status: "active" as const },
+};
+
+const visiblePostAuthorWhere = {
+  OR: [{ characterId: null }, { character: { status: "active" as const } }],
+};
+
 @Injectable()
 export class PostsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async hasPost(postId: string): Promise<boolean> {
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
+    if (!isUuid(postId)) {
+      return false;
+    }
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, ...activeCharacterWhere },
       select: { id: true },
     });
     return post !== null;
@@ -98,6 +110,7 @@ export class PostsService {
 
   async listPosts(): Promise<Post[]> {
     const posts = await this.prisma.post.findMany({
+      where: activeCharacterWhere,
       include: this.postWithMedia,
       orderBy: { createdAt: "desc" },
     });
@@ -138,7 +151,7 @@ export class PostsService {
     if (
       cursorId &&
       !(await this.prisma.post.findFirst({
-        where: { id: cursorId, characterId },
+        where: { id: cursorId, characterId, ...activeCharacterWhere },
         select: { id: true },
       }))
     ) {
@@ -146,7 +159,7 @@ export class PostsService {
     }
 
     const posts = await this.prisma.post.findMany({
-      where: { characterId },
+      where: { characterId, ...activeCharacterWhere },
       include: this.postWithMedia,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,
@@ -162,6 +175,7 @@ export class PostsService {
     const term = query.trim();
     const posts = await this.prisma.post.findMany({
       where: {
+        ...activeCharacterWhere,
         OR: [
           { content: { contains: term, mode: "insensitive" } },
           {
@@ -183,7 +197,12 @@ export class PostsService {
   async searchHashtags(query: string, limit: number): Promise<string[]> {
     const term = query.trim();
     const hashtags = await this.prisma.hashtag.findMany({
-      where: { name: { contains: term, mode: "insensitive" } },
+      where: {
+        name: { contains: term, mode: "insensitive" },
+        posts: {
+          some: { post: { character: { status: "active" } } },
+        },
+      },
       orderBy: { name: "asc" },
       take: limit,
       select: { name: true },
@@ -192,8 +211,11 @@ export class PostsService {
   }
 
   async findPost(postId: string): Promise<Post | null> {
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
+    if (!isUuid(postId)) {
+      return null;
+    }
+    const post = await this.prisma.post.findFirst({
+      where: { id: postId, ...activeCharacterWhere },
       include: this.postWithMedia,
     });
     return post ? this.toPost(post as PrismaPost) : null;
@@ -207,7 +229,7 @@ export class PostsService {
     if (
       cursorId &&
       !(await this.prisma.postComment.findFirst({
-        where: { id: cursorId, postId },
+        where: { id: cursorId, postId, ...visiblePostAuthorWhere },
         select: { id: true },
       }))
     ) {
@@ -215,7 +237,7 @@ export class PostsService {
     }
 
     const comments = await this.prisma.postComment.findMany({
-      where: { postId },
+      where: { postId, ...visiblePostAuthorWhere },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -231,9 +253,9 @@ export class PostsService {
   async createUserComment(input: {
     postId: string;
     userId: string;
-    body: string;
+    body: unknown;
   }): Promise<PostComment> {
-    const body = input.body.trim();
+    const body = typeof input.body === "string" ? input.body.trim() : "";
     if (!body) {
       throw new BadRequestException("Comment body is required");
     }
@@ -252,7 +274,7 @@ export class PostsService {
     postId: string,
   ): Promise<{ items: PostReaction[]; counts: Record<string, number> }> {
     const reactions = await this.prisma.postReaction.findMany({
-      where: { postId },
+      where: { postId, ...visiblePostAuthorWhere },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
     const items = reactions.map((reaction) =>
@@ -271,7 +293,7 @@ export class PostsService {
   async createUserReaction(input: {
     postId: string;
     userId: string;
-    reactionType: string;
+    reactionType: unknown;
   }): Promise<PostReaction> {
     const reactionType = this.requiredReactionType(input.reactionType);
     const reaction = await this.prisma.postReaction.upsert({
@@ -295,7 +317,7 @@ export class PostsService {
   async deleteUserReaction(input: {
     postId: string;
     userId: string;
-    reactionType: string;
+    reactionType: unknown;
   }): Promise<{
     postId: string;
     userId: string;
@@ -332,12 +354,17 @@ export class PostsService {
   private postWhere(input: PostFilters) {
     const where: {
       characterId?: string;
+      character: { status: "active" };
       contentType?: PostContentType;
       hashtags?: { some: { hashtag: { name: string } } };
       postMedia?: { some: { media: { mediaType: MediaType } } };
-    } = {};
+    } = { ...activeCharacterWhere };
     if (input.characterId?.trim()) {
-      where.characterId = input.characterId.trim();
+      const characterId = input.characterId.trim();
+      if (!isUuid(characterId)) {
+        throw new BadRequestException("Invalid character ID");
+      }
+      where.characterId = characterId;
     }
     if (input.contentType) {
       if (input.contentType !== "feed" && input.contentType !== "reel") {
@@ -407,8 +434,8 @@ export class PostsService {
     };
   }
 
-  private requiredReactionType(reactionType: string): string {
-    const trimmed = reactionType.trim();
+  private requiredReactionType(reactionType: unknown): string {
+    const trimmed = typeof reactionType === "string" ? reactionType.trim() : "";
     if (!trimmed) {
       throw new BadRequestException("Reaction type is required");
     }

@@ -351,6 +351,33 @@ describe("MessagesService", () => {
     });
   });
 
+  it("rejects malformed message cursors before loading conversation data", async () => {
+    const hasUser = jest.fn();
+    const hasCharacter = jest.fn();
+    const findUnique = jest.fn();
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser },
+      { hasCharacter },
+      { messageConversation: { findUnique } },
+      createCreditsStub(),
+    );
+    const cursor = Buffer.from(JSON.stringify({ id: "bad-id" })).toString(
+      "base64url",
+    );
+
+    await expect(
+      service.getMessagesPage({
+        userId: "human-1",
+        characterId: "ai-1",
+        limit: 20,
+        cursor,
+      }),
+    ).rejects.toThrow("Invalid cursor");
+    expect(hasUser).not.toHaveBeenCalled();
+    expect(hasCharacter).not.toHaveBeenCalled();
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
   it("returns a cursor page of conversations", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const findMany = jest.fn().mockResolvedValue([
@@ -429,7 +456,10 @@ describe("MessagesService", () => {
       nextCursor: expect.any(String),
     });
     expect(findMany).toHaveBeenCalledWith({
-      where: { userId: "human-1" },
+      where: {
+        userId: "human-1",
+        character: { status: "active" },
+      },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 2,
       include: {
@@ -450,6 +480,30 @@ describe("MessagesService", () => {
     });
   });
 
+  it("rejects malformed conversation cursors before loading user data", async () => {
+    const hasUser = jest.fn();
+    const findMany = jest.fn();
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser },
+      { hasCharacter: jest.fn() },
+      { messageConversation: { findMany } },
+      createCreditsStub(),
+    );
+    const cursor = Buffer.from(JSON.stringify({ id: "bad-id" })).toString(
+      "base64url",
+    );
+
+    await expect(
+      service.listConversationsPage({
+        userId: "human-1",
+        limit: 20,
+        cursor,
+      }),
+    ).rejects.toThrow("Invalid cursor");
+    expect(hasUser).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
   it("rejects empty human messages", async () => {
     const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasUser: jest.fn() },
@@ -463,6 +517,23 @@ describe("MessagesService", () => {
         userId: "human-1",
         characterId: "ai-1",
         body: "   ",
+      }),
+    ).rejects.toThrow("Message body is required");
+  });
+
+  it("rejects missing human message bodies", async () => {
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser: jest.fn() },
+      { hasCharacter: jest.fn() },
+      {},
+      createCreditsStub(),
+    );
+
+    await expect(
+      service.sendMessage({
+        userId: "human-1",
+        characterId: "ai-1",
+        body: undefined as unknown as string,
       }),
     ).rejects.toThrow("Message body is required");
   });
@@ -535,5 +606,118 @@ describe("MessagesService", () => {
       targetType: "character",
       targetId: "character-1",
     });
+  });
+
+  it("waits for the server message event before completing", async () => {
+    const createdAt = new Date("2026-06-30T00:00:00.000Z");
+    let resolveEvent: (() => void) | undefined;
+    const eventStored = new Promise<void>((resolve) => {
+      resolveEvent = resolve;
+    });
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser: jest.fn().mockResolvedValue(true) },
+      { hasCharacter: jest.fn().mockResolvedValue(true) },
+      {
+        messageConversation: {
+          upsert: jest.fn().mockResolvedValue({
+            id: "conversation-1",
+            userId: "human-1",
+            characterId: "character-1",
+          }),
+        },
+        message: {
+          create: jest
+            .fn()
+            .mockResolvedValueOnce({
+              id: "message-human",
+              conversationId: "conversation-1",
+              senderType: "user",
+              body: "hello",
+              createdAt,
+            })
+            .mockResolvedValueOnce({
+              id: "message-ai",
+              conversationId: "conversation-1",
+              senderType: "character",
+              body: "AI reply to: hello",
+              createdAt,
+            }),
+        },
+      },
+      createCreditsStub(),
+      { recordEvent: jest.fn().mockReturnValue(eventStored) },
+    );
+    let completed = false;
+
+    const sending = service
+      .sendMessage({
+        userId: "human-1",
+        characterId: "character-1",
+        body: "hello",
+      })
+      .then(() => {
+        completed = true;
+      });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(completed).toBe(false);
+    resolveEvent?.();
+    await sending;
+  });
+
+  it("keeps a captured message successful when its server event fails", async () => {
+    const createdAt = new Date("2026-06-30T00:00:00.000Z");
+    const credits = createCreditsStub();
+    const service = new (MessagesService as unknown as MessagesServiceCtor)(
+      { hasUser: jest.fn().mockResolvedValue(true) },
+      { hasCharacter: jest.fn().mockResolvedValue(true) },
+      {
+        messageConversation: {
+          upsert: jest.fn().mockResolvedValue({
+            id: "conversation-1",
+            userId: "human-1",
+            characterId: "character-1",
+          }),
+        },
+        message: {
+          create: jest
+            .fn()
+            .mockResolvedValueOnce({
+              id: "message-human",
+              conversationId: "conversation-1",
+              senderType: "user",
+              body: "hello",
+              createdAt,
+            })
+            .mockResolvedValueOnce({
+              id: "message-ai",
+              conversationId: "conversation-1",
+              senderType: "character",
+              body: "AI reply to: hello",
+              createdAt,
+            }),
+        },
+      },
+      credits,
+      { recordEvent: jest.fn().mockRejectedValue(new Error("event down")) },
+    );
+
+    await expect(
+      service.sendMessage({
+        userId: "human-1",
+        characterId: "character-1",
+        body: "hello",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "conversation-1",
+      messages: [
+        { senderType: "user", body: "hello" },
+        { senderType: "character", body: "AI reply to: hello" },
+      ],
+    });
+    expect(credits.captureReservation).toHaveBeenCalledWith({
+      reference: "chat_reply:test",
+    });
+    expect(credits.releaseReservation).not.toHaveBeenCalled();
   });
 });

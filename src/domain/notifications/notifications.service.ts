@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
+import { isUuid } from "../database/uuid";
 
 export type Notification = {
   id: string;
@@ -34,6 +35,9 @@ export class NotificationsService {
     } & PageInput,
   ): Promise<Page<Notification>> {
     const cursorId = decodeCursor(input.cursor);
+    if (cursorId && !isUuid(cursorId)) {
+      throw new BadRequestException("Invalid cursor");
+    }
     const where = {
       userId: input.userId,
       ...(input.unreadOnly ? { readAt: null } : {}),
@@ -67,6 +71,9 @@ export class NotificationsService {
     userId: string;
     notificationId: string;
   }): Promise<NotificationReadReceipt | null> {
+    if (!isUuid(input.notificationId)) {
+      return null;
+    }
     if (
       !(await this.prisma.notification.findFirst({
         where: { id: input.notificationId, userId: input.userId },

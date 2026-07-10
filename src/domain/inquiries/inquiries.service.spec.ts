@@ -16,13 +16,16 @@ type TestInquiry = {
 function createInquiriesHarness() {
   const inquiries: TestInquiry[] = [];
 
-  const service = new InquiriesService({
+  const prisma = {
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    $transaction: undefined as unknown,
     inquiry: {
       count: jest.fn(async ({ where }) => {
         return inquiries.filter(
           (inquiry) =>
             inquiry.userId === where.userId &&
-            inquiry.createdAt >= where.createdAt.gte,
+            inquiry.createdAt >= where.createdAt.gte &&
+            inquiry.createdAt < where.createdAt.lt,
         ).length;
       }),
       create: jest.fn(async ({ data }) => {
@@ -38,9 +41,27 @@ function createInquiriesHarness() {
         return inquiry;
       }),
     },
-  } as unknown as PrismaService);
+  };
+  let transactionTail = Promise.resolve();
+  prisma.$transaction = jest.fn(
+    async (run: (tx: typeof prisma) => Promise<unknown>) => {
+      const previous = transactionTail;
+      let finishTransaction!: () => void;
+      transactionTail = new Promise<void>((resolve) => {
+        finishTransaction = resolve;
+      });
+      await previous;
+      try {
+        return await run(prisma);
+      } finally {
+        finishTransaction();
+      }
+    },
+  );
 
-  return { service, inquiries };
+  const service = new InquiriesService(prisma as unknown as PrismaService);
+
+  return { service, prisma, inquiries };
 }
 
 describe("InquiriesService", () => {
@@ -132,5 +153,61 @@ describe("InquiriesService", () => {
         body: "새 날의 문의",
       }),
     ).resolves.toMatchObject({ status: "submitted" });
+  });
+
+  it("admits only ten concurrent inquiries for one user and KST day", async () => {
+    const { service, prisma, inquiries } = createInquiriesHarness();
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 11 }, (_, index) =>
+        service.createInquiry({
+          userId: "user-1",
+          category: "etc",
+          body: `동시 문의 ${index + 1}`,
+        }),
+      ),
+    );
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(10);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(inquiries).toHaveLength(10);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(11);
+  });
+
+  it("uses one user lock and calculates the KST day after acquiring it", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-07-14T14:59:59.000Z"));
+    try {
+      const { service, prisma } = createInquiriesHarness();
+      prisma.$executeRaw.mockImplementationOnce(async () => {
+        jest.setSystemTime(new Date("2026-07-14T15:00:01.000Z"));
+        return 1;
+      });
+
+      await service.createInquiry({
+        userId: "user-1",
+        category: "etc",
+        body: "자정 경계 문의",
+      });
+
+      expect(prisma.$executeRaw).toHaveBeenCalledWith(
+        expect.any(Array),
+        "inquiry_daily:user-1",
+      );
+      expect(prisma.inquiry.count).toHaveBeenCalledWith({
+        where: {
+          userId: "user-1",
+          createdAt: {
+            gte: new Date("2026-07-14T15:00:00.000Z"),
+            lt: new Date("2026-07-15T15:00:00.000Z"),
+          },
+        },
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

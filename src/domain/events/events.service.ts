@@ -12,6 +12,8 @@ export type UserEventInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type ClientEventInput = Omit<UserEventInput, "userId">;
+
 const EVENT_WEIGHTS: Record<string, number> = {
   feed_view: 0.2,
   post_open: 1,
@@ -21,19 +23,34 @@ const EVENT_WEIGHTS: Record<string, number> = {
 
 @Injectable()
 export class EventsService {
-  private pending = Promise.resolve();
-
   constructor(
     private readonly postsService: PostsService,
     private readonly charactersService: CharactersService,
     private readonly prisma: PrismaService,
   ) {}
 
-  recordEvent(input: UserEventInput): { accepted: true } {
+  async recordEvent(input: UserEventInput): Promise<{ accepted: true }> {
     const event = this.normalizeEvent(input);
-    this.pending = this.pending
-      .then(() => this.storeEventAndUpdatePreferences(event))
-      .catch(() => undefined);
+    await this.storeEventAndSchedulePreferenceUpdate(event);
+
+    return { accepted: true };
+  }
+
+  async recordClientEvent(
+    userId: string,
+    input: ClientEventInput,
+  ): Promise<{ accepted: true }> {
+    const event = this.normalizeEvent({ ...input, userId });
+    if (
+      !["feed_view", "post_open"].includes(event.eventType) ||
+      event.targetType !== "post"
+    ) {
+      throw new BadRequestException("Unsupported client event");
+    }
+    if (!(await this.postsService.hasPost(event.targetId))) {
+      throw new BadRequestException("Event target not found");
+    }
+    await this.storeEventAndSchedulePreferenceUpdate(event);
 
     return { accepted: true };
   }
@@ -49,10 +66,6 @@ export class EventsService {
         preference.score,
       ]),
     );
-  }
-
-  async waitForIdle(): Promise<void> {
-    await this.pending;
   }
 
   private normalizeEvent(input: UserEventInput): UserEventInput {
@@ -87,9 +100,13 @@ export class EventsService {
     return value.trim();
   }
 
-  private async storeEventAndUpdatePreferences(input: UserEventInput) {
+  private async storeEventAndSchedulePreferenceUpdate(input: UserEventInput) {
     await this.storeEvent(input);
 
+    void this.updatePreferences(input).catch(() => undefined);
+  }
+
+  private async updatePreferences(input: UserEventInput) {
     const weight = EVENT_WEIGHTS[input.eventType];
     if (!weight) {
       return;

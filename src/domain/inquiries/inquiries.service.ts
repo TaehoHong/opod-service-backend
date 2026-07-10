@@ -48,24 +48,30 @@ export class InquiriesService {
   }): Promise<InquiryListItem> {
     const category = this.requiredCategory(input.category);
     const body = this.requiredBody(input.body);
+    const lockKey = `inquiry_daily:${input.userId}`;
 
-    const createdToday = await this.prisma.inquiry.count({
-      where: {
-        userId: input.userId,
-        createdAt: { gte: kstDayStart(new Date()) },
-      },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const dayStart = kstDayStart(new Date());
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      const createdToday = await tx.inquiry.count({
+        where: {
+          userId: input.userId,
+          createdAt: { gte: dayStart, lt: dayEnd },
+        },
+      });
+      if (createdToday >= dailyInquiryLimit) {
+        throw new HttpException(
+          "Too many inquiries today",
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      return (await tx.inquiry.create({
+        data: { userId: input.userId, category, body },
+        select: inquiryListFields,
+      })) as InquiryListItem;
     });
-    if (createdToday >= dailyInquiryLimit) {
-      throw new HttpException(
-        "Too many inquiries today",
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    return (await this.prisma.inquiry.create({
-      data: { userId: input.userId, category, body },
-      select: inquiryListFields,
-    })) as InquiryListItem;
   }
 
   async listInquiriesPage(

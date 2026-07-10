@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
+import { isUuid } from "../database/uuid";
 
 export type Character = {
   id: string;
@@ -14,8 +15,11 @@ export class CharactersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async hasCharacter(characterId: string): Promise<boolean> {
-    const character = await this.prisma.character.findUnique({
-      where: { id: characterId },
+    if (!isUuid(characterId)) {
+      return false;
+    }
+    const character = await this.prisma.character.findFirst({
+      where: { id: characterId, status: "active" },
       select: { id: true },
     });
     return character !== null;
@@ -48,8 +52,11 @@ export class CharactersService {
   }
 
   async findCharacter(characterId: string): Promise<Character | null> {
-    return this.prisma.character.findUnique({
-      where: { id: characterId },
+    if (!isUuid(characterId)) {
+      return null;
+    }
+    return this.prisma.character.findFirst({
+      where: { id: characterId, status: "active" },
       select: this.characterFields,
     });
   }

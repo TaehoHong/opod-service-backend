@@ -60,10 +60,11 @@ describe("NotificationsService", () => {
   });
 
   it("marks an owned notification as read", async () => {
+    const notificationId = "019f4970-b34a-7035-ad98-dfea56b2974d";
     const readAt = new Date("2026-07-02T01:00:00.000Z");
-    const findFirst = jest.fn().mockResolvedValue({ id: "notification-1" });
+    const findFirst = jest.fn().mockResolvedValue({ id: notificationId });
     const update = jest.fn().mockResolvedValue({
-      id: "notification-1",
+      id: notificationId,
       readAt,
     });
     const service = new NotificationsService({
@@ -78,20 +79,56 @@ describe("NotificationsService", () => {
     await expect(
       service.markNotificationRead({
         userId: "human-1",
-        notificationId: "notification-1",
+        notificationId,
       }),
     ).resolves.toEqual({
-      id: "notification-1",
+      id: notificationId,
       readAt: readAt.toISOString(),
     });
     expect(findFirst).toHaveBeenCalledWith({
-      where: { id: "notification-1", userId: "human-1" },
+      where: { id: notificationId, userId: "human-1" },
       select: { id: true },
     });
     expect(update).toHaveBeenCalledWith({
-      where: { id: "notification-1" },
+      where: { id: notificationId },
       data: { readAt: expect.any(Date) },
       select: { id: true, readAt: true },
     });
+  });
+
+  it("treats malformed notification IDs as missing without querying Prisma", async () => {
+    const findFirst = jest.fn();
+    const service = new NotificationsService({
+      notification: { findFirst },
+    } as never);
+
+    await expect(
+      service.markNotificationRead({
+        userId: "human-1",
+        notificationId: "bad-id",
+      }),
+    ).resolves.toBeNull();
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed notification cursors without querying Prisma", async () => {
+    const findFirst = jest.fn();
+    const findMany = jest.fn();
+    const service = new NotificationsService({
+      notification: { findFirst, findMany },
+    } as never);
+    const cursor = Buffer.from(JSON.stringify({ id: "bad-id" })).toString(
+      "base64url",
+    );
+
+    await expect(
+      service.listNotificationsPage({
+        userId: "human-1",
+        limit: 20,
+        cursor,
+      }),
+    ).rejects.toThrow("Invalid cursor");
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
   });
 });

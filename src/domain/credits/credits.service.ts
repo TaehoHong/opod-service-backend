@@ -6,6 +6,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
+import { isUuid } from "../database/uuid";
 import {
   checkInMilestoneBonuses,
   CreditActionType,
@@ -23,6 +24,14 @@ type CreditPurchaseStatus =
   "pending" | "paid" | "failed" | "canceled" | "refunded";
 type PaymentWebhookStatus = Exclude<CreditPurchaseStatus, "pending">;
 type CreditReservationStatus = "reserved" | "captured" | "released";
+
+type CreditGrantInput = {
+  userId: string;
+  amount: number;
+  reason: string;
+  externalReference?: string;
+  expiresAt?: Date;
+};
 
 type CreditEntry = {
   id: string;
@@ -91,7 +100,11 @@ type CheckInResult = {
 // helpers run on both the root client and interactive transaction clients.
 type CreditClient = Pick<
   PrismaService,
-  "creditLedgerEntry" | "creditReservation" | "creditCheckIn" | "$executeRaw"
+  | "creditLedgerEntry"
+  | "creditPurchase"
+  | "creditReservation"
+  | "creditCheckIn"
+  | "$executeRaw"
 >;
 
 const activeGrantWhere = (userId: string, now: Date) => ({
@@ -174,7 +187,7 @@ export class CreditsService {
   async captureReservation(input: {
     reference: string;
   }): Promise<CreditReservation> {
-    return this.prisma.$transaction(async (tx) => {
+    const outcome = await this.prisma.$transaction(async (tx) => {
       const found = await tx.creditReservation.findUnique({
         where: { reference: input.reference },
       });
@@ -190,17 +203,43 @@ export class CreditsService {
       })) as PrismaCreditReservation;
 
       if (reservation.status === "captured") {
-        return this.toCreditReservation(reservation);
+        return {
+          expired: false as const,
+          reservation: this.toCreditReservation(reservation),
+        };
       }
       if (reservation.status === "released") {
         throw new ConflictException("Credit reservation was released");
       }
       if (reservation.expiresAt <= new Date()) {
-        await tx.creditReservation.update({
-          where: { id: reservation.id },
+        await tx.creditReservation.updateMany({
+          where: { id: reservation.id, status: "reserved" },
           data: { status: "released" },
         });
-        throw new ConflictException("Credit reservation expired");
+        return {
+          expired: true as const,
+          reservation: this.toCreditReservation({
+            ...reservation,
+            status: "released",
+          }),
+        };
+      }
+
+      const transition = await tx.creditReservation.updateMany({
+        where: { id: reservation.id, status: "reserved" },
+        data: { status: "captured" },
+      });
+      if (transition.count === 0) {
+        const current = (await tx.creditReservation.findUnique({
+          where: { reference: input.reference },
+        })) as PrismaCreditReservation;
+        if (current.status === "captured") {
+          return {
+            expired: false as const,
+            reservation: this.toCreditReservation(current),
+          };
+        }
+        throw new ConflictException("Credit reservation was released");
       }
 
       const consumed = await this.consumeGrantBuckets(
@@ -221,12 +260,19 @@ export class CreditsService {
         });
       }
 
-      const captured = await tx.creditReservation.update({
-        where: { id: reservation.id },
-        data: { status: "captured" },
-      });
-      return this.toCreditReservation(captured as PrismaCreditReservation);
+      return {
+        expired: false as const,
+        reservation: this.toCreditReservation({
+          ...reservation,
+          status: "captured",
+        }),
+      };
     });
+
+    if (outcome.expired) {
+      throw new ConflictException("Credit reservation expired");
+    }
+    return outcome.reservation;
   }
 
   async releaseReservation(input: {
@@ -249,39 +295,14 @@ export class CreditsService {
     return this.toCreditReservation(reservation as PrismaCreditReservation);
   }
 
-  async grantCredits(input: {
-    userId: string;
-    amount: number;
-    reason: string;
-    externalReference?: string;
-    expiresAt?: Date;
-  }): Promise<CreditEntry> {
-    this.validateEntryInput(input);
-
-    if (input.externalReference) {
-      const existing = await this.prisma.creditLedgerEntry.findFirst({
-        where: {
-          entryType: "grant",
-          externalReference: input.externalReference,
-        },
-      });
-      if (existing) {
-        return this.toCreditEntry(existing as PrismaCreditEntry);
-      }
+  async grantCredits(input: CreditGrantInput): Promise<CreditEntry> {
+    if (!input.externalReference) {
+      return this.grantCreditsWithClient(this.prisma, input);
     }
 
-    const entry = await this.prisma.creditLedgerEntry.create({
-      data: {
-        userId: input.userId,
-        entryType: "grant",
-        amount: input.amount,
-        remainingAmount: input.amount,
-        expiresAt: input.expiresAt,
-        reason: input.reason.trim(),
-        externalReference: input.externalReference,
-      },
-    });
-    return this.toCreditEntry(entry as PrismaCreditEntry);
+    return this.prisma.$transaction((tx) =>
+      this.grantCreditsWithClient(tx, input),
+    );
   }
 
   async grantSignupBonus(userId: string): Promise<CreditEntry> {
@@ -439,45 +460,62 @@ export class CreditsService {
 
   async handlePaymentWebhook(
     provider: string,
-    input: { checkoutId?: string; status?: string },
+    input?: { checkoutId?: unknown; status?: unknown },
   ): Promise<{ received: true }> {
     if (provider !== "local") {
       throw new BadRequestException("Unsupported payment provider");
     }
 
-    const checkoutId = input.checkoutId?.trim();
+    const checkoutId =
+      typeof input?.checkoutId === "string" ? input.checkoutId.trim() : "";
     if (!checkoutId) {
       throw new BadRequestException("Payment checkout ID is required");
     }
-
-    const status = this.parsePaymentWebhookStatus(input.status);
-    const purchase = (await this.prisma.creditPurchase.findUnique({
-      where: { id: checkoutId },
-    })) as PrismaCreditPurchase | null;
-
-    if (!purchase) {
-      throw new BadRequestException("Credit purchase not found");
-    }
-    if (purchase.provider !== provider) {
-      throw new BadRequestException("Payment provider mismatch");
+    if (!isUuid(checkoutId)) {
+      throw new BadRequestException("Payment checkout ID is invalid");
     }
 
-    await this.prisma.creditPurchase.update({
-      where: { id: checkoutId },
-      data: { status },
+    const status = this.parsePaymentWebhookStatus(input?.status);
+    const externalReference = `credit_purchase:${checkoutId}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockCreditReference(tx, externalReference);
+      const purchase = (await tx.creditPurchase.findUnique({
+        where: { id: checkoutId },
+      })) as PrismaCreditPurchase | null;
+
+      if (!purchase) {
+        throw new BadRequestException("Credit purchase not found");
+      }
+      if (purchase.provider !== provider) {
+        throw new BadRequestException("Payment provider mismatch");
+      }
+      if (status === "refunded") {
+        throw new ConflictException("Credit purchase status conflict");
+      }
+      if (purchase.status !== status) {
+        if (purchase.status !== "pending") {
+          throw new ConflictException("Credit purchase status conflict");
+        }
+
+        await tx.creditPurchase.update({
+          where: { id: checkoutId },
+          data: { status },
+        });
+      }
+
+      if (status === "paid") {
+        // Paid credits never expire.
+        await this.grantCreditsWithClient(tx, {
+          userId: purchase.userId,
+          amount: purchase.creditAmount,
+          reason: "credit purchase paid",
+          externalReference,
+        });
+      }
+
+      return { received: true };
     });
-
-    if (status === "paid") {
-      // Paid credits never expire.
-      await this.grantCredits({
-        userId: purchase.userId,
-        amount: purchase.creditAmount,
-        reason: "credit purchase paid",
-        externalReference: `credit_purchase:${purchase.id}`,
-      });
-    }
-
-    return { received: true };
   }
 
   private freeCreditExpiry(): Date {
@@ -489,6 +527,52 @@ export class CreditsService {
     // balance check and the write that follows it stay race-free. $executeRaw
     // because pg_advisory_xact_lock returns void, which $queryRaw rejects.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+  }
+
+  private async lockCreditReference(tx: CreditClient, reference: string) {
+    const lockKey = `credit_reference:${reference}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  }
+
+  private async grantCreditsWithClient(
+    client: CreditClient,
+    input: CreditGrantInput,
+  ): Promise<CreditEntry> {
+    this.validateEntryInput(input);
+    const reason = input.reason.trim();
+
+    if (input.externalReference) {
+      await this.lockCreditReference(client, input.externalReference);
+      const existing = await client.creditLedgerEntry.findFirst({
+        where: {
+          entryType: "grant",
+          externalReference: input.externalReference,
+        },
+      });
+      if (existing) {
+        if (
+          existing.userId !== input.userId ||
+          existing.amount !== input.amount ||
+          existing.reason !== reason
+        ) {
+          throw new ConflictException("Credit grant reference conflict");
+        }
+        return this.toCreditEntry(existing as PrismaCreditEntry);
+      }
+    }
+
+    const entry = await client.creditLedgerEntry.create({
+      data: {
+        userId: input.userId,
+        entryType: "grant",
+        amount: input.amount,
+        remainingAmount: input.amount,
+        expiresAt: input.expiresAt,
+        reason,
+        externalReference: input.externalReference,
+      },
+    });
+    return this.toCreditEntry(entry as PrismaCreditEntry);
   }
 
   private async availableBalance(
@@ -582,9 +666,7 @@ export class CreditsService {
     };
   }
 
-  private parsePaymentWebhookStatus(
-    status: string | undefined,
-  ): PaymentWebhookStatus {
+  private parsePaymentWebhookStatus(status: unknown): PaymentWebhookStatus {
     if (
       status === "paid" ||
       status === "failed" ||
@@ -605,7 +687,7 @@ export class CreditsService {
   }
 
   private validateEntryInput(input: { amount: number; reason: string }) {
-    if (!input.reason.trim()) {
+    if (typeof input.reason !== "string" || !input.reason.trim()) {
       throw new BadRequestException("Credit ledger reason is required");
     }
     if (!Number.isInteger(input.amount) || input.amount <= 0) {

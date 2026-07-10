@@ -1,7 +1,6 @@
 import { PostsService } from "./posts.service";
 
-const s3PublicBaseUrl =
-  "https://media.example.test";
+const s3PublicBaseUrl = "https://media.example.test";
 let previousS3PublicBaseUrl: string | undefined;
 
 describe("PostsService", () => {
@@ -19,9 +18,10 @@ describe("PostsService", () => {
   });
 
   it("lists and reads posts with media through Prisma", async () => {
+    const postId = "00000000-0000-7000-8000-000000000011";
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const row = {
-      id: "post-1",
+      id: postId,
       characterId: "character-1",
       contentType: "reel",
       content: "hello",
@@ -41,23 +41,28 @@ describe("PostsService", () => {
       ],
     };
     const findMany = jest.fn().mockResolvedValue([row]);
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({ id: postId })
+      .mockResolvedValueOnce(row);
     const findUnique = jest
       .fn()
-      .mockResolvedValueOnce({ id: "post-1" })
+      .mockResolvedValueOnce({ id: postId })
       .mockResolvedValueOnce(row);
     const service = new (PostsService as new (prisma: unknown) => PostsService)(
       {
         post: {
           findMany,
+          findFirst,
           findUnique,
         },
       },
     );
 
-    await expect(service.hasPost("post-1")).resolves.toBe(true);
+    await expect(service.hasPost(postId)).resolves.toBe(true);
     await expect(service.listPosts()).resolves.toEqual([
       {
-        id: "post-1",
+        id: postId,
         characterId: "character-1",
         contentType: "reel",
         content: "hello",
@@ -73,10 +78,38 @@ describe("PostsService", () => {
         createdAt: createdAt.toISOString(),
       },
     ]);
-    await expect(service.findPost("post-1")).resolves.toMatchObject({
-      id: "post-1",
+    await expect(service.findPost(postId)).resolves.toMatchObject({
+      id: postId,
       media: [{ mediaType: "image" }],
     });
+    expect(findFirst).toHaveBeenNthCalledWith(1, {
+      where: { id: postId, character: { status: "active" } },
+      select: { id: true },
+    });
+    expect(findFirst).toHaveBeenNthCalledWith(2, {
+      where: { id: postId, character: { status: "active" } },
+      include: expect.any(Object),
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { character: { status: "active" } },
+      }),
+    );
+  });
+
+  it("treats malformed post IDs as missing without querying Prisma", async () => {
+    const findFirst = jest.fn();
+    const findUnique = jest.fn().mockResolvedValue({ id: "unexpected" });
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        post: { findFirst, findUnique },
+      },
+    );
+
+    await expect(service.hasPost("not-a-uuid")).resolves.toBe(false);
+    await expect(service.findPost("not-a-uuid")).resolves.toBeNull();
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(findUnique).not.toHaveBeenCalled();
   });
 
   it("returns a cursor page of posts", async () => {
@@ -115,6 +148,7 @@ describe("PostsService", () => {
     expect(page.nextCursor).toEqual(expect.any(String));
     expect(page.nextCursor).not.toBe("post-new");
     expect(findMany).toHaveBeenCalledWith({
+      where: { character: { status: "active" } },
       include: {
         hashtags: {
           include: { hashtag: true },
@@ -167,7 +201,10 @@ describe("PostsService", () => {
     ]);
     expect(page.nextCursor).toEqual(expect.any(String));
     expect(findMany).toHaveBeenCalledWith({
-      where: { characterId: "character-1" },
+      where: {
+        characterId: "character-1",
+        character: { status: "active" },
+      },
       include: {
         hashtags: {
           include: { hashtag: true },
@@ -184,10 +221,11 @@ describe("PostsService", () => {
   });
 
   it("returns a cursor page of posts with filters", async () => {
+    const characterId = "00000000-0000-7000-8000-000000000021";
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const row = {
       id: "post-filtered",
-      characterId: "character-1",
+      characterId,
       contentType: "reel",
       content: "filtered",
       createdAt,
@@ -206,7 +244,7 @@ describe("PostsService", () => {
     await expect(
       service.listPostsPage({
         limit: 1,
-        characterId: "character-1",
+        characterId,
         hashtag: "film",
         mediaType: "image",
       }),
@@ -214,7 +252,7 @@ describe("PostsService", () => {
       items: [
         {
           id: "post-filtered",
-          characterId: "character-1",
+          characterId,
           contentType: "reel",
           content: "filtered",
           media: [],
@@ -225,7 +263,8 @@ describe("PostsService", () => {
     });
     expect(findMany).toHaveBeenCalledWith({
       where: {
-        characterId: "character-1",
+        characterId,
+        character: { status: "active" },
         hashtags: { some: { hashtag: { name: "film" } } },
         postMedia: {
           some: {
@@ -286,7 +325,10 @@ describe("PostsService", () => {
       ],
     });
     expect(findMany).toHaveBeenCalledWith({
-      where: { contentType: "reel" },
+      where: {
+        character: { status: "active" },
+        contentType: "reel",
+      },
       include: {
         hashtags: {
           include: { hashtag: true },
@@ -319,6 +361,51 @@ describe("PostsService", () => {
         >[0]["contentType"],
       }),
     ).rejects.toThrow("Invalid content type");
+  });
+
+  it("rejects malformed character ID filters before querying Prisma", async () => {
+    const findMany = jest.fn();
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        post: { findMany },
+      },
+    );
+
+    await expect(
+      service.listPostsPage({ limit: 20, characterId: "bad-id" }),
+    ).rejects.toThrow("Invalid character ID");
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it("lists comments and reactions only from users or active characters", async () => {
+    const commentFindMany = jest.fn().mockResolvedValue([]);
+    const reactionFindMany = jest.fn().mockResolvedValue([]);
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postComment: { findMany: commentFindMany },
+        postReaction: { findMany: reactionFindMany },
+      },
+    );
+    const visibleAuthorWhere = {
+      OR: [{ characterId: null }, { character: { status: "active" } }],
+    };
+
+    await expect(
+      service.listPostCommentsPage("post-1", { limit: 20 }),
+    ).resolves.toEqual({ items: [] });
+    await expect(service.listPostReactions("post-1")).resolves.toEqual({
+      items: [],
+      counts: {},
+    });
+    expect(commentFindMany).toHaveBeenCalledWith({
+      where: { postId: "post-1", ...visibleAuthorWhere },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 21,
+    });
+    expect(reactionFindMany).toHaveBeenCalledWith({
+      where: { postId: "post-1", ...visibleAuthorWhere },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
   });
 
   it("creates user comments with trimmed body", async () => {
@@ -375,6 +462,24 @@ describe("PostsService", () => {
         postId: "post-1",
         userId: "user-1",
         body: " ",
+      }),
+    ).rejects.toThrow("Comment body is required");
+  });
+
+  it("rejects missing user comment bodies", async () => {
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postComment: {
+          create: jest.fn(),
+        },
+      },
+    );
+
+    await expect(
+      service.createUserComment({
+        postId: "post-1",
+        userId: "user-1",
+        body: undefined as unknown as string,
       }),
     ).rejects.toThrow("Comment body is required");
   });
@@ -476,6 +581,29 @@ describe("PostsService", () => {
     ).rejects.toThrow("Reaction type is required");
   });
 
+  it("rejects missing user reaction bodies for create and delete", async () => {
+    const service = new (PostsService as new (prisma: unknown) => PostsService)(
+      {
+        postReaction: {
+          deleteMany: jest.fn(),
+          upsert: jest.fn(),
+        },
+      },
+    );
+    const missingReaction = {
+      postId: "post-1",
+      userId: "user-1",
+      reactionType: undefined as unknown as string,
+    };
+
+    await expect(service.createUserReaction(missingReaction)).rejects.toThrow(
+      "Reaction type is required",
+    );
+    await expect(service.deleteUserReaction(missingReaction)).rejects.toThrow(
+      "Reaction type is required",
+    );
+  });
+
   it("searches posts and hashtags by text", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
     const row = {
@@ -508,5 +636,22 @@ describe("PostsService", () => {
       },
     ]);
     await expect(service.searchHashtags("fi", 5)).resolves.toEqual(["film"]);
+    expect(postFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          character: { status: "active" },
+        }),
+      }),
+    );
+    expect(hashtagFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          name: { contains: "fi", mode: "insensitive" },
+          posts: {
+            some: { post: { character: { status: "active" } } },
+          },
+        },
+      }),
+    );
   });
 });

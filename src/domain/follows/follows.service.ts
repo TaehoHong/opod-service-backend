@@ -58,7 +58,7 @@ export class FollowsService {
       update: {},
       create: input,
     });
-    this.recordFollowEvent(input);
+    await this.recordFollowEvent(input).catch(() => undefined);
     return this.toCharacterFollow(follow);
   }
 
@@ -76,7 +76,7 @@ export class FollowsService {
 
   async listFollowedCharacters(userId: string): Promise<CharacterFollow[]> {
     const follows = await this.prisma.userCharacterFollow.findMany({
-      where: { userId },
+      where: { userId, character: { status: "active" } },
       orderBy: { createdAt: "asc" },
     });
     return follows.map((follow) => this.toCharacterFollow(follow));
@@ -84,7 +84,7 @@ export class FollowsService {
 
   async followedCharacterIdsFor(userId: string): Promise<Set<string>> {
     const follows = await this.prisma.userCharacterFollow.findMany({
-      where: { userId },
+      where: { userId, character: { status: "active" } },
       select: { characterId: true },
     });
     return new Set(follows.map((follow) => follow.characterId));
@@ -132,8 +132,11 @@ export class FollowsService {
     };
   }
 
-  private recordFollowEvent(input: { userId: string; characterId: string }) {
-    this.eventsService?.recordEvent({
+  private async recordFollowEvent(input: {
+    userId: string;
+    characterId: string;
+  }) {
+    await this.eventsService?.recordEvent({
       userId: input.userId,
       eventType: "follow_character",
       targetType: "character",

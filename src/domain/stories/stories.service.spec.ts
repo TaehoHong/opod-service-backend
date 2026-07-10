@@ -1,7 +1,6 @@
 import { StoriesService } from "./stories.service";
 
-const s3PublicBaseUrl =
-  "https://media.example.test";
+const s3PublicBaseUrl = "https://media.example.test";
 let previousS3PublicBaseUrl: string | undefined;
 
 describe("StoriesService", () => {
@@ -65,7 +64,10 @@ describe("StoriesService", () => {
     ]);
     expect(page.nextCursor).toEqual(expect.any(String));
     expect(findMany).toHaveBeenCalledWith({
-      where: { expiresAt: { gt: expect.any(Date) } },
+      where: {
+        character: { status: "active" },
+        expiresAt: { gt: expect.any(Date) },
+      },
       include: { media: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 2,
@@ -118,6 +120,7 @@ describe("StoriesService", () => {
     expect(findMany).toHaveBeenCalledWith({
       where: {
         characterId: "character-1",
+        character: { status: "active" },
         expiresAt: { gt: expect.any(Date) },
       },
       include: { media: true },

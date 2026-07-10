@@ -46,8 +46,8 @@ export class FeedService {
     userId: string | undefined,
     input: PageInput,
   ): Promise<Page<Post>> {
-    const posts = await this.getFeed(userId);
     const cursorId = decodeCursor(input.cursor);
+    const posts = await this.getFeed(userId);
     const cursorIndex = cursorId
       ? posts.findIndex((post) => post.id === cursorId)
       : -1;

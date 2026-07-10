@@ -6,9 +6,33 @@
 
 ---
 
+## 공통 인증 응답과 세션 처리
+
+register/login/refresh/password 응답의 `user`는 다음 필드를 사용한다.
+
+| 필드              | 타입    | 설명                           |
+| ----------------- | ------- | ------------------------------ |
+| `id`              | string  | 사용자 ID                      |
+| `displayName`     | string  | 표시 이름                      |
+| `bio`             | string  | 소개. 미설정 시 빈 문자열      |
+| `profileImageUrl` | string? | 프로필 이미지가 있을 때만 포함 |
+| `email`           | string  | 정규화된 이메일                |
+
+로그인은 비밀번호를 검증한 뒤 사용자별 세션 advisory lock을 잡고, 비밀번호
+hash/salt가 최초 검증 시점과 같은지 다시 확인한 후 리프레시 토큰을 생성한다.
+따라서 동시에 비밀번호가 변경되면 이전 비밀번호로 시작한 로그인은 401로
+종료된다.
+
+refresh는 같은 사용자별 lock 안에서 기존 토큰의 미폐기 상태와 만료 시각을
+조건부 갱신하고 후속 토큰을 생성한다. 두 작업은 하나의 트랜잭션이므로 후속
+토큰 생성이 실패하면 기존 토큰 폐기도 롤백되며, 같은 토큰을 동시에 refresh할
+때는 한 요청만 성공한다.
+
+---
+
 ## PATCH /auth/password — 비밀번호 변경
 
-- 상태: **구현 완료 (2026-07-08)** — 유닛 7건 + e2e 4건 통과
+- 상태: **구현 완료 (2026-07-08)**
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §1](../account-support-policy.md)
 - 구현: `src/domain/auth/auth.service.ts` `changePasswordFromAuthorization`,
@@ -41,23 +65,31 @@ Content-Type: application/json
 
 ```json
 {
-  "user": { "id": "user_01", "displayName": "홍태호", "email": "taeho@example.com" },
+  "user": {
+    "id": "user_01",
+    "displayName": "홍태호",
+    "bio": "AI 캐릭터 이야기를 좋아해요",
+    "profileImageUrl": "https://cdn.example.com/users/user_01.png",
+    "email": "taeho@example.com"
+  },
   "accessToken": "eyJhbGciOi...",
   "refreshToken": "refresh_new123"
 }
 ```
 
-### 부수효과 (성공 시, 단일 트랜잭션)
+### 부수효과 (성공 시, 사용자별 lock을 포함한 단일 트랜잭션)
 
-1. 새 salt로 비밀번호 재해시 후 저장.
-2. 해당 유저의 **활성 리프레시 토큰 전부 폐기**(`revokedAt` 기록)
+1. lock 획득 후 최초 검증 시점의 비밀번호 hash/salt가 그대로인지 재확인.
+2. 새 salt로 비밀번호 재해시 후 저장.
+3. 해당 유저의 **활성 리프레시 토큰 전부 폐기**(`revokedAt` 기록)
    — 다른 모든 기기가 로그아웃된다.
-3. `user_events`에 `eventType: "auth.password_changed"` 기록
+4. `user_events`에 `eventType: "auth.password_changed"` 기록
    (`targetType: "user"`, `targetId: <userId>`).
+5. 현재 기기용 새 리프레시 토큰 생성.
 
-트랜잭션 밖에서 새 리프레시 토큰을 발급해 응답한다 — 변경한 현재 기기는
-로그인이 유지된다. 잔여 액세스 토큰(≤15분)은 stateless라 즉시 무효화하지
-않는다 (정책 §1.1).
+동시에 같은 이전 비밀번호로 변경을 요청하면 첫 번째로 lock을 획득한 요청만
+성공한다. 변경한 현재 기기는 새 토큰으로 로그인이 유지된다. 잔여 액세스
+토큰(≤15분)은 stateless라 즉시 무효화하지 않는다 (정책 §1.1).
 
 ### 에러
 

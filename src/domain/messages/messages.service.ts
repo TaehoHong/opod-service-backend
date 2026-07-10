@@ -72,9 +72,9 @@ export class MessagesService {
   async sendMessage(input: {
     userId: string;
     characterId: string;
-    body: string;
+    body: unknown;
   }): Promise<{ conversationId: string; messages: Message[] }> {
-    const body = input.body.trim();
+    const body = typeof input.body === "string" ? input.body.trim() : "";
 
     if (!body) {
       throw new BadRequestException("Message body is required");
@@ -103,7 +103,7 @@ export class MessagesService {
       await this.creditsService.captureReservation({
         reference: reservation.reference,
       });
-      this.recordMessageEvent(input);
+      await this.recordMessageEvent(input).catch(() => undefined);
 
       return {
         conversationId: conversation.id,
@@ -142,6 +142,8 @@ export class MessagesService {
       characterId: string;
     } & PageInput,
   ): Promise<Page<Message>> {
+    const cursorId = decodeCursor(input.cursor);
+
     await this.assertUserAndCharacter(input);
 
     const conversation = await this.findConversation(input);
@@ -150,7 +152,6 @@ export class MessagesService {
       return { items: [] };
     }
 
-    const cursorId = decodeCursor(input.cursor);
     if (
       cursorId &&
       !(await this.prisma.message.findFirst({
@@ -176,15 +177,20 @@ export class MessagesService {
   async listConversationsPage(
     input: { userId: string } & PageInput,
   ): Promise<Page<Omit<ConversationSummary, "id">>> {
+    const cursorId = decodeCursor(input.cursor);
+
     if (!(await this.usersService.hasUser(input.userId))) {
       throw new BadRequestException("User not found");
     }
 
-    const cursorId = decodeCursor(input.cursor);
+    const where = {
+      userId: input.userId,
+      character: { status: "active" as const },
+    };
     if (
       cursorId &&
       !(await this.prisma.messageConversation.findFirst({
-        where: { id: cursorId, userId: input.userId },
+        where: { id: cursorId, ...where },
         select: { id: true },
       }))
     ) {
@@ -192,7 +198,7 @@ export class MessagesService {
     }
 
     const conversations = await this.prisma.messageConversation.findMany({
-      where: { userId: input.userId },
+      where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -325,8 +331,11 @@ export class MessagesService {
     return (this.replyProvider ?? localMessageReplyProvider).createReply(input);
   }
 
-  private recordMessageEvent(input: { userId: string; characterId: string }) {
-    this.eventsService?.recordEvent({
+  private async recordMessageEvent(input: {
+    userId: string;
+    characterId: string;
+  }) {
+    await this.eventsService?.recordEvent({
       userId: input.userId,
       eventType: "message_character",
       targetType: "character",

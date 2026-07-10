@@ -39,6 +39,7 @@ type RefreshTokenRow = {
   tokenHash: string;
   userId: string;
   revokedAt: Date | null;
+  createdAt: Date;
   user?: {
     id: string;
     displayName: string;
@@ -54,6 +55,11 @@ type AuthTokens = {
   refreshToken: string;
 };
 
+type AuthSessionClient = Pick<
+  PrismaService,
+  "user" | "userRefreshToken" | "userEvent" | "$executeRaw"
+>;
+
 type JwtPayload = {
   sub: string;
   iat: number;
@@ -63,6 +69,8 @@ type JwtPayload = {
 const authUserFields = {
   id: true,
   displayName: true,
+  bio: true,
+  profileImageUrl: true,
   email: true,
   passwordHash: true,
   passwordSalt: true,
@@ -88,6 +96,8 @@ const deletedUserDisplayName = "탈퇴한 사용자";
 
 const signupBonusBlockDays = 30;
 
+const defaultRefreshTokenTtlSeconds = 14 * 24 * 60 * 60;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -95,21 +105,22 @@ export class AuthService {
     private readonly creditsService: CreditsService,
   ) {}
 
-  async register(input: {
-    email: string;
-    password: string;
-    displayName: string;
-  }): Promise<AuthTokens> {
-    const email = this.normalizeEmail(input.email);
-    const displayName = this.requiredString(input.displayName, "displayName");
-    this.assertPassword(input.password);
+  async register(
+    input:
+      | { email?: unknown; password?: unknown; displayName?: unknown }
+      | undefined,
+  ): Promise<AuthTokens> {
+    const email = this.normalizeEmail(input?.email);
+    const displayName = this.requiredString(input?.displayName, "displayName");
+    const password = input?.password;
+    this.assertPassword(password);
 
     if (await this.findAuthUserByEmail(email)) {
       throw new ConflictException("Email is already registered");
     }
 
     const passwordSalt = randomBytes(16).toString("base64url");
-    const passwordHash = await this.hashPassword(input.password, passwordSalt);
+    const passwordHash = await this.hashPassword(password, passwordSalt);
 
     const user = await this.createAuthUser({
       email,
@@ -125,41 +136,92 @@ export class AuthService {
     return this.issueTokens(this.toPublicUser(user));
   }
 
-  async login(input: { email: string; password: string }): Promise<AuthTokens> {
-    const email = this.normalizeEmail(input.email);
+  async login(
+    input: { email?: unknown; password?: unknown } | undefined,
+  ): Promise<AuthTokens> {
+    const email = this.normalizeEmail(input?.email);
+    const password = input?.password;
     const user = await this.findAuthUserByEmail(email);
 
-    if (!user || !(await this.passwordMatches(input.password, user))) {
+    if (
+      !user ||
+      typeof password !== "string" ||
+      !(await this.passwordMatches(password, user))
+    ) {
       throw new UnauthorizedException("Invalid email or password");
     }
 
-    return this.issueTokens(this.toPublicUser(user));
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserSessions(tx, user.id);
+      const currentUser = (await tx.user.findUnique({
+        where: { id: user.id },
+        select: authUserFields,
+      })) as AuthUser | null;
+      if (
+        !currentUser?.email ||
+        currentUser.passwordHash !== user.passwordHash ||
+        currentUser.passwordSalt !== user.passwordSalt
+      ) {
+        throw new UnauthorizedException("Invalid email or password");
+      }
+
+      return this.issueTokens(this.toPublicUser(currentUser), tx);
+    });
   }
 
-  async refresh(input: { refreshToken: string }): Promise<AuthTokens> {
-    const row = await this.findRefreshToken(input.refreshToken);
-
-    if (!row || row.revokedAt) {
-      throw new UnauthorizedException("Refresh token is invalid");
-    }
-
-    await this.revokeRefreshToken(input.refreshToken);
-    return this.issueTokens(this.toPublicUserFromRefresh(row));
-  }
-
-  async revokeRefreshToken(refreshToken: string): Promise<{ revoked: true }> {
-    const tokenHash = this.hashToken(refreshToken);
+  async refresh(
+    input: { refreshToken?: unknown } | undefined,
+  ): Promise<AuthTokens> {
+    const refreshToken = this.requiredString(
+      input?.refreshToken,
+      "refreshToken",
+    );
     const row = await this.findRefreshToken(refreshToken);
 
-    if (!row || row.revokedAt) {
+    if (
+      !row ||
+      row.revokedAt ||
+      row.createdAt.getTime() + this.refreshTokenTtlSeconds() * 1000 <=
+        Date.now()
+    ) {
       throw new UnauthorizedException("Refresh token is invalid");
     }
 
-    await this.prisma.userRefreshToken.update({
-      where: { tokenHash },
-      data: { revokedAt: new Date() },
-      select: { tokenHash: true },
+    const user = this.toPublicUserFromRefresh(row);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserSessions(tx, row.userId);
+      const cutoff = new Date(
+        Date.now() - this.refreshTokenTtlSeconds() * 1000,
+      );
+      const result = await tx.userRefreshToken.updateMany({
+        where: {
+          tokenHash: row.tokenHash,
+          userId: row.userId,
+          revokedAt: null,
+          createdAt: { gt: cutoff },
+        },
+        data: { revokedAt: new Date() },
+      });
+      if (result.count !== 1) {
+        throw new UnauthorizedException("Refresh token is invalid");
+      }
+
+      return this.issueTokens(user, tx);
     });
+  }
+
+  async revokeRefreshToken(refreshToken: unknown): Promise<{ revoked: true }> {
+    const tokenHash = this.hashToken(
+      this.requiredString(refreshToken, "refreshToken"),
+    );
+    const result = await this.prisma.userRefreshToken.updateMany({
+      where: { tokenHash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    if (result.count !== 1) {
+      throw new UnauthorizedException("Refresh token is invalid");
+    }
     return { revoked: true };
   }
 
@@ -243,27 +305,41 @@ export class AuthService {
     const passwordSalt = randomBytes(16).toString("base64url");
     const passwordHash = await this.hashPassword(newPassword, passwordSalt);
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserSessions(tx, userId);
+      const currentUser = (await tx.user.findUnique({
+        where: { id: userId },
+        select: authUserFields,
+      })) as AuthUser | null;
+      if (!currentUser?.email) {
+        throw new UnauthorizedException("Access token is invalid");
+      }
+      if (
+        currentUser.passwordHash !== user.passwordHash ||
+        currentUser.passwordSalt !== user.passwordSalt
+      ) {
+        throw new BadRequestException("Current password is incorrect");
+      }
+      await tx.user.update({
         where: { id: userId },
         data: { passwordHash, passwordSalt },
         select: { id: true },
-      }),
-      this.prisma.userRefreshToken.updateMany({
+      });
+      await tx.userRefreshToken.updateMany({
         where: { userId, revokedAt: null },
         data: { revokedAt: new Date() },
-      }),
-      this.prisma.userEvent.create({
+      });
+      await tx.userEvent.create({
         data: {
           userId,
           eventType: "auth.password_changed",
           targetType: "user",
           targetId: userId,
         },
-      }),
-    ]);
+      });
 
-    return this.issueTokens(this.toPublicUser(user));
+      return this.issueTokens(this.toPublicUser(currentUser), tx);
+    });
   }
 
   async deleteAccountFromAuthorization(
@@ -366,11 +442,14 @@ export class AuthService {
     return this.toPublicUser(user);
   }
 
-  private async issueTokens(user: PublicAuthUser): Promise<AuthTokens> {
+  private async issueTokens(
+    user: PublicAuthUser,
+    client: Pick<AuthSessionClient, "userRefreshToken"> = this.prisma,
+  ): Promise<AuthTokens> {
     const refreshToken = randomBytes(32).toString("base64url");
     const tokenHash = this.hashToken(refreshToken);
 
-    await this.prisma.userRefreshToken.create({
+    await client.userRefreshToken.create({
       data: { userId: user.id, tokenHash },
       select: { tokenHash: true, userId: true, revokedAt: true },
     });
@@ -380,6 +459,14 @@ export class AuthService {
       accessToken: this.issueAccessToken(user.id),
       refreshToken,
     };
+  }
+
+  private async lockUserSessions(
+    client: Pick<AuthSessionClient, "$executeRaw">,
+    userId: string,
+  ): Promise<void> {
+    const lockKey = `auth_sessions:${userId}`;
+    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
   }
 
   private async createAuthUser(input: {
@@ -430,6 +517,7 @@ export class AuthService {
         tokenHash: true,
         userId: true,
         revokedAt: true,
+        createdAt: true,
         user: { select: publicUserFields },
       },
     }) as Promise<RefreshTokenRow | null>;
@@ -539,6 +627,21 @@ export class AuthService {
     return secret;
   }
 
+  private refreshTokenTtlSeconds(): number {
+    const configured = process.env.AUTH_REFRESH_TOKEN_TTL_SECONDS?.trim();
+    if (!configured) {
+      return defaultRefreshTokenTtlSeconds;
+    }
+
+    const ttlSeconds = Number(configured);
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) {
+      throw new Error(
+        "AUTH_REFRESH_TOKEN_TTL_SECONDS must be a positive integer",
+      );
+    }
+    return ttlSeconds;
+  }
+
   private optionalWithdrawalReason(value: unknown): string | undefined {
     if (value === undefined || value === null) {
       return undefined;
@@ -596,7 +699,7 @@ export class AuthService {
     return pepper;
   }
 
-  private normalizeEmail(email: string): string {
+  private normalizeEmail(email: unknown): string {
     const normalized = this.requiredString(email, "email").toLowerCase();
     if (!normalized.includes("@")) {
       throw new BadRequestException("Email is invalid");
@@ -604,7 +707,7 @@ export class AuthService {
     return normalized;
   }
 
-  private assertPassword(password: unknown) {
+  private assertPassword(password: unknown): asserts password is string {
     if (
       typeof password !== "string" ||
       password.length < 8 ||

@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { isUuid } from "./uuid";
 
 export type PageInput = {
   cursor?: string;
@@ -35,7 +36,7 @@ export function decodeCursor(cursor?: string): string | undefined {
     const parsed = JSON.parse(
       Buffer.from(cursor, "base64url").toString("utf8"),
     ) as { id?: unknown };
-    if (typeof parsed.id !== "string" || !parsed.id.trim()) {
+    if (typeof parsed.id !== "string" || !isUuid(parsed.id)) {
       throw new Error("missing id");
     }
     return parsed.id;

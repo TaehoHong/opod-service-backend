@@ -33,8 +33,10 @@ describe("auth", () => {
       })
       .expect(201);
 
-    expect(registered.body.user).toMatchObject({
+    expect(registered.body.user).toEqual({
+      id: expect.any(String),
       displayName: "Reader",
+      bio: "",
       email,
     });
     expect(registered.body.accessToken).toEqual(expect.any(String));
@@ -49,12 +51,18 @@ describe("auth", () => {
     const updatedUser = {
       ...registered.body.user,
       displayName: "Updated Reader",
+      bio: "Reader bio",
+      profileImageUrl: "https://cdn.example.com/readers/me.png",
     };
 
     await request(app.getHttpServer())
       .patch("/auth/me")
       .set("Authorization", `Bearer ${registered.body.accessToken}`)
-      .send({ displayName: " Updated Reader " })
+      .send({
+        displayName: " Updated Reader ",
+        bio: " Reader bio ",
+        profileImageUrl: " https://cdn.example.com/readers/me.png ",
+      })
       .expect(200)
       .expect(updatedUser);
 
@@ -82,6 +90,8 @@ describe("auth", () => {
       .send({ refreshToken: registered.body.refreshToken })
       .expect(201);
 
+    expect(refreshed.body.user).toEqual(updatedUser);
+    expect(refreshed.body.accessToken).toEqual(expect.any(String));
     expect(refreshed.body.refreshToken).not.toBe(registered.body.refreshToken);
 
     await request(app.getHttpServer())
@@ -101,6 +111,31 @@ describe("auth", () => {
       .expect(401);
   });
 
+  it("allows only one concurrent refresh-token successor", async () => {
+    const email = `reader-${randomUUID()}@example.com`;
+    const registered = await request(app.getHttpServer())
+      .post("/auth/register")
+      .send({ email, password: "password123", displayName: "Reader" })
+      .expect(201);
+
+    const responses = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        request(app.getHttpServer())
+          .post("/auth/refresh")
+          .send({ refreshToken: registered.body.refreshToken }),
+      ),
+    );
+
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 401,
+    ]);
+    await expect(
+      app.get(PrismaService).userRefreshToken.count({
+        where: { userId: registered.body.user.id, revokedAt: null },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("changes the password, logs out other devices, and keeps the current one", async () => {
     const email = `reader-${randomUUID()}@example.com`;
 
@@ -108,6 +143,15 @@ describe("auth", () => {
       .post("/auth/register")
       .send({ email, password: "password123", displayName: "Reader" })
       .expect(201);
+
+    const profile = await request(app.getHttpServer())
+      .patch("/auth/me")
+      .set("Authorization", `Bearer ${registered.body.accessToken}`)
+      .send({
+        bio: "Reader bio",
+        profileImageUrl: "https://cdn.example.com/readers/password.png",
+      })
+      .expect(200);
 
     const otherDevice = await request(app.getHttpServer())
       .post("/auth/login")
@@ -120,7 +164,7 @@ describe("auth", () => {
       .send({ currentPassword: "password123", newPassword: "password456" })
       .expect(200);
 
-    expect(changed.body.user).toEqual(registered.body.user);
+    expect(changed.body.user).toEqual(profile.body);
     expect(changed.body.accessToken).toEqual(expect.any(String));
     expect(changed.body.refreshToken).toEqual(expect.any(String));
 
@@ -356,6 +400,54 @@ describe("auth", () => {
       .get("/auth/me")
       .set("Authorization", authorization)
       .expect(200);
+  });
+
+  it("rejects malformed register and login bodies without server errors", async () => {
+    await request(app.getHttpServer())
+      .post("/auth/register")
+      .expect(400)
+      .expect({
+        statusCode: 400,
+        message: "email is required",
+        error: "Bad Request",
+      });
+    await request(app.getHttpServer()).post("/auth/login").expect(400).expect({
+      statusCode: 400,
+      message: "email is required",
+      error: "Bad Request",
+    });
+
+    const email = `reader-${randomUUID()}@example.com`;
+    await request(app.getHttpServer())
+      .post("/auth/register")
+      .send({ email, password: "password123", displayName: "Reader" })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post("/auth/login")
+      .send({ email })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post("/auth/login")
+      .send({ email, password: 12345678 })
+      .expect(401);
+  });
+
+  it("rejects missing or empty refresh-token bodies", async () => {
+    const requests = [
+      () => request(app.getHttpServer()).post("/auth/refresh"),
+      () => request(app.getHttpServer()).post("/auth/refresh").send({}),
+      () => request(app.getHttpServer()).delete("/auth/session"),
+      () => request(app.getHttpServer()).delete("/auth/session").send({}),
+    ];
+
+    for (const makeRequest of requests) {
+      await makeRequest().expect(400).expect({
+        statusCode: 400,
+        message: "refreshToken is required",
+        error: "Bad Request",
+      });
+    }
   });
 
   it("rejects invalid credentials and missing bearer tokens", async () => {

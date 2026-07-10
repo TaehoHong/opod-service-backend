@@ -1,8 +1,8 @@
 import { Body, Controller, Headers, HttpCode, Post } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import {
+  ClientEventInput,
   EventsService,
-  UserEventInput,
 } from "../../domain/events/events.service";
 
 @Controller("events")
@@ -16,10 +16,10 @@ export class EventsController {
   @HttpCode(202)
   async recordEvent(
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: UserEventInput,
+    @Body() body: ClientEventInput,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
-    return this.eventsService.recordEvent({ ...body, userId });
+    return this.eventsService.recordClientEvent(userId, body);
   }
 }

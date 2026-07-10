@@ -72,10 +72,8 @@ export class AuthController {
   @Delete("session")
   revokeSession(
     @Body()
-    body: {
-      refreshToken: string;
-    },
+    body: { refreshToken?: unknown } | undefined,
   ) {
-    return this.authService.revokeRefreshToken(body.refreshToken);
+    return this.authService.revokeRefreshToken(body?.refreshToken);
   }
 }

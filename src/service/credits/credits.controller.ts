@@ -31,6 +31,8 @@ export class CreditsController {
     return this.creditsService.createCheckout({ ...body, userId });
   }
 
+  // TODO(payment-provider): Replace the local stub with signature and amount
+  // verification plus atomic, idempotent transitions before production use.
   @Post("payment-webhooks/:provider")
   async handlePaymentWebhook(
     @Param("provider") provider: string,

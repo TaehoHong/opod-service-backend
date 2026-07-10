@@ -6,9 +6,30 @@ import { FeedService } from "./feed.service";
 const media = [{ mediaType: "image" as const, url: "https://cdn.local/a.png" }];
 
 describe("FeedService", () => {
+  it("rejects malformed cursors before loading feed data", async () => {
+    const listPosts = jest.fn();
+    const followedCharacterIdsFor = jest.fn();
+    const hashtagPreferencesFor = jest.fn();
+    const feedService = new FeedService(
+      { listPosts } as unknown as PostsService,
+      { followedCharacterIdsFor } as unknown as FollowsService,
+      { hashtagPreferencesFor } as unknown as EventsService,
+    );
+    const cursor = Buffer.from(JSON.stringify({ id: "bad-id" })).toString(
+      "base64url",
+    );
+
+    await expect(
+      feedService.getFeedPage("human-1", { limit: 20, cursor }),
+    ).rejects.toThrow("Invalid cursor");
+    expect(listPosts).not.toHaveBeenCalled();
+    expect(followedCharacterIdsFor).not.toHaveBeenCalled();
+    expect(hashtagPreferencesFor).not.toHaveBeenCalled();
+  });
+
   it("returns a cursor page from the ranked feed", async () => {
     const highPost: Post = {
-      id: "post-high",
+      id: "019f4970-b34a-7035-ad98-dfea56b29750",
       characterId: "character-1",
       contentType: "feed",
       content: "high",
@@ -17,7 +38,7 @@ describe("FeedService", () => {
       createdAt: "2026-06-30T00:00:00.000Z",
     };
     const lowPost: Post = {
-      id: "post-low",
+      id: "019f4970-b34a-7035-ad98-dfea56b29751",
       characterId: "character-1",
       contentType: "feed",
       content: "low",
@@ -41,7 +62,7 @@ describe("FeedService", () => {
 
     const firstPage = await feedService.getFeedPage("human-1", { limit: 1 });
 
-    expect(firstPage.items.map((post: Post) => post.id)).toEqual(["post-high"]);
+    expect(firstPage.items.map((post: Post) => post.id)).toEqual([highPost.id]);
     expect(firstPage.nextCursor).toEqual(expect.any(String));
 
     const secondPage = await feedService.getFeedPage("human-1", {
@@ -49,7 +70,7 @@ describe("FeedService", () => {
       cursor: firstPage.nextCursor,
     });
 
-    expect(secondPage.items.map((post: Post) => post.id)).toEqual(["post-low"]);
+    expect(secondPage.items.map((post: Post) => post.id)).toEqual([lowPost.id]);
   });
 
   it("returns newest posts for anonymous feed without personalization", async () => {

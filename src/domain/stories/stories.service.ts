@@ -31,6 +31,7 @@ type PrismaStory = Omit<Story, "createdAt" | "expiresAt" | "media"> & {
 
 type StoryWhere = {
   characterId?: string;
+  character: { status: "active" };
   expiresAt: { gt: Date };
 };
 
@@ -39,7 +40,13 @@ export class StoriesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listStoriesPage(input: PageInput): Promise<Page<Story>> {
-    return this.listActiveStoriesPage({ expiresAt: { gt: new Date() } }, input);
+    return this.listActiveStoriesPage(
+      {
+        character: { status: "active" },
+        expiresAt: { gt: new Date() },
+      },
+      input,
+    );
   }
 
   async listCharacterStoriesPage(
@@ -47,7 +54,11 @@ export class StoriesService {
     input: PageInput,
   ): Promise<Page<Story>> {
     return this.listActiveStoriesPage(
-      { characterId, expiresAt: { gt: new Date() } },
+      {
+        characterId,
+        character: { status: "active" },
+        expiresAt: { gt: new Date() },
+      },
       input,
     );
   }

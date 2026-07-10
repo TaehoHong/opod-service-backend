@@ -253,4 +253,29 @@ describe("inquiries", () => {
       .send({ category: "etc", body: "다른 유저 문의" })
       .expect(201);
   });
+
+  it("limits concurrent inquiry submissions to 10", async () => {
+    const human = await registerHuman(app);
+
+    const responses = await Promise.all(
+      Array.from({ length: 11 }, (_, index) =>
+        request(app.getHttpServer())
+          .post("/inquiries")
+          .set(human.authHeaders)
+          .send({ category: "etc", body: `동시 문의 ${index + 1}` }),
+      ),
+    );
+
+    expect(
+      responses.filter((response) => response.status === 201),
+    ).toHaveLength(10);
+    expect(
+      responses.filter((response) => response.status === 429),
+    ).toHaveLength(1);
+    await expect(
+      app.get(PrismaService).inquiry.count({
+        where: { userId: human.user.id },
+      }),
+    ).resolves.toBe(10);
+  });
 });

@@ -232,12 +232,17 @@ function createCreditsFake(seed?: {
           where,
           data,
         }: {
-          where: { reference: string; status: ReservationRow["status"] };
+          where: {
+            id?: string;
+            reference?: string;
+            status: ReservationRow["status"];
+          };
           data: Partial<ReservationRow>;
         }) => {
           const rows = reservations.filter(
             (reservation) =>
-              reservation.reference === where.reference &&
+              (!where.id || reservation.id === where.id) &&
+              (!where.reference || reservation.reference === where.reference) &&
               reservation.status === where.status,
           );
           rows.forEach((row) => Object.assign(row, data));
@@ -286,6 +291,115 @@ function createCreditsFake(seed?: {
     CreditsService as new (prisma: unknown) => CreditsService
   )(prisma);
   return { service, prisma, entries, reservations, checkIns };
+}
+
+type PurchaseStatus = "pending" | "paid" | "failed" | "canceled" | "refunded";
+const paymentPurchaseId = "00000000-0000-4000-8000-000000000001";
+
+function createPaymentHarness(
+  status: PurchaseStatus = "pending",
+  options?: { existingGrant?: boolean; failGrant?: boolean },
+) {
+  const createdAt = new Date("2026-07-02T00:00:00.000Z");
+  const purchase = {
+    id: paymentPurchaseId,
+    userId: "human-1",
+    provider: "local",
+    status,
+    creditAmount: 1050,
+    paidAmount: 9900,
+    currency: "KRW",
+    createdAt,
+    updatedAt: createdAt,
+  };
+  const entries: LedgerRow[] = options?.existingGrant
+    ? [
+        {
+          id: "grant-1",
+          userId: purchase.userId,
+          entryType: "grant",
+          amount: purchase.creditAmount,
+          remainingAmount: purchase.creditAmount,
+          expiresAt: null,
+          reason: "credit purchase paid",
+          externalReference: `credit_purchase:${purchase.id}`,
+          createdAt,
+        },
+      ]
+    : [];
+
+  const creditLedgerEntry = {
+    findFirst: jest.fn(
+      async ({
+        where,
+      }: {
+        where: { entryType?: string; externalReference?: string };
+      }) =>
+        entries.find(
+          (entry) =>
+            (!where.entryType || entry.entryType === where.entryType) &&
+            (!where.externalReference ||
+              entry.externalReference === where.externalReference),
+        ) ?? null,
+    ),
+    create: jest.fn(async ({ data }: { data: Partial<LedgerRow> }) => {
+      if (options?.failGrant) {
+        throw new Error("ledger write failed");
+      }
+      const entry: LedgerRow = {
+        id: `grant-${entries.length + 1}`,
+        userId: purchase.userId,
+        entryType: "grant",
+        amount: 0,
+        remainingAmount: null,
+        expiresAt: null,
+        reason: "",
+        externalReference: null,
+        createdAt,
+        ...data,
+      };
+      entries.push(entry);
+      return entry;
+    }),
+  };
+  const creditPurchase = {
+    findUnique: jest.fn(async () => ({ ...purchase })),
+    update: jest.fn(async ({ data }: { data: { status: PurchaseStatus } }) => {
+      Object.assign(purchase, data);
+      return { ...purchase };
+    }),
+  };
+  const prisma = {
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    $transaction: undefined as unknown,
+    creditLedgerEntry,
+    creditPurchase,
+  };
+  prisma.$transaction = jest.fn(
+    async (run: (tx: typeof prisma) => Promise<unknown>) => {
+      const purchaseSnapshot = { ...purchase };
+      const entriesSnapshot = entries.map((entry) => ({ ...entry }));
+      try {
+        return await run(prisma);
+      } catch (error) {
+        Object.assign(purchase, purchaseSnapshot);
+        entries.splice(0, entries.length, ...entriesSnapshot);
+        throw error;
+      }
+    },
+  );
+
+  const service = new (
+    CreditsService as new (prisma: unknown) => CreditsService
+  )(prisma);
+  return {
+    service,
+    prisma,
+    purchase,
+    entries,
+    creditLedgerEntry,
+    creditPurchase,
+  };
 }
 
 describe("CreditsService", () => {
@@ -418,6 +532,51 @@ describe("CreditsService", () => {
       userId: "human-1",
       balance: 8,
     });
+  });
+
+  it("does not let release overwrite or precede an in-progress capture", async () => {
+    const { service, prisma, entries } = createCreditsFake({
+      entries: [{ amount: 10, remainingAmount: 10, expiresAt: null }],
+    });
+    const reservation = await service.reserveCredits({
+      userId: "human-1",
+      actionType: "chat_reply",
+    });
+
+    let captureReachedBuckets!: () => void;
+    const reachedBuckets = new Promise<void>((resolve) => {
+      captureReachedBuckets = resolve;
+    });
+    let continueCapture!: () => void;
+    const mayContinue = new Promise<void>((resolve) => {
+      continueCapture = resolve;
+    });
+    const originalFindMany =
+      prisma.creditLedgerEntry.findMany.getMockImplementation();
+    if (!originalFindMany) {
+      throw new Error("credit ledger fake is missing findMany");
+    }
+    prisma.creditLedgerEntry.findMany.mockImplementationOnce(async (input) => {
+      captureReachedBuckets();
+      await mayContinue;
+      return originalFindMany(input);
+    });
+
+    const capture = service.captureReservation({
+      reference: reservation.reference,
+    });
+    await reachedBuckets;
+    const release = await service.releaseReservation({
+      reference: reservation.reference,
+    });
+    continueCapture();
+    const captured = await capture;
+
+    expect(release.status).toBe("captured");
+    expect(captured.status).toBe("captured");
+    expect(entries.filter((entry) => entry.entryType === "debit")).toHaveLength(
+      1,
+    );
   });
 
   it("captures a reservation only once", async () => {
@@ -560,82 +719,156 @@ describe("CreditsService", () => {
   });
 
   it("handles paid local webhooks with an idempotent non-expiring grant", async () => {
-    const createdAt = new Date("2026-07-02T00:00:00.000Z");
-    const purchase = {
-      id: "purchase-1",
-      userId: "human-1",
-      provider: "local",
-      status: "pending" as const,
-      creditAmount: 1050,
-      paidAmount: 9900,
-      currency: "KRW",
-      createdAt,
-      updatedAt: createdAt,
-    };
-    const update = jest.fn().mockResolvedValue({ ...purchase, status: "paid" });
-    const ledgerFindFirst = jest
-      .fn()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        id: "grant-1",
-        userId: "human-1",
+    const { service, purchase, entries, creditLedgerEntry } =
+      createPaymentHarness();
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: purchase.id,
+        status: "paid",
+      }),
+    ).resolves.toEqual({ received: true });
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: purchase.id,
+        status: "paid",
+      }),
+    ).resolves.toEqual({ received: true });
+    expect(creditLedgerEntry.create).toHaveBeenCalledTimes(1);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        userId: purchase.userId,
         entryType: "grant",
-        amount: 1050,
-        remainingAmount: 1050,
-        expiresAt: null,
+        amount: purchase.creditAmount,
+        remainingAmount: purchase.creditAmount,
+        expiresAt: undefined,
         reason: "credit purchase paid",
-        externalReference: "credit_purchase:purchase-1",
-        createdAt,
-      });
-    const ledgerCreate = jest.fn().mockResolvedValue({
-      id: "grant-1",
-      userId: "human-1",
-      entryType: "grant",
-      amount: 1050,
-      remainingAmount: 1050,
-      expiresAt: null,
-      reason: "credit purchase paid",
-      externalReference: "credit_purchase:purchase-1",
-      createdAt,
-    });
-    const service = new (
-      CreditsService as new (prisma: unknown) => CreditsService
-    )({
-      creditLedgerEntry: {
-        create: ledgerCreate,
-        findFirst: ledgerFindFirst,
-      },
-      creditPurchase: {
-        findUnique: jest.fn().mockResolvedValue(purchase),
-        update,
-      },
+        externalReference: `credit_purchase:${purchase.id}`,
+      }),
+    ]);
+  });
+
+  it("rolls back a paid transition when its ledger grant fails", async () => {
+    const { service, purchase } = createPaymentHarness("pending", {
+      failGrant: true,
     });
 
     await expect(
       service.handlePaymentWebhook("local", {
-        checkoutId: "purchase-1",
+        checkoutId: purchase.id,
         status: "paid",
       }),
-    ).resolves.toEqual({ received: true });
+    ).rejects.toThrow("ledger write failed");
+    expect(purchase.status).toBe("pending");
+  });
+
+  it.each([
+    ["paid", "failed"],
+    ["failed", "paid"],
+    ["canceled", "paid"],
+    ["pending", "refunded"],
+  ] as const)(
+    "rejects the payment transition %s -> %s",
+    async (currentStatus, nextStatus) => {
+      const { service, purchase, entries } =
+        createPaymentHarness(currentStatus);
+
+      await expect(
+        service.handlePaymentWebhook("local", {
+          checkoutId: purchase.id,
+          status: nextStatus,
+        }),
+      ).rejects.toThrow("Credit purchase status conflict");
+      expect(purchase.status).toBe(currentStatus);
+      expect(entries).toHaveLength(0);
+    },
+  );
+
+  it("treats an exact paid replay as a no-op", async () => {
+    const { service, purchase, entries, creditLedgerEntry, creditPurchase } =
+      createPaymentHarness("paid", { existingGrant: true });
+
     await expect(
       service.handlePaymentWebhook("local", {
-        checkoutId: "purchase-1",
+        checkoutId: purchase.id,
         status: "paid",
       }),
     ).resolves.toEqual({ received: true });
-    expect(ledgerCreate).toHaveBeenCalledTimes(1);
-    expect(ledgerCreate).toHaveBeenCalledWith({
-      data: {
-        userId: "human-1",
-        entryType: "grant",
-        amount: 1050,
-        remainingAmount: 1050,
-        expiresAt: undefined,
-        reason: "credit purchase paid",
-        externalReference: "credit_purchase:purchase-1",
-      },
-    });
+    expect(creditPurchase.update).not.toHaveBeenCalled();
+    expect(creditLedgerEntry.create).not.toHaveBeenCalled();
+    expect(entries).toHaveLength(1);
   });
+
+  it("repairs a missing grant when an already-paid webhook is replayed", async () => {
+    const { service, purchase, entries, creditLedgerEntry, creditPurchase } =
+      createPaymentHarness("paid");
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: purchase.id,
+        status: "paid",
+      }),
+    ).resolves.toEqual({ received: true });
+    expect(creditPurchase.update).not.toHaveBeenCalled();
+    expect(creditLedgerEntry.create).toHaveBeenCalledTimes(1);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        userId: purchase.userId,
+        amount: purchase.creditAmount,
+        reason: "credit purchase paid",
+        externalReference: `credit_purchase:${purchase.id}`,
+      }),
+    ]);
+  });
+
+  it("rejects a paid replay when its existing grant conflicts", async () => {
+    const { service, purchase, entries, creditLedgerEntry, creditPurchase } =
+      createPaymentHarness("paid", { existingGrant: true });
+    entries[0].amount = purchase.creditAmount - 1;
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: purchase.id,
+        status: "paid",
+      }),
+    ).rejects.toThrow("Credit grant reference conflict");
+    expect(creditPurchase.update).not.toHaveBeenCalled();
+    expect(creditLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects refunded webhooks even when the purchase is already refunded", async () => {
+    const { service, purchase, creditPurchase } =
+      createPaymentHarness("refunded");
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: purchase.id,
+        status: "refunded",
+      }),
+    ).rejects.toThrow("Credit purchase status conflict");
+    expect(creditPurchase.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["human-2", 1050],
+    ["human-1", 500],
+  ] as const)(
+    "rejects reusing a grant reference for user %s and amount %s",
+    async (userId, amount) => {
+      const { service } = createPaymentHarness("paid", {
+        existingGrant: true,
+      });
+
+      await expect(
+        service.grantCredits({
+          userId,
+          amount,
+          reason: "credit purchase paid",
+          externalReference: `credit_purchase:${paymentPurchaseId}`,
+        }),
+      ).rejects.toThrow("Credit grant reference conflict");
+    },
+  );
 
   it("returns a cursor page of ledger entries", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
@@ -752,6 +985,54 @@ describe("CreditsService", () => {
         reason: " ",
       }),
     ).rejects.toThrow("Credit ledger reason is required");
+  });
+
+  it("returns a validation error when a ledger reason is missing", async () => {
+    const { service } = createCreditsFake();
+
+    await expect(
+      service.spendCredits({
+        userId: "human-1",
+        amount: 10,
+        reason: undefined as unknown as string,
+      }),
+    ).rejects.toThrow("Credit ledger reason is required");
+  });
+
+  it("returns a validation error when the webhook body is missing", async () => {
+    const { service } = createPaymentHarness();
+
+    await expect(
+      service.handlePaymentWebhook(
+        "local",
+        undefined as unknown as Parameters<
+          CreditsService["handlePaymentWebhook"]
+        >[1],
+      ),
+    ).rejects.toThrow("Payment checkout ID is required");
+  });
+
+  it("returns a validation error when the webhook checkout ID is not a string", async () => {
+    const { service } = createPaymentHarness();
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: 123,
+        status: "paid",
+      } as unknown as Parameters<CreditsService["handlePaymentWebhook"]>[1]),
+    ).rejects.toThrow("Payment checkout ID is required");
+  });
+
+  it("rejects malformed webhook checkout IDs before starting a transaction", async () => {
+    const { service, prisma } = createPaymentHarness();
+
+    await expect(
+      service.handlePaymentWebhook("local", {
+        checkoutId: "bad-id",
+        status: "paid",
+      }),
+    ).rejects.toThrow("Payment checkout ID is invalid");
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("rejects spending beyond the balance with a payment-required error", async () => {

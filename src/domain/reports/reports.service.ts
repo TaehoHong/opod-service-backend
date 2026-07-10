@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
+import { isUuid } from "../database/uuid";
 
 type ReportTargetType = "character" | "post" | "message";
 type ReportStatus = "submitted" | "reviewing" | "resolved" | "rejected";
@@ -37,15 +38,25 @@ export class ReportsService {
 
   async createReport(input: {
     userId: string;
-    targetType: string;
-    targetId: string;
-    reason: string;
-    details?: string;
+    targetType: unknown;
+    targetId: unknown;
+    reason: unknown;
+    details?: unknown;
   }): Promise<ReportReceipt> {
     const targetType = this.parseTargetType(input.targetType);
-    const targetId = input.targetId?.trim();
-    const reason = input.reason?.trim();
-    const details = input.details?.trim() || null;
+    const targetId =
+      typeof input.targetId === "string" ? input.targetId.trim() : "";
+    const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+
+    if (
+      input.details !== undefined &&
+      input.details !== null &&
+      typeof input.details !== "string"
+    ) {
+      throw new BadRequestException("Report details must be a string");
+    }
+    const details =
+      typeof input.details === "string" ? input.details.trim() || null : null;
 
     if (!reason) {
       throw new BadRequestException("Report reason is required");
@@ -74,13 +85,16 @@ export class ReportsService {
     userId: string;
     reportId: string;
   }): Promise<ReportDetail | null> {
+    if (!isUuid(input.reportId)) {
+      return null;
+    }
     const report = await this.prisma.report.findFirst({
       where: { id: input.reportId, reporterUserId: input.userId },
     });
     return report ? this.toDetail(report as PrismaReportDetail) : null;
   }
 
-  private parseTargetType(targetType: string): ReportTargetType {
+  private parseTargetType(targetType: unknown): ReportTargetType {
     if (
       targetType === "character" ||
       targetType === "post" ||
@@ -96,6 +110,9 @@ export class ReportsService {
     targetType: ReportTargetType,
     targetId: string,
   ): Promise<boolean> {
+    if (!isUuid(targetId)) {
+      return false;
+    }
     if (targetType === "character") {
       return (
         (await this.prisma.character.findUnique({
