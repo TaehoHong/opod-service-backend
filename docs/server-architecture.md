@@ -125,6 +125,11 @@ It reads and writes the shared OPOD database, but schema ownership stays in
 
 ### opod-worker
 
+> Amendment (2026-07-12): media generation jobs run inside the `opod-admin`
+> process for now (`WORKER_ENABLED` flag, isolated `WorkerModule`). A separate
+> worker image is deferred until job volume justifies it. See
+> `opod-admin/docs/media-generation-pipeline.md` (decision D1).
+
 One worker runtime handles multiple job types:
 
 - `chat_reply`
