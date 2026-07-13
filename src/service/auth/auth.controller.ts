@@ -9,24 +9,32 @@ import {
 } from "@nestjs/common";
 import { ApiOkResponse } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
-import { AuthUserDto, UpdateAuthUserDto } from "./auth.dto";
+import {
+  AuthUserDto,
+  ChangePasswordDto,
+  DeleteAccountDto,
+  LoginDto,
+  RefreshTokenDto,
+  RegisterDto,
+  UpdateAuthUserDto,
+} from "./auth.dto";
 
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post("register")
-  register(@Body() body: Parameters<AuthService["register"]>[0]) {
+  register(@Body() body: RegisterDto) {
     return this.authService.register(body);
   }
 
   @Post("login")
-  login(@Body() body: Parameters<AuthService["login"]>[0]) {
+  login(@Body() body: LoginDto) {
     return this.authService.login(body);
   }
 
   @Post("refresh")
-  refresh(@Body() body: Parameters<AuthService["refresh"]>[0]) {
+  refresh(@Body() body: RefreshTokenDto) {
     return this.authService.refresh(body);
   }
 
@@ -51,8 +59,7 @@ export class AuthController {
   @Delete("me")
   deleteMe(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<AuthService["deleteAccountFromAuthorization"]>[1],
+    @Body() body: DeleteAccountDto,
   ) {
     return this.authService.deleteAccountFromAuthorization(authorization, body);
   }
@@ -60,8 +67,7 @@ export class AuthController {
   @Patch("password")
   changePassword(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<AuthService["changePasswordFromAuthorization"]>[1],
+    @Body() body: ChangePasswordDto,
   ) {
     return this.authService.changePasswordFromAuthorization(
       authorization,
@@ -70,10 +76,7 @@ export class AuthController {
   }
 
   @Delete("session")
-  revokeSession(
-    @Body()
-    body: { refreshToken?: unknown } | undefined,
-  ) {
+  revokeSession(@Body() body: RefreshTokenDto) {
     return this.authService.revokeRefreshToken(body?.refreshToken);
   }
 }

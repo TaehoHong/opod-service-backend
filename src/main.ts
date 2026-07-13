@@ -4,6 +4,8 @@ import { ServiceModule } from "./service/service.module";
 import { setupServiceSwagger } from "./service/swagger";
 
 async function bootstrap() {
+  // Request validation runs through the APP_PIPE provider in ServiceModule so
+  // module-built test apps exercise the same pipe.
   const app = await NestFactory.create(AppModule);
   app.enableCors({
     origin: [

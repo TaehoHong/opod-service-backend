@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Headers, Post } from "@nestjs/common";
 import { AuthService } from "../../domain/auth/auth.service";
 import { FollowsService } from "../../domain/follows/follows.service";
+import { FollowCharacterDto } from "./follow.dto";
 
 @Controller("follows")
 export class FollowsController {
@@ -12,8 +13,7 @@ export class FollowsController {
   @Post()
   async followCharacter(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<FollowsService["followCharacter"]>[0],
+    @Body() body: FollowCharacterDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
@@ -32,8 +32,7 @@ export class FollowsController {
   @Delete()
   async unfollowCharacter(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<FollowsService["unfollowCharacter"]>[0],
+    @Body() body: FollowCharacterDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);

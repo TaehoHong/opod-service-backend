@@ -11,7 +11,13 @@ import { ApiCreatedResponse, ApiOkResponse, ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { CreditsService } from "../../domain/credits/credits.service";
 import { parsePageQuery } from "../../domain/database/page";
-import { CreditCheckInDto, CreditEntryPageDto } from "./credit.dto";
+import {
+  CreateCheckoutDto,
+  CreditCheckInDto,
+  CreditEntryPageDto,
+  PaymentWebhookDto,
+  SpendCreditsDto,
+} from "./credit.dto";
 
 @Controller("credits")
 export class CreditsController {
@@ -23,8 +29,7 @@ export class CreditsController {
   @Post("checkout")
   async createCheckout(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Omit<Parameters<CreditsService["createCheckout"]>[0], "userId">,
+    @Body() body: CreateCheckoutDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
@@ -36,7 +41,7 @@ export class CreditsController {
   @Post("payment-webhooks/:provider")
   async handlePaymentWebhook(
     @Param("provider") provider: string,
-    @Body() body: Parameters<CreditsService["handlePaymentWebhook"]>[1],
+    @Body() body: PaymentWebhookDto,
   ) {
     return this.creditsService.handlePaymentWebhook(provider, body);
   }
@@ -44,8 +49,7 @@ export class CreditsController {
   @Post("debits")
   async spendCredits(
     @Headers("authorization") authorization: string | undefined,
-    @Body()
-    body: Parameters<CreditsService["spendCredits"]>[0],
+    @Body() body: SpendCreditsDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);

@@ -13,6 +13,7 @@ import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { InquiriesService } from "../../domain/inquiries/inquiries.service";
 import { parsePageQuery } from "../../domain/database/page";
+import { CreateInquiryDto } from "./inquiry.dto";
 
 @Controller("inquiries")
 export class InquiriesController {
@@ -24,7 +25,7 @@ export class InquiriesController {
   @Post()
   async createInquiry(
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: { category?: unknown; body?: unknown } | undefined,
+    @Body() body: CreateInquiryDto,
   ) {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);

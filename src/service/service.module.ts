@@ -1,5 +1,5 @@
-import { Module } from "@nestjs/common";
-import { APP_INTERCEPTOR } from "@nestjs/core";
+import { Module, ValidationPipe } from "@nestjs/common";
+import { APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 import { ServiceAuthModule } from "./auth/auth.module";
 import { ServiceCharactersModule } from "./characters/characters.module";
 import { ServiceCreditsModule } from "./credits/credits.module";
@@ -39,6 +39,10 @@ import { ServiceStoriesModule } from "./stories/stories.module";
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: RequestLoggingInterceptor },
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({ whitelist: true, transform: true }),
+    },
   ],
 })
 export class ServiceModule {}

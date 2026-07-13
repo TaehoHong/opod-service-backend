@@ -80,7 +80,7 @@ export class PostsController {
   async createPostComment(
     @Param("id") postId: string,
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: CreatePostCommentDto | undefined,
+    @Body() body: CreatePostCommentDto,
   ) {
     if (!(await this.postsService.hasPost(postId))) {
       throw new NotFoundException("Post not found");
@@ -108,7 +108,7 @@ export class PostsController {
   async createPostReaction(
     @Param("id") postId: string,
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: PostReactionRequestDto | undefined,
+    @Body() body: PostReactionRequestDto,
   ) {
     if (!(await this.postsService.hasPost(postId))) {
       throw new NotFoundException("Post not found");
@@ -127,7 +127,7 @@ export class PostsController {
   async deletePostReaction(
     @Param("id") postId: string,
     @Headers("authorization") authorization: string | undefined,
-    @Body() body: PostReactionRequestDto | undefined,
+    @Body() body: PostReactionRequestDto,
   ) {
     if (!(await this.postsService.hasPost(postId))) {
       throw new NotFoundException("Post not found");

@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import { IsOptional, IsString } from "class-validator";
 
 class PostMediaDto {
   @ApiProperty({ enum: ["image", "video"] })
@@ -49,7 +50,11 @@ export class PostPageDto {
 }
 
 export class CreatePostCommentDto {
+  // Optional at the validation layer so a missing body still reaches
+  // PostsService.createUserComment, which returns its own error message.
   @ApiProperty()
+  @IsOptional()
+  @IsString()
   body!: string;
 }
 
@@ -82,7 +87,11 @@ export class PostCommentPageDto {
 }
 
 export class PostReactionRequestDto {
+  // Optional at the validation layer so a missing body still reaches
+  // PostsService.requiredReactionType, which returns its own error message.
   @ApiProperty()
+  @IsOptional()
+  @IsString()
   reactionType!: string;
 }
 
