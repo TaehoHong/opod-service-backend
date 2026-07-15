@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { publicMediaUrl } from "../media/media-url";
 import { PrismaService } from "../database/prisma.service";
@@ -23,11 +24,7 @@ export type Story = {
   expiresAt: string;
 };
 
-type PrismaStory = Omit<Story, "createdAt" | "expiresAt" | "media"> & {
-  createdAt: Date;
-  expiresAt: Date;
-  media: StoryMedia;
-};
+type PrismaStory = Prisma.StoryGetPayload<{ include: { media: true } }>;
 
 type StoryWhere = {
   characterId?: string;

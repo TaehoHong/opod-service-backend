@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
 import { isUuid } from "../database/uuid";
@@ -19,10 +20,8 @@ type NotificationReadReceipt = {
   readAt: string;
 };
 
-type PrismaNotification = Omit<Notification, "readAt" | "createdAt"> & {
-  readAt: Date | null;
-  createdAt: Date;
-};
+type PrismaNotification =
+  Prisma.NotificationGetPayload<Prisma.NotificationDefaultArgs>;
 
 @Injectable()
 export class NotificationsService {

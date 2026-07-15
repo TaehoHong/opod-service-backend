@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  Inject,
-  Injectable,
-  Optional,
-} from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { CharactersService } from "../characters/characters.service";
 import { CreditsService } from "../credits/credits.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
@@ -11,7 +7,6 @@ import { PrismaService } from "../database/prisma.service";
 import { EventsService } from "../events/events.service";
 import { UsersService } from "../users/users.service";
 import {
-  localMessageReplyProvider,
   MESSAGE_REPLY_PROVIDER,
   MessageReplyProvider,
 } from "./message-reply.provider";
@@ -30,9 +25,7 @@ type Message = {
   createdAt: string;
 };
 
-type PrismaMessage = Omit<Message, "createdAt"> & {
-  createdAt: Date;
-};
+type PrismaMessage = Prisma.MessageGetPayload<Prisma.MessageDefaultArgs>;
 
 type ConversationSummary = {
   id: string;
@@ -61,12 +54,9 @@ export class MessagesService {
     private readonly charactersService: CharactersService,
     private readonly prisma: PrismaService,
     private readonly creditsService: CreditsService,
-    @Optional()
-    @Inject(EventsService)
-    private readonly eventsService?: EventsService,
-    @Optional()
+    private readonly eventsService: EventsService,
     @Inject(MESSAGE_REPLY_PROVIDER)
-    private readonly replyProvider?: MessageReplyProvider,
+    private readonly replyProvider: MessageReplyProvider,
   ) {}
 
   async sendMessage(input: {
@@ -328,14 +318,14 @@ export class MessagesService {
     characterId: string;
     messageBody: string;
   }) {
-    return (this.replyProvider ?? localMessageReplyProvider).createReply(input);
+    return this.replyProvider.createReply(input);
   }
 
   private async recordMessageEvent(input: {
     userId: string;
     characterId: string;
   }) {
-    await this.eventsService?.recordEvent({
+    await this.eventsService.recordEvent({
       userId: input.userId,
       eventType: "message_character",
       targetType: "character",

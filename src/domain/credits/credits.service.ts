@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
@@ -45,15 +46,8 @@ type CreditEntry = {
   createdAt: string;
 };
 
-type PrismaCreditEntry = Omit<
-  CreditEntry,
-  "createdAt" | "externalReference" | "remainingAmount" | "expiresAt"
-> & {
-  remainingAmount: number | null;
-  expiresAt: Date | null;
-  externalReference: string | null;
-  createdAt: Date;
-};
+type PrismaCreditEntry =
+  Prisma.CreditLedgerEntryGetPayload<Prisma.CreditLedgerEntryDefaultArgs>;
 
 type CreditPurchase = {
   id: string;
@@ -65,10 +59,8 @@ type CreditPurchase = {
   createdAt: string;
 };
 
-type PrismaCreditPurchase = Omit<CreditPurchase, "createdAt"> & {
-  userId: string;
-  createdAt: Date;
-};
+type PrismaCreditPurchase =
+  Prisma.CreditPurchaseGetPayload<Prisma.CreditPurchaseDefaultArgs>;
 
 type CreditReservation = {
   id: string;
@@ -81,13 +73,8 @@ type CreditReservation = {
   createdAt: string;
 };
 
-type PrismaCreditReservation = Omit<
-  CreditReservation,
-  "expiresAt" | "createdAt"
-> & {
-  expiresAt: Date;
-  createdAt: Date;
-};
+type PrismaCreditReservation =
+  Prisma.CreditReservationGetPayload<Prisma.CreditReservationDefaultArgs>;
 
 type CheckInResult = {
   checkInDate: string;

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { isUuid } from "../database/uuid";
 
@@ -11,9 +12,7 @@ type ReportReceipt = {
   createdAt: string;
 };
 
-type PrismaReport = Omit<ReportReceipt, "createdAt"> & {
-  createdAt: Date;
-};
+type PrismaReport = Prisma.ReportGetPayload<Prisma.ReportDefaultArgs>;
 
 type ReportDetail = {
   id: string;
@@ -27,10 +26,7 @@ type ReportDetail = {
   updatedAt: string;
 };
 
-type PrismaReportDetail = Omit<ReportDetail, "createdAt" | "updatedAt"> & {
-  createdAt: Date;
-  updatedAt: Date;
-};
+type PrismaReportDetail = Prisma.ReportGetPayload<Prisma.ReportDefaultArgs>;
 
 @Injectable()
 export class ReportsService {

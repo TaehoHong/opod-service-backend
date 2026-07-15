@@ -34,6 +34,15 @@ function createCreditsStub() {
   };
 }
 
+function createReplyStub() {
+  return {
+    createReply: jest.fn(
+      async (input: { messageBody: string }) =>
+        `AI reply to: ${input.messageBody}`,
+    ),
+  };
+}
+
 describe("MessagesService", () => {
   it("stores the reply and captures the reserved credits", async () => {
     const createdAt = new Date("2026-06-30T00:00:00.000Z");
@@ -71,7 +80,7 @@ describe("MessagesService", () => {
         message: { create },
       },
       credits,
-      undefined,
+      { recordEvent: jest.fn().mockResolvedValue(undefined) },
       replyProvider,
     );
 
@@ -126,7 +135,7 @@ describe("MessagesService", () => {
         message: { create },
       },
       credits,
-      undefined,
+      { recordEvent: jest.fn().mockResolvedValue(undefined) },
       { createReply: jest.fn().mockRejectedValue(new Error("provider down")) },
     );
 
@@ -198,6 +207,8 @@ describe("MessagesService", () => {
       { hasCharacter: jest.fn().mockResolvedValue(true) },
       { messageConversation: { upsert }, message: { create } },
       createCreditsStub(),
+      { recordEvent: jest.fn().mockResolvedValue(undefined) },
+      createReplyStub(),
     );
 
     await expect(
@@ -592,6 +603,7 @@ describe("MessagesService", () => {
       },
       createCreditsStub(),
       eventsService,
+      createReplyStub(),
     );
 
     await service.sendMessage({
@@ -646,6 +658,7 @@ describe("MessagesService", () => {
       },
       createCreditsStub(),
       { recordEvent: jest.fn().mockReturnValue(eventStored) },
+      createReplyStub(),
     );
     let completed = false;
 
@@ -700,6 +713,7 @@ describe("MessagesService", () => {
       },
       credits,
       { recordEvent: jest.fn().mockRejectedValue(new Error("event down")) },
+      createReplyStub(),
     );
 
     await expect(

@@ -4,6 +4,7 @@ import {
   Injectable,
   Optional,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { CharactersService } from "../characters/characters.service";
 import { PrismaService } from "../database/prisma.service";
 import { EventsService } from "../events/events.service";
@@ -27,9 +28,8 @@ type CharacterRelationship = {
   followedAt?: string;
 };
 
-type PrismaCharacterFollow = Omit<CharacterFollow, "createdAt"> & {
-  createdAt: Date;
-};
+type PrismaCharacterFollow =
+  Prisma.UserCharacterFollowGetPayload<Prisma.UserCharacterFollowDefaultArgs>;
 
 @Injectable()
 export class FollowsService {
