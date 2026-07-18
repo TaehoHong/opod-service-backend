@@ -1,7 +1,7 @@
 import { createMessageReplyProvider } from "./message-reply.provider";
 
 describe("message reply provider", () => {
-  it("calls a configured OpenAI-compatible chat completions endpoint", async () => {
+  it("calls the configured OPOD agent endpoint", async () => {
     const fetchReply = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -11,11 +11,7 @@ describe("message reply provider", () => {
         }),
     });
     const provider = createMessageReplyProvider(
-      {
-        LLM_API_URL: "https://llm.local/v1/chat/completions",
-        LLM_API_KEY: "secret-token",
-        LLM_MODEL: "chat-mini",
-      },
+      { OPOD_AGENT_URL: "https://agent.local/v1/chat/completions" },
       fetchReply,
     );
 
@@ -23,27 +19,43 @@ describe("message reply provider", () => {
       provider.createReply({
         userId: "human-1",
         characterId: "ai-1",
-        messageBody: "hello",
+        conversationId: "conversation-1",
+        messages: [
+          { role: "user", content: "previous question" },
+          { role: "assistant", content: "previous answer" },
+          { role: "user", content: "hello" },
+        ],
+        turnId: "message-human",
       }),
     ).resolves.toBe("provider says hi");
 
     expect(fetchReply).toHaveBeenCalledWith(
-      "https://llm.local/v1/chat/completions",
+      "https://agent.local/v1/chat/completions",
       expect.objectContaining({
         method: "POST",
         headers: {
-          authorization: "Bearer secret-token",
           "content-type": "application/json",
+          "x-opod-character-id": "ai-1",
+          "x-opod-history-offset": "0",
+          "x-opod-session-id": "conversation-1",
+          "x-opod-turn-id": "message-human",
+          "x-opod-user-id": "human-1",
         },
       }),
     );
     const requestBody = JSON.parse(fetchReply.mock.calls[0][1].body);
-    expect(requestBody).toMatchObject({
-      model: "chat-mini",
+    expect(requestBody).toEqual({
       messages: [
-        expect.objectContaining({ role: "system" }),
+        { role: "user", content: "previous question" },
+        { role: "assistant", content: "previous answer" },
         { role: "user", content: "hello" },
       ],
     });
+  });
+
+  it("requires an OPOD agent URL", () => {
+    expect(() => createMessageReplyProvider({})).toThrow(
+      "OPOD_AGENT_URL is required",
+    );
   });
 });

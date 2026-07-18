@@ -5,7 +5,6 @@ import { CreditsService } from "../credits/credits.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
 import { EventsService } from "../events/events.service";
-import { UsersService } from "../users/users.service";
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyProvider,
@@ -50,7 +49,6 @@ type PrismaConversationSummary = {
 @Injectable()
 export class MessagesService {
   constructor(
-    private readonly usersService: UsersService,
     private readonly charactersService: CharactersService,
     private readonly prisma: PrismaService,
     private readonly creditsService: CreditsService,
@@ -70,7 +68,7 @@ export class MessagesService {
       throw new BadRequestException("Message body is required");
     }
 
-    await this.assertUserAndCharacter(input);
+    await this.assertCharacter(input.characterId);
 
     // Reserve before any write so an insufficient balance leaves no trace.
     const reservation = await this.creditsService.reserveCredits({
@@ -81,19 +79,35 @@ export class MessagesService {
     try {
       const conversation = await this.findOrCreateConversation(input);
       const humanMessage = await this.addMessage(conversation.id, "user", body);
+      const history = await this.prisma.message.findMany({
+        where: { conversationId: conversation.id },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
       const reply = await this.addMessage(
         conversation.id,
         "character",
-        await this.createReply({
+        await this.replyProvider.createReply({
           userId: input.userId,
           characterId: input.characterId,
-          messageBody: body,
+          conversationId: conversation.id,
+          messages: history.map((message) => ({
+            role: message.senderType === "user" ? "user" : "assistant",
+            content: message.body,
+          })),
+          turnId: humanMessage.id,
         }),
       );
       await this.creditsService.captureReservation({
         reference: reservation.reference,
       });
-      await this.recordMessageEvent(input).catch(() => undefined);
+      void this.eventsService
+        .recordEvent({
+          userId: input.userId,
+          eventType: "message_character",
+          targetType: "character",
+          targetId: input.characterId,
+        })
+        .catch(() => undefined);
 
       return {
         conversationId: conversation.id,
@@ -107,25 +121,6 @@ export class MessagesService {
     }
   }
 
-  async getMessages(input: {
-    userId: string;
-    characterId: string;
-  }): Promise<Message[]> {
-    await this.assertUserAndCharacter(input);
-
-    const conversation = await this.findConversation(input);
-
-    if (!conversation) {
-      return [];
-    }
-
-    const messages = await this.prisma.message.findMany({
-      where: { conversationId: conversation.id },
-      orderBy: { createdAt: "asc" },
-    });
-    return messages.map((message) => this.toMessage(message as PrismaMessage));
-  }
-
   async getMessagesPage(
     input: {
       userId: string;
@@ -134,7 +129,7 @@ export class MessagesService {
   ): Promise<Page<Message>> {
     const cursorId = decodeCursor(input.cursor);
 
-    await this.assertUserAndCharacter(input);
+    await this.assertCharacter(input.characterId);
 
     const conversation = await this.findConversation(input);
 
@@ -168,10 +163,6 @@ export class MessagesService {
     input: { userId: string } & PageInput,
   ): Promise<Page<Omit<ConversationSummary, "id">>> {
     const cursorId = decodeCursor(input.cursor);
-
-    if (!(await this.usersService.hasUser(input.userId))) {
-      throw new BadRequestException("User not found");
-    }
 
     const where = {
       userId: input.userId,
@@ -228,14 +219,8 @@ export class MessagesService {
     };
   }
 
-  private async assertUserAndCharacter(input: {
-    userId: string;
-    characterId: string;
-  }) {
-    if (!(await this.usersService.hasUser(input.userId))) {
-      throw new BadRequestException("User not found");
-    }
-    if (!(await this.charactersService.hasCharacter(input.characterId))) {
+  private async assertCharacter(characterId: string) {
+    if (!(await this.charactersService.hasCharacter(characterId))) {
       throw new BadRequestException("Character not found");
     }
   }
@@ -311,25 +296,5 @@ export class MessagesService {
       // ponytail: no read-receipt table yet; replace with real unread count when reads exist.
       unreadCount: 0,
     };
-  }
-
-  private createReply(input: {
-    userId: string;
-    characterId: string;
-    messageBody: string;
-  }) {
-    return this.replyProvider.createReply(input);
-  }
-
-  private async recordMessageEvent(input: {
-    userId: string;
-    characterId: string;
-  }) {
-    await this.eventsService.recordEvent({
-      userId: input.userId,
-      eventType: "message_character",
-      targetType: "character",
-      targetId: input.characterId,
-    });
   }
 }

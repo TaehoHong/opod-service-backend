@@ -3,7 +3,9 @@ import { ServiceUnavailableException } from "@nestjs/common";
 export type MessageReplyInput = {
   userId: string;
   characterId: string;
-  messageBody: string;
+  conversationId: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  turnId: string;
 };
 
 export type MessageReplyProvider = {
@@ -12,24 +14,16 @@ export type MessageReplyProvider = {
 
 export const MESSAGE_REPLY_PROVIDER = Symbol("MESSAGE_REPLY_PROVIDER");
 
-export const localMessageReplyProvider: MessageReplyProvider = {
-  createReply(input) {
-    return Promise.resolve(`AI reply to: ${input.messageBody}`);
-  },
-};
-
 type MessageReplyEnv = Record<string, string | undefined>;
 
 export function createMessageReplyProvider(
   env: MessageReplyEnv = process.env,
   fetchReply: typeof fetch = fetch,
 ): MessageReplyProvider {
-  const apiUrl = env.LLM_API_URL?.trim();
-  const apiKey = env.LLM_API_KEY?.trim();
-  const model = env.LLM_MODEL?.trim();
+  const apiUrl = env.OPOD_AGENT_URL?.trim();
 
-  if (!apiUrl || !apiKey || !model) {
-    return localMessageReplyProvider;
+  if (!apiUrl) {
+    throw new Error("OPOD_AGENT_URL is required");
   }
 
   return {
@@ -38,19 +32,15 @@ export function createMessageReplyProvider(
         const response = await fetchReply(apiUrl, {
           method: "POST",
           headers: {
-            authorization: `Bearer ${apiKey}`,
             "content-type": "application/json",
+            "x-opod-character-id": input.characterId,
+            "x-opod-history-offset": "0",
+            "x-opod-session-id": input.conversationId,
+            "x-opod-turn-id": input.turnId,
+            "x-opod-user-id": input.userId,
           },
           body: JSON.stringify({
-            model,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a character replying in a 1:1 SNS message. Reply concisely.",
-              },
-              { role: "user", content: input.messageBody },
-            ],
+            messages: input.messages,
           }),
           signal: AbortSignal.timeout(15_000),
         });
