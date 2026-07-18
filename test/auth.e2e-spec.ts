@@ -312,7 +312,7 @@ describe("auth", () => {
       prisma.creditLedgerEntry.count({ where: { userId } }),
     ).resolves.toBeGreaterThan(0);
 
-    // 탈퇴 사유가 기록되고 이메일 원문은 저장되지 않는다.
+    // 탈퇴 사유가 기록된다.
     const withdrawal = await prisma.userWithdrawal.findFirst({
       where: { userId },
     });
@@ -320,7 +320,6 @@ describe("auth", () => {
       reasonCategory: "low_usage",
       reasonText: "자주 사용하지 않아요",
     });
-    expect(withdrawal?.emailHash).not.toContain(email);
 
     // 잔여 액세스 토큰·리프레시 토큰·이메일 로그인 전부 차단.
     await request(app.getHttpServer())
@@ -337,7 +336,7 @@ describe("auth", () => {
       .expect(401);
   });
 
-  it("skips the signup bonus when re-registering within 30 days", async () => {
+  it("grants the signup bonus when re-registering after withdrawal", async () => {
     const email = `reader-${randomUUID()}@example.com`;
 
     const first = await request(app.getHttpServer())
@@ -367,7 +366,7 @@ describe("auth", () => {
       .get("/credits/balance")
       .set("Authorization", `Bearer ${second.body.accessToken}`)
       .expect(200)
-      .expect({ userId: second.body.user.id, balance: 0 });
+      .expect({ userId: second.body.user.id, balance: 100 });
   });
 
   it("rejects invalid account deletion requests", async () => {

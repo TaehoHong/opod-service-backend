@@ -122,8 +122,6 @@ Content-Type: application/json
 - 정책: [account-support-policy.md §2](../account-support-policy.md)
 - 구현: `src/domain/auth/auth.service.ts` `deleteAccountFromAuthorization`,
   스키마 `User.updatedAt/deletedAt` + `UserWithdrawal`, Swagger `/docs` 등록됨
-- 구현 노트: 이메일 해시는 익명화 트랜잭션 **전에** 계산한다
-  (트랜잭션 배열 평가 순서에 의존하지 않도록)
 
 ### 요청
 
@@ -164,8 +162,7 @@ Content-Type: application/json
 4. `notifications` 삭제.
 5. `user_character_follows` 삭제.
 6. `user_hashtag_preferences` 삭제.
-7. `user_withdrawals` 생성: `emailHash = HMAC-SHA256(email, AUTH_EMAIL_HASH_PEPPER)`
-   + 탈퇴 사유. 이메일 원문은 저장하지 않는다.
+7. `user_withdrawals`에 탈퇴 사유를 기록한다. 이메일은 저장하지 않는다.
 
 크레딧 원장·구매·예약·출석, 신고, `user_events`는 익명 상태로 유지 (보존 의무).
 
@@ -174,9 +171,7 @@ Content-Type: application/json
 - 모든 인증 검사가 `deletedAt` 있는 계정을 거부 → 잔여 액세스 토큰(≤15분)도
   즉시 401.
 - 이메일이 null이므로 기존 이메일 로그인 자체가 불가.
-- **동일 이메일 즉시 재가입 가능.** 단 탈퇴 후 30일 내 재가입이면
-  **가입 보너스(100크레딧) 미지급** — `user_withdrawals.emailHash` 대조.
-  30일 경과 후 재가입은 정상 지급.
+- **동일 이메일 즉시 재가입 가능.** 가입 보너스도 정상 지급한다.
 
 ### 에러
 
@@ -187,16 +182,11 @@ Content-Type: application/json
 | 400 | `reasonText` 500자 초과 | `reasonText must be at most 500 characters` |
 | 401 | 액세스 토큰 없음/무효/만료/이미 탈퇴 | 기존 auth 에러와 동일 |
 
-### 환경 변수
-
-- `AUTH_EMAIL_HASH_PEPPER` (필수, 32바이트 이상 권장) — 탈퇴 이메일 HMAC 키.
-  `.env`, `.env.production.example`, e2e env에 추가.
-
 ### 스키마 변경
 
 - `User`: `updatedAt`(now 기본값), `deletedAt?` 추가.
 - 신규 `UserWithdrawal`(`user_withdrawals`): `id`, `userId`(평문 uuid, FK 없음),
-  `emailHash`(index), `reasonCategory?`, `reasonText?`, `createdAt`.
+  `reasonCategory?`, `reasonText?`, `createdAt`.
 
 ### 검증 시나리오 (테스트 계약)
 
@@ -205,6 +195,5 @@ Content-Type: application/json
 - 탈퇴 직후: 같은 액세스 토큰으로 `GET /auth/me` → 401, 리프레시 → 401,
   이전 이메일+비번 로그인 → 401.
 - 대화·알림·팔로우·해시태그 선호 삭제 확인, 크레딧 원장은 잔존 확인.
-- 동일 이메일 재가입 → 201 성공, 크레딧 잔액 0 (보너스 차단).
-- 30일 경과 시나리오(유닛) → 보너스 정상 지급.
+- 동일 이메일 재가입 → 201 성공, 크레딧 잔액 100.
 - 잘못된 비밀번호 → 400. 잘못된 reasonCategory → 400.

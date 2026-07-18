@@ -42,7 +42,6 @@ function createAuthHarness(
   const withdrawals: Array<{
     id: string;
     userId: string;
-    emailHash: string;
     reasonCategory: string | null;
     reasonText: string | null;
     createdAt: Date;
@@ -189,15 +188,6 @@ function createAuthHarness(
         withdrawals.push(row);
         return row;
       }),
-      findFirst: jest.fn(async ({ where }) => {
-        return (
-          withdrawals.find(
-            (row) =>
-              row.emailHash === where.emailHash &&
-              row.createdAt >= where.createdAt.gte,
-          ) ?? null
-        );
-      }),
     },
     messageConversation: {
       deleteMany: jest.fn(async () => ({ count: 0 })),
@@ -312,12 +302,10 @@ function createAuthService() {
 describe("AuthService", () => {
   beforeEach(() => {
     process.env.AUTH_JWT_SECRET = "test-auth-secret";
-    process.env.AUTH_EMAIL_HASH_PEPPER = "test-email-hash-pepper";
   });
 
   afterEach(() => {
     delete process.env.AUTH_JWT_SECRET;
-    delete process.env.AUTH_EMAIL_HASH_PEPPER;
     delete process.env.AUTH_REFRESH_TOKEN_TTL_SECONDS;
   });
 
@@ -924,8 +912,8 @@ describe("AuthService", () => {
     ).resolves.toMatchObject({ user: registered.user });
   });
 
-  it("blocks the signup bonus for 30 days after withdrawal", async () => {
-    const { service, grantSignupBonus, withdrawals } = createAuthHarness();
+  it("grants the signup bonus when re-registering after withdrawal", async () => {
+    const { service, grantSignupBonus } = createAuthHarness();
 
     const first = await service.register({
       email: "reader@example.com",
@@ -939,25 +927,10 @@ describe("AuthService", () => {
       { password: "password123" },
     );
 
-    const second = await service.register({
-      email: "reader@example.com",
-      password: "password123",
-      displayName: "Reader Again",
-    });
-    expect(grantSignupBonus).toHaveBeenCalledTimes(1);
-
-    await service.deleteAccountFromAuthorization(
-      `Bearer ${second.accessToken}`,
-      { password: "password123" },
-    );
-    for (const withdrawal of withdrawals) {
-      withdrawal.createdAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
-    }
-
     await service.register({
       email: "reader@example.com",
       password: "password123",
-      displayName: "Reader Third",
+      displayName: "Reader Again",
     });
     expect(grantSignupBonus).toHaveBeenCalledTimes(2);
   });

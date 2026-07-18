@@ -5,8 +5,8 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import {
-  createHmac,
   createHash,
+  createHmac,
   randomBytes,
   scrypt as scryptCallback,
   timingSafeEqual,
@@ -94,8 +94,6 @@ const withdrawalReasonCategories = [
 
 const deletedUserDisplayName = "탈퇴한 사용자";
 
-const signupBonusBlockDays = 30;
-
 const defaultRefreshTokenTtlSeconds = 14 * 24 * 60 * 60;
 
 @Injectable()
@@ -128,10 +126,7 @@ export class AuthService {
       passwordHash,
       passwordSalt,
     });
-    // 탈퇴 후 30일 내 동일 이메일 재가입은 가입 보너스를 다시 주지 않는다.
-    if (!(await this.hasRecentWithdrawal(email))) {
-      await this.creditsService.grantSignupBonus(user.id);
-    }
+    await this.creditsService.grantSignupBonus(user.id);
 
     return this.issueTokens(this.toPublicUser(user));
   }
@@ -372,9 +367,6 @@ export class AuthService {
       throw new BadRequestException("Password is incorrect");
     }
 
-    // 익명화 전에 미리 계산한다 — user.email은 아래 update로 null이 된다.
-    const emailHash = this.hashEmail(user.email);
-
     // 정책 §2.3 데이터 처리 매트릭스. users 행은 유지하므로 cascade가
     // 발동하지 않는다 — 삭제는 전부 명시적으로 수행한다.
     await this.prisma.$transaction([
@@ -398,7 +390,7 @@ export class AuthService {
       this.prisma.userCharacterFollow.deleteMany({ where: { userId } }),
       this.prisma.userHashtagPreference.deleteMany({ where: { userId } }),
       this.prisma.userWithdrawal.create({
-        data: { userId, emailHash, reasonCategory, reasonText },
+        data: { userId, reasonCategory, reasonText },
         select: { id: true },
       }),
     ]);
@@ -672,31 +664,6 @@ export class AuthService {
       );
     }
     return trimmed;
-  }
-
-  private async hasRecentWithdrawal(email: string): Promise<boolean> {
-    const cutoff = new Date(
-      Date.now() - signupBonusBlockDays * 24 * 60 * 60 * 1000,
-    );
-    const row = await this.prisma.userWithdrawal.findFirst({
-      where: { emailHash: this.hashEmail(email), createdAt: { gte: cutoff } },
-      select: { id: true },
-    });
-    return row !== null;
-  }
-
-  private hashEmail(email: string): string {
-    return createHmac("sha256", this.emailHashPepper())
-      .update(email)
-      .digest("hex");
-  }
-
-  private emailHashPepper(): string {
-    const pepper = process.env.AUTH_EMAIL_HASH_PEPPER?.trim();
-    if (!pepper) {
-      throw new Error("AUTH_EMAIL_HASH_PEPPER is required");
-    }
-    return pepper;
   }
 
   private normalizeEmail(email: unknown): string {

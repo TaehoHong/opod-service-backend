@@ -175,14 +175,10 @@ model UserWithdrawal {
   id             String   @id @default(uuid(7)) @db.Uuid
   // 익명화된 users 행을 느슨하게 가리키는 평문 uuid (FK 없음).
   userId         String   @map("user_id") @db.Uuid
-  // HMAC-SHA256(email, AUTH_EMAIL_HASH_PEPPER). 원문 이메일은 저장하지 않는다.
-  // 30일 내 동일 이메일 재가입 시 가입 보너스 차단용. 30일 경과분은 파기 대상.
-  emailHash      String   @map("email_hash")
   reasonCategory String?  @map("reason_category")
   reasonText     String?  @map("reason_text")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@index([emailHash, createdAt])
   @@map("user_withdrawals")
   @@schema("opod")
 }
