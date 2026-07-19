@@ -27,4 +27,7 @@ ENV NODE_ENV=production
 ENV PORT=7000
 EXPOSE 7000
 
-CMD ["npm", "run", "start:prod"]
+# 시작 전 미적용 마이그레이션을 순서대로 적용한다 — 코드와 DB 스키마가
+# 어긋난 채 뜨는 사고(예: 컬럼 누락 500)를 구조적으로 막는다.
+# 기존 DB 최초 1회는 baseline 필요: docs/db-management.md 참고.
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:prod"]

@@ -8,6 +8,8 @@
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "db:generate": "DATABASE_URL=${DATABASE_URL:-postgresql://ai_sns:ai_sns@localhost:5433/ai_sns} prisma generate",
     "db:push": "DATABASE_URL=${DATABASE_URL:-postgresql://ai_sns:ai_sns@localhost:5433/ai_sns} prisma db push",
+    "db:migrate": "DATABASE_URL=${DATABASE_URL:-postgresql://ai_sns:ai_sns@localhost:5433/ai_sns} prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:up": "docker compose -f docker/docker-compose.yml up -d",
     "db:down": "docker compose -f docker/docker-compose.yml down",
     "start": "node --env-file=.env ./node_modules/@nestjs/cli/bin/nest.js start",
