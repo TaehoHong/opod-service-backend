@@ -28,9 +28,10 @@ The server owns `docker-compose.yml` and `.env`. Do not keep production
 compose files in this repo or overwrite them during deploy.
 
 ```bash
-rsync -a --delete --exclude-from=deploy/rsync-exclude.txt ./ taeho@121.141.156.200:~/opod-backend/
-ssh taeho@121.141.156.200 'cd ~/opod-backend && docker compose build api && docker compose up -d api'
+./deploy.sh
 ```
 
-Keep ports, database URL, volumes, nginx, certificates, and PostgreSQL exposure
-in the server-local `~/opod-backend/docker-compose.yml` and `.env`.
+This builds the Linux image locally, uploads it with the server deploy script,
+and restarts only the `api` service. Keep ports, database URL, volumes, nginx,
+certificates, and PostgreSQL exposure in the server-local
+`~/opod-backend/docker-compose.yml` and `.env`.
