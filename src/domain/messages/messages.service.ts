@@ -117,6 +117,24 @@ export class MessagesService {
       await this.creditsService
         .releaseReservation({ reference: reservation.reference })
         .catch(() => undefined);
+      // DM 응답 실패는 유저에게 에러로 돌아가고 끝이라 durable 로그를 남긴다
+      // (service_logs). 로그 실패(동기 포함)가 원래 에러를 가려선 안 된다.
+      try {
+        await this.prisma.serviceLog.create({
+          data: {
+            source: "service-backend",
+            level: "error",
+            eventType: "MESSAGE_REPLY_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+            contextJson: {
+              userId: input.userId,
+              characterId: input.characterId,
+            },
+          },
+        });
+      } catch {
+        // durable 로그는 베스트에포트.
+      }
       throw error;
     }
   }
