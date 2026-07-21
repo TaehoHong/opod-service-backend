@@ -259,14 +259,14 @@ model Admin {
 }
 
 model Character {
-  id             String                @id @default(uuid(7)) @db.Uuid
-  publicId       String                @unique @map("public_id")
-  displayName    String                @map("display_name")
+  id             String                  @id @default(uuid(7)) @db.Uuid
+  publicId       String                  @unique @map("public_id")
+  displayName    String                  @map("display_name")
   bio            String
-  interests      String[]              @default([])
-  status         CharacterStatus       @default(active)
-  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  interests      String[]                @default([])
+  status         CharacterStatus         @default(active)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
   actionLogs     CharacterActionLog[]
   comments       PostComment[]
   conversations  MessageConversation[]
@@ -298,23 +298,23 @@ model UserCharacterFollow {
 }
 
 model Media {
-  id              String          @id @default(uuid(7)) @db.Uuid
-  mediaType       MediaType       @map("media_type")
-  url             String
-  storageKey      String?         @unique @map("storage_key")
-  contentType     String?         @map("content_type")
-  byteSize        Int?            @map("byte_size")
-  width           Int?
-  height          Int?
-  durationSeconds Int?            @map("duration_seconds")
+  id                      String                            @id @default(uuid(7)) @db.Uuid
+  mediaType               MediaType                         @map("media_type")
+  url                     String
+  storageKey              String?                           @unique @map("storage_key")
+  contentType             String?                           @map("content_type")
+  byteSize                Int?                              @map("byte_size")
+  width                   Int?
+  height                  Int?
+  durationSeconds         Int?                              @map("duration_seconds")
   // AI 기본법 합성콘텐츠 표시 의무 근거 플래그. 워커가 생성한 미디어는 항상 true.
-  isAiGenerated   Boolean         @default(false) @map("is_ai_generated")
-  uploadedAt      DateTime?       @map("uploaded_at") @db.Timestamptz(6)
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  generationJobs  GenerationJob[]
-  jobOutputs      GenerationJobOutput[]
-  postMedia       PostMedia[]
-  stories         Story[]
+  isAiGenerated           Boolean                           @default(false) @map("is_ai_generated")
+  uploadedAt              DateTime?                         @map("uploaded_at") @db.Timestamptz(6)
+  createdAt               DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  generationJobs          GenerationJob[]
+  jobOutputs              GenerationJobOutput[]
+  postMedia               PostMedia[]
+  stories                 Story[]
   visualProfileReferences CharacterVisualProfileReference[]
 
   @@map("media")
@@ -322,16 +322,16 @@ model Media {
 }
 
 model Post {
-  id          String          @id @default(uuid(7)) @db.Uuid
-  characterId String          @map("character_id") @db.Uuid
-  character   Character       @relation(fields: [characterId], references: [id])
-  contentType PostContentType @default(feed) @map("content_type")
-  content     String          @default("")
-  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  comments    PostComment[]
-  hashtags    PostHashtag[]
-  postMedia   PostMedia[]
-  reactions   PostReaction[]
+  id           String          @id @default(uuid(7)) @db.Uuid
+  characterId  String          @map("character_id") @db.Uuid
+  character    Character       @relation(fields: [characterId], references: [id])
+  contentType  PostContentType @default(feed) @map("content_type")
+  content      String          @default("")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  comments     PostComment[]
+  hashtags     PostHashtag[]
+  postMedia    PostMedia[]
+  reactions    PostReaction[]
   sourceDrafts PostDraft[]
 
   @@map("posts")
@@ -375,14 +375,14 @@ model PostMedia {
 }
 
 model Story {
-  id          String    @id @default(uuid(7)) @db.Uuid
-  characterId String    @map("character_id") @db.Uuid
-  mediaId     String    @map("media_id") @db.Uuid
-  caption     String    @default("")
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
-  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
-  media       Media     @relation(fields: [mediaId], references: [id])
+  id           String      @id @default(uuid(7)) @db.Uuid
+  characterId  String      @map("character_id") @db.Uuid
+  mediaId      String      @map("media_id") @db.Uuid
+  caption      String      @default("")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt    DateTime    @map("expires_at") @db.Timestamptz(6)
+  character    Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  media        Media       @relation(fields: [mediaId], references: [id])
   sourceDrafts PostDraft[]
 
   @@index([expiresAt, createdAt])
@@ -392,15 +392,15 @@ model Story {
 }
 
 model PostComment {
-  id          String    @id @default(uuid(7)) @db.Uuid
-  postId      String    @map("post_id") @db.Uuid
-  characterId String?   @map("character_id") @db.Uuid
-  userId      String?   @map("user_id") @db.Uuid
+  id          String     @id @default(uuid(7)) @db.Uuid
+  postId      String     @map("post_id") @db.Uuid
+  characterId String?    @map("character_id") @db.Uuid
+  userId      String?    @map("user_id") @db.Uuid
   body        String
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  post        Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
   character   Character? @relation(fields: [characterId], references: [id])
-  user        User?     @relation(fields: [userId], references: [id])
+  user        User?      @relation(fields: [userId], references: [id])
 
   @@index([postId, createdAt])
   @@index([characterId, createdAt])
@@ -410,15 +410,15 @@ model PostComment {
 }
 
 model PostReaction {
-  id           String    @id @default(uuid(7)) @db.Uuid
-  postId       String    @map("post_id") @db.Uuid
-  characterId  String?   @map("character_id") @db.Uuid
-  userId       String?   @map("user_id") @db.Uuid
-  reactionType String    @map("reaction_type")
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  post         Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  id           String     @id @default(uuid(7)) @db.Uuid
+  postId       String     @map("post_id") @db.Uuid
+  characterId  String?    @map("character_id") @db.Uuid
+  userId       String?    @map("user_id") @db.Uuid
+  reactionType String     @map("reaction_type")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  post         Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
   character    Character? @relation(fields: [characterId], references: [id])
-  user         User?     @relation(fields: [userId], references: [id])
+  user         User?      @relation(fields: [userId], references: [id])
 
   @@unique([postId, userId, reactionType])
   @@index([postId, createdAt])
@@ -571,39 +571,39 @@ model CreditCheckIn {
 }
 
 model GenerationJob {
-  id                String              @id @default(uuid(7)) @db.Uuid
-  characterId       String              @map("character_id") @db.Uuid
-  mediaType         MediaType           @map("media_type")
+  id                String                @id @default(uuid(7)) @db.Uuid
+  characterId       String                @map("character_id") @db.Uuid
+  mediaType         MediaType             @map("media_type")
   prompt            String
-  inputPrompt       String?             @map("input_prompt")
-  candidateCount    Int?                @map("candidate_count")
-  status            GenerationJobStatus @default(queued)
+  inputPrompt       String?               @map("input_prompt")
+  candidateCount    Int?                  @map("candidate_count")
+  status            GenerationJobStatus   @default(queued)
   // 선택된 최종 출력 캐시. 후보 전체는 GenerationJobOutput에 기록된다.
-  outputMediaId     String?             @map("output_media_id") @db.Uuid
+  outputMediaId     String?               @map("output_media_id") @db.Uuid
   provider          String?
-  paramsJson        Json?               @map("params_json")
+  paramsJson        Json?                 @map("params_json")
   // 프로바이더 제출 직후 기록. 재시작/재수용 시 새로 제출하지 않고 결과 폴링으로
   // 이어받는 근거이자 이중 제출·이중 과금 방지 장치.
-  providerRequestId String?             @map("provider_request_id")
+  providerRequestId String?               @map("provider_request_id")
   // 워커 claim 시 설정. 만료된 running 잡은 스윕이 queued로 되돌리거나 failed 처리.
-  leaseExpiresAt    DateTime?           @map("lease_expires_at") @db.Timestamptz(6)
-  attemptCount      Int                 @default(0) @map("attempt_count")
+  leaseExpiresAt    DateTime?             @map("lease_expires_at") @db.Timestamptz(6)
+  attemptCount      Int                   @default(0) @map("attempt_count")
   // 수동 재생성 계보. 자동 재시도는 같은 행의 attemptCount 증가로 처리한다.
-  originJobId       String?             @map("origin_job_id") @db.Uuid
-  errorMessage      String?             @map("error_message")
-  costUsd           Decimal?            @map("cost_usd") @db.Decimal(10, 4)
-  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  originJobId       String?               @map("origin_job_id") @db.Uuid
+  errorMessage      String?               @map("error_message")
+  costUsd           Decimal?              @map("cost_usd") @db.Decimal(10, 4)
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
   // draft 소속 컷. draft 1 : 컷 N (sortOrder = 캐러셀 순서). 수동 재생성 시
   // 같은 (draftId, sortOrder)로 새 행이 생기며, 집계는 컷별 최신 행 기준.
-  draftId           String?             @map("draft_id") @db.Uuid
-  sortOrder         Int                 @default(0) @map("sort_order")
-  character         Character           @relation(fields: [characterId], references: [id])
-  outputMedia       Media?              @relation(fields: [outputMediaId], references: [id])
-  originJob         GenerationJob?      @relation("GenerationJobRetries", fields: [originJobId], references: [id])
-  retries           GenerationJob[]     @relation("GenerationJobRetries")
+  draftId           String?               @map("draft_id") @db.Uuid
+  sortOrder         Int                   @default(0) @map("sort_order")
+  character         Character             @relation(fields: [characterId], references: [id])
+  outputMedia       Media?                @relation(fields: [outputMediaId], references: [id])
+  originJob         GenerationJob?        @relation("GenerationJobRetries", fields: [originJobId], references: [id])
+  retries           GenerationJob[]       @relation("GenerationJobRetries")
   outputs           GenerationJobOutput[]
-  draft             PostDraft?          @relation(fields: [draftId], references: [id])
+  draft             PostDraft?            @relation(fields: [draftId], references: [id])
 
   @@index([status, createdAt])
   @@index([status, leaseExpiresAt])
@@ -683,15 +683,15 @@ model GenerationJobOutput {
 // 캐릭터의 시각적 정체성. 페르소나(말투/성격)와 분리된 외모/화풍 프롬프트와
 // 레퍼런스 이미지 세트. 미디어 생성 프롬프트 컴파일 시 주입된다.
 model CharacterVisualProfile {
-  id               String    @id @default(uuid(7)) @db.Uuid
-  characterId      String    @unique @map("character_id") @db.Uuid
-  appearancePrompt String    @default("") @map("appearance_prompt")
-  stylePrompt      String    @default("") @map("style_prompt")
-  negativePrompt   String    @default("") @map("negative_prompt")
-  providerConfig   Json?     @map("provider_config")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  character        Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  id               String                            @id @default(uuid(7)) @db.Uuid
+  characterId      String                            @unique @map("character_id") @db.Uuid
+  appearancePrompt String                            @default("") @map("appearance_prompt")
+  stylePrompt      String                            @default("") @map("style_prompt")
+  negativePrompt   String                            @default("") @map("negative_prompt")
+  providerConfig   Json?                             @map("provider_config")
+  createdAt        DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  character        Character                         @relation(fields: [characterId], references: [id], onDelete: Cascade)
   referenceMedia   CharacterVisualProfileReference[]
 
   @@map("character_visual_profiles")
@@ -699,14 +699,14 @@ model CharacterVisualProfile {
 }
 
 model CharacterVisualProfileReference {
-  profileId String                 @map("profile_id") @db.Uuid
-  mediaId   String                 @map("media_id") @db.Uuid
-  sortOrder Int                    @default(0) @map("sort_order")
+  profileId   String                 @map("profile_id") @db.Uuid
+  mediaId     String                 @map("media_id") @db.Uuid
+  sortOrder   Int                    @default(0) @map("sort_order")
   // 비전 LLM이 생성한 이미지 서술(장면·구도·의상·조명) — 기획 LLM이 샷별로
   // 관련 레퍼런스를 선별하는 데 쓴다. 빈 값은 캡셔닝 전(백필 대상).
-  description String               @default("")
-  profile   CharacterVisualProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  media     Media                  @relation(fields: [mediaId], references: [id])
+  description String                 @default("")
+  profile     CharacterVisualProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  media       Media                  @relation(fields: [mediaId], references: [id])
 
   @@id([profileId, mediaId])
   @@map("character_visual_profile_references")
@@ -777,5 +777,132 @@ model CharacterPersona {
 
   @@index([characterId, deletedAt, sortOrder])
   @@map("character_personas")
+  @@schema("opod")
+}
+
+// ── Agent relationship memory (opod-agent owned; hosted here as schema owner) ──
+// The Agent reads/writes these directly (opod-agent docs/persona-memory-plan.md,
+// its ADR-0002/0005). Ids are TEXT on purpose: identity arrives via X-Opod-*
+// headers and is not guaranteed to reference opod rows, so no FKs — deleting a
+// user must explicitly delete their agent_* rows (withdrawal flow).
+
+enum AgentMemoryKind {
+  observation
+  reflection
+
+  @@map("agent_memory_kind")
+  @@schema("opod")
+}
+
+enum AgentJobStatus {
+  queued
+  running
+  completed
+  failed
+
+  @@map("agent_job_status")
+  @@schema("opod")
+}
+
+// Append-only observation/reflection stream per (user, character) relationship.
+// Embeddings stay double precision[]; ranking runs in the Agent (pgvector is
+// deferred until relationship volume warrants it — same observe-then-adopt rule
+// as the content pipeline).
+model AgentArchivalMemory {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  userId         String          @map("user_id")
+  characterId    String          @map("character_id")
+  content        String
+  kind           AgentMemoryKind
+  importance     Float
+  embedding      Float[]
+  // For reflections: ids of the memories this was inferred from.
+  evidence       String[]        @default([])
+  // Idempotent batch writes: (relationship, operation, ordinal) is unique so a
+  // retried consolidation returns the original rows instead of inserting again.
+  operationKey   String?         @map("operation_key")
+  ordinal        Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastAccessedAt DateTime        @default(now()) @map("last_accessed_at") @db.Timestamptz(6)
+
+  @@unique([userId, characterId, operationKey, ordinal])
+  @@index([userId, characterId, lastAccessedAt])
+  @@index([userId, characterId, kind, createdAt])
+  @@map("agent_archival_memories")
+  @@schema("opod")
+}
+
+// MemGPT-style always-injected relationship digest, self-rewritten on reflection.
+model AgentCoreMemory {
+  userId      String   @map("user_id")
+  characterId String   @map("character_id")
+  content     String
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, characterId])
+  @@map("agent_core_memories")
+  @@schema("opod")
+}
+
+// Reflection-trigger accumulator; consumed atomically (UPDATE … RETURNING).
+model AgentRelationshipState {
+  userId                    String   @map("user_id")
+  characterId               String   @map("character_id")
+  importanceSinceReflection Float    @default(0) @map("importance_since_reflection")
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, characterId])
+  @@map("agent_relationship_state")
+  @@schema("opod")
+}
+
+// Rolling session summary; revision is a compare-and-swap guard.
+model AgentSummary {
+  userId       String   @map("user_id")
+  characterId  String   @map("character_id")
+  sessionId    String   @map("session_id")
+  content      String
+  turnsCovered Int      @map("turns_covered")
+  revision     Int
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, characterId, sessionId])
+  @@map("agent_summaries")
+  @@schema("opod")
+}
+
+// Applied-operation ledger backing idempotent core/importance/summary writes.
+model AgentMemoryOperation {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id")
+  characterId  String   @map("character_id")
+  operationKey String   @map("operation_key")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([userId, characterId, operationKey])
+  @@map("agent_memory_operations")
+  @@schema("opod")
+}
+
+// Durable queue for consolidation ("memory-update") jobs; claimed with
+// FOR UPDATE SKIP LOCKED like the admin generation queue. The relationship
+// identity is promoted out of payload_json so the worker can serialize
+// execution per (user, character) and withdrawal cleanup can target a user.
+model AgentMemoryJob {
+  id             String         @id @default(uuid(7)) @db.Uuid
+  idempotencyKey String         @unique @map("idempotency_key")
+  userId         String         @map("user_id")
+  characterId    String         @map("character_id")
+  payloadJson    Json           @map("payload_json")
+  status         AgentJobStatus @default(queued)
+  attemptCount   Int            @default(0) @map("attempt_count")
+  leaseExpiresAt DateTime?      @map("lease_expires_at") @db.Timestamptz(6)
+  errorMessage   String?        @map("error_message")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, leaseExpiresAt])
+  @@index([userId, characterId, status])
+  @@map("agent_memory_jobs")
   @@schema("opod")
 }
