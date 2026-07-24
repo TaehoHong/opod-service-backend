@@ -39,6 +39,14 @@ enum CreditEntryType {
   @@schema("opod")
 }
 
+enum CreditKind {
+  free
+  paid
+
+  @@map("credit_kind")
+  @@schema("opod")
+}
+
 enum CreditPurchaseStatus {
   pending
   paid
@@ -56,6 +64,15 @@ enum CreditReservationStatus {
   released
 
   @@map("credit_reservation_status")
+  @@schema("opod")
+}
+
+enum CreditRefundStatus {
+  reserved
+  refunded
+  released
+
+  @@map("credit_refund_status")
   @@schema("opod")
 }
 
@@ -136,13 +153,18 @@ model User {
   displayName          String                  @map("display_name")
   bio                  String                  @default("")
   profileImageUrl      String?                 @map("profile_image_url")
+  adultVerifiedAt      DateTime?               @map("adult_verified_at") @db.Timestamptz(6)
+  adultIdentityHash    String?                 @unique @map("adult_identity_hash")
+  debtIdentityHash     String?                 @unique @map("debt_identity_hash")
   createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt            DateTime?               @map("deleted_at") @db.Timestamptz(6)
   characterFollows     UserCharacterFollow[]
   creditCheckIns       CreditCheckIn[]
+  creditAccount        CreditAccount?
   creditLedgerEntries  CreditLedgerEntry[]
   creditPurchases      CreditPurchase[]
+  creditRefunds        CreditRefund[]
   creditReservations   CreditReservation[]
   events               UserEvent[]
   inquiries            Inquiry[]
@@ -180,6 +202,16 @@ model UserWithdrawal {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("user_withdrawals")
+  @@schema("opod")
+}
+
+model UnsettledCreditDebt {
+  identityHash String   @id @map("identity_hash")
+  paidDebt     Int      @map("paid_debt")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("unsettled_credit_debts")
   @@schema("opod")
 }
 
@@ -245,13 +277,14 @@ model AdminSetting {
 }
 
 model Admin {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  email     String   @unique
-  password  String
-  isEnabled Boolean  @default(true) @map("is_enabled")
-  isDeleted Boolean  @default(false) @map("is_deleted")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                          String                       @id @default(uuid(7)) @db.Uuid
+  email                       String                       @unique
+  password                    String
+  isEnabled                   Boolean                      @default(true) @map("is_enabled")
+  isDeleted                   Boolean                      @default(false) @map("is_deleted")
+  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  creditReconciliationActions CreditReconciliationAction[]
 
   @@index([isEnabled, isDeleted])
   @@map("admins")
@@ -504,39 +537,114 @@ model Message {
 }
 
 model CreditLedgerEntry {
-  id                String          @id @default(uuid(7)) @db.Uuid
-  userId            String          @map("user_id") @db.Uuid
-  entryType         CreditEntryType @map("entry_type")
+  id                String                   @id @default(uuid(7)) @db.Uuid
+  userId            String                   @map("user_id") @db.Uuid
+  entryType         CreditEntryType          @map("entry_type")
+  creditKind        CreditKind?              @map("credit_kind")
+  purchaseId        String?                  @map("purchase_id") @db.Uuid
+  promotionCode     String?                  @map("promotion_code")
   amount            Int
   // grant-only: unconsumed credits left in this grant bucket.
-  remainingAmount   Int?            @map("remaining_amount")
+  remainingAmount   Int?                     @map("remaining_amount")
   // grant-only: free credits expire; null means no expiry (paid credits).
-  expiresAt         DateTime?       @map("expires_at") @db.Timestamptz(6)
+  expiresAt         DateTime?                @map("expires_at") @db.Timestamptz(6)
   reason            String
-  externalReference String?         @map("external_reference")
-  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  user              User            @relation(fields: [userId], references: [id])
+  externalReference String?                  @map("external_reference")
+  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  user              User                     @relation(fields: [userId], references: [id])
+  purchase          CreditPurchase?          @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  refundAllocations CreditRefundAllocation[]
 
   @@index([userId, createdAt])
-  @@index([userId, entryType, expiresAt])
+  @@index([userId, entryType, creditKind, expiresAt])
+  @@index([purchaseId])
   @@map("credit_ledger_entries")
   @@schema("opod")
 }
 
+model CreditAccount {
+  userId   String @id @map("user_id") @db.Uuid
+  paidDebt Int    @default(0) @map("paid_debt")
+  user     User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("credit_accounts")
+  @@schema("opod")
+}
+
 model CreditPurchase {
-  id           String               @id @default(uuid(7)) @db.Uuid
-  userId       String               @map("user_id") @db.Uuid
-  provider     String
-  status       CreditPurchaseStatus @default(pending)
-  creditAmount Int                  @map("credit_amount")
-  paidAmount   Int                  @map("paid_amount")
-  currency     String               @default("KRW")
-  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
-  user         User                 @relation(fields: [userId], references: [id])
+  id                    String                       @id @default(uuid(7)) @db.Uuid
+  userId                String                       @map("user_id") @db.Uuid
+  provider              String
+  status                CreditPurchaseStatus         @default(pending)
+  creditAmount          Int                          @map("credit_amount")
+  paidAmount            Int                          @map("paid_amount")
+  currency              String                       @default("KRW")
+  createdAt             DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                  User                         @relation(fields: [userId], references: [id])
+  ledgerEntries         CreditLedgerEntry[]
+  refunds               CreditRefund[]
+  reconciliationActions CreditReconciliationAction[]
 
   @@index([userId, createdAt])
   @@map("credit_purchases")
+  @@schema("opod")
+}
+
+model CreditReconciliationAction {
+  id         String         @id @default(uuid(7)) @db.Uuid
+  actionType String         @map("action_type")
+  reference  String         @unique
+  purchaseId String         @map("purchase_id") @db.Uuid
+  adminId    String         @map("admin_id") @db.Uuid
+  reason     String
+  details    Json
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  purchase   CreditPurchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  admin      Admin          @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId, createdAt])
+  @@index([adminId, createdAt])
+  @@map("credit_reconciliation_actions")
+  @@schema("opod")
+}
+
+model CreditRefund {
+  id              String                   @id @default(uuid(7)) @db.Uuid
+  userId          String                   @map("user_id") @db.Uuid
+  purchaseId      String                   @map("purchase_id") @db.Uuid
+  status          CreditRefundStatus       @default(reserved)
+  creditAmount    Int                      @map("credit_amount")
+  grossAmount     Int                      @map("gross_amount")
+  feeAmount       Int                      @map("fee_amount")
+  refundAmount    Int                      @map("refund_amount")
+  promotionAmount Int                      @default(0) @map("promotion_amount")
+  reason          String                   @default("user_request")
+  reference       String                   @unique
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user            User                     @relation(fields: [userId], references: [id])
+  purchase        CreditPurchase           @relation(fields: [purchaseId], references: [id])
+  allocations     CreditRefundAllocation[]
+
+  @@index([userId, status, createdAt])
+  @@index([purchaseId, status])
+  @@map("credit_refunds")
+  @@schema("opod")
+}
+
+model CreditRefundAllocation {
+  refundId        String            @map("refund_id") @db.Uuid
+  ledgerEntryId   String            @map("ledger_entry_id") @db.Uuid
+  lockedAmount    Int               @map("locked_amount")
+  recoveryAmount  Int               @map("recovery_amount")
+  recoveredAmount Int               @default(0) @map("recovered_amount")
+  refund          CreditRefund      @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  ledgerEntry     CreditLedgerEntry @relation(fields: [ledgerEntryId], references: [id], onDelete: Restrict)
+
+  @@id([refundId, ledgerEntryId])
+  @@index([ledgerEntryId])
+  @@map("credit_refund_allocations")
   @@schema("opod")
 }
 

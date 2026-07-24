@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
@@ -25,6 +26,8 @@ type AuthUser = {
   email: string;
   passwordHash: string;
   passwordSalt: string;
+  adultIdentityHash: string | null;
+  debtIdentityHash: string | null;
 };
 
 type PublicAuthUser = {
@@ -74,6 +77,8 @@ const authUserFields = {
   email: true,
   passwordHash: true,
   passwordSalt: true,
+  adultIdentityHash: true,
+  debtIdentityHash: true,
 } as const;
 
 const publicUserFields = {
@@ -367,35 +372,155 @@ export class AuthService {
       throw new BadRequestException("Password is incorrect");
     }
 
-    // 정책 §2.3 데이터 처리 매트릭스. users 행은 유지하므로 cascade가
-    // 발동하지 않는다 — 삭제는 전부 명시적으로 수행한다.
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          email: null,
-          passwordHash: null,
-          passwordSalt: null,
-          displayName: deletedUserDisplayName,
-          bio: "",
-          profileImageUrl: null,
-          deletedAt: new Date(),
-        },
-        select: { id: true },
-      }),
-      this.prisma.userRefreshToken.deleteMany({ where: { userId } }),
-      // 메시지는 conversation FK cascade로 함께 삭제된다.
-      this.prisma.messageConversation.deleteMany({ where: { userId } }),
-      this.prisma.notification.deleteMany({ where: { userId } }),
-      this.prisma.userCharacterFollow.deleteMany({ where: { userId } }),
-      this.prisma.userHashtagPreference.deleteMany({ where: { userId } }),
-      this.prisma.userWithdrawal.create({
-        data: { userId, reasonCategory, reasonText },
-        select: { id: true },
-      }),
-    ]);
+    await this.prisma.$transaction(async (tx) => {
+      const identityHash =
+        user.adultIdentityHash ?? user.debtIdentityHash ?? null;
+      if (identityHash) {
+        await this.lockAdultIdentity(tx, identityHash);
+      }
+      await this.lockUser(tx, userId);
+
+      const [account, paidCredits, activeRefunds, pendingPurchases] =
+        await Promise.all([
+          tx.creditAccount.findUnique({ where: { userId } }),
+          tx.creditLedgerEntry.aggregate({
+            _sum: { remainingAmount: true },
+            where: {
+              userId,
+              entryType: "grant",
+              creditKind: "paid",
+              remainingAmount: { gt: 0 },
+            },
+          }),
+          tx.creditRefund.count({
+            where: { userId, status: "reserved" },
+          }),
+          tx.creditPurchase.count({
+            where: { userId, status: "pending" },
+          }),
+        ]);
+      if (
+        (paidCredits._sum.remainingAmount ?? 0) > 0 ||
+        activeRefunds > 0 ||
+        pendingPurchases > 0
+      ) {
+        throw new ConflictException(
+          "Paid credits and pending payments must be settled before withdrawal",
+        );
+      }
+      if (account?.paidDebt && identityHash) {
+        await tx.unsettledCreditDebt.upsert({
+          where: { identityHash },
+          create: { identityHash, paidDebt: account.paidDebt },
+          update: { paidDebt: { increment: account.paidDebt } },
+        });
+        await tx.creditAccount.delete({ where: { userId } });
+      }
+
+      // users 행은 결제·분쟁 기록의 익명 FK 대상으로 유지한다.
+      await Promise.all([
+        tx.user.update({
+          where: { id: userId },
+          data: {
+            email: null,
+            passwordHash: null,
+            passwordSalt: null,
+            displayName: deletedUserDisplayName,
+            bio: "",
+            profileImageUrl: null,
+            adultVerifiedAt: null,
+            adultIdentityHash: null,
+            debtIdentityHash: null,
+            deletedAt: new Date(),
+          },
+          select: { id: true },
+        }),
+        tx.userRefreshToken.deleteMany({ where: { userId } }),
+        // 메시지는 conversation FK cascade로 함께 삭제된다.
+        tx.messageConversation.deleteMany({ where: { userId } }),
+        tx.notification.deleteMany({ where: { userId } }),
+        tx.userCharacterFollow.deleteMany({ where: { userId } }),
+        tx.userHashtagPreference.deleteMany({ where: { userId } }),
+        tx.userWithdrawal.create({
+          data: { userId, reasonCategory, reasonText },
+          select: { id: true },
+        }),
+      ]);
+    });
 
     return { deleted: true };
+  }
+
+  async verifyAdultIdentityFromAuthorization(
+    authorization: string | undefined,
+    input: { providerIdentityKey?: unknown } | undefined,
+  ): Promise<{ adultVerified: true; debtApplied: number; paidDebt: number }> {
+    if (process.env.NODE_ENV === "production") {
+      throw new ServiceUnavailableException(
+        "Adult verification provider is not configured",
+      );
+    }
+    const userId = await this.userIdFromAuthorization(authorization);
+    const providerIdentityKey = this.requiredString(
+      input?.providerIdentityKey,
+      "providerIdentityKey",
+    );
+    return this.applyVerifiedAdultIdentity(userId, providerIdentityKey);
+  }
+
+  async applyVerifiedAdultIdentity(
+    userId: string,
+    providerIdentityKey: string,
+  ): Promise<{ adultVerified: true; debtApplied: number; paidDebt: number }> {
+    const identityHash = this.hashAdultIdentity(providerIdentityKey);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockAdultIdentity(tx, identityHash);
+      await this.lockUser(tx, userId);
+
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { id: true, deletedAt: true },
+      });
+      if (!user || user.deletedAt) {
+        throw new UnauthorizedException("Access token is invalid");
+      }
+      const linked = await tx.user.findFirst({
+        where: {
+          adultIdentityHash: identityHash,
+          id: { not: userId },
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (linked) {
+        throw new ConflictException("Adult identity is already linked");
+      }
+
+      const [unsettled, account] = await Promise.all([
+        tx.unsettledCreditDebt.findUnique({ where: { identityHash } }),
+        tx.creditAccount.findUnique({ where: { userId } }),
+      ]);
+      const debtApplied = unsettled?.paidDebt ?? 0;
+      const paidDebt = (account?.paidDebt ?? 0) + debtApplied;
+      if (debtApplied > 0) {
+        await tx.creditAccount.upsert({
+          where: { userId },
+          create: { userId, paidDebt: debtApplied },
+          update: { paidDebt: { increment: debtApplied } },
+        });
+        await tx.unsettledCreditDebt.delete({ where: { identityHash } });
+      }
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          adultVerifiedAt: new Date(),
+          adultIdentityHash: identityHash,
+          debtIdentityHash: paidDebt > 0 ? identityHash : null,
+        },
+      });
+
+      return { adultVerified: true, debtApplied, paidDebt };
+    });
   }
 
   async updateCurrentUserFromAuthorization(
@@ -609,6 +734,36 @@ export class AuthService {
     const left = Buffer.from(a);
     const right = Buffer.from(b);
     return left.length === right.length && timingSafeEqual(left, right);
+  }
+
+  private async lockUser(
+    tx: Pick<PrismaService, "$executeRaw">,
+    userId: string,
+  ) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+  }
+
+  private async lockAdultIdentity(
+    tx: Pick<PrismaService, "$executeRaw">,
+    identityHash: string,
+  ) {
+    const lockKey = `adult_identity:${identityHash}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  }
+
+  private hashAdultIdentity(providerIdentityKey: string): string {
+    if (providerIdentityKey.length > 512) {
+      throw new BadRequestException("providerIdentityKey is too long");
+    }
+    const secret = process.env.ADULT_IDENTITY_HASH_SECRET?.trim();
+    if (!secret) {
+      throw new ServiceUnavailableException(
+        "Adult identity hashing is not configured",
+      );
+    }
+    return createHmac("sha256", secret)
+      .update(providerIdentityKey)
+      .digest("hex");
   }
 
   private jwtSecret(): string {

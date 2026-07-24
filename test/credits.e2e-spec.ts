@@ -45,7 +45,12 @@ describe("credits", () => {
       .get("/credits/balance")
       .set(human.authHeaders)
       .expect(200)
-      .expect({ userId: human.user.id, balance: 100 });
+      .expect({
+        userId: human.user.id,
+        balance: 100,
+        paidBalance: 0,
+        freeBalance: 100,
+      });
 
     await request(app.getHttpServer())
       .post("/messages")
@@ -57,7 +62,12 @@ describe("credits", () => {
       .get("/credits/balance")
       .set(human.authHeaders)
       .expect(200)
-      .expect({ userId: human.user.id, balance: 98 });
+      .expect({
+        userId: human.user.id,
+        balance: 98,
+        paidBalance: 0,
+        freeBalance: 98,
+      });
 
     const ledger = await request(app.getHttpServer())
       .get("/credits/ledger")
@@ -104,7 +114,12 @@ describe("credits", () => {
       .get("/credits/balance")
       .set(human.authHeaders)
       .expect(200)
-      .expect({ userId: human.user.id, balance: 110 });
+      .expect({
+        userId: human.user.id,
+        balance: 110,
+        paidBalance: 0,
+        freeBalance: 110,
+      });
 
     await request(app.getHttpServer())
       .post("/credits/check-in")
@@ -140,7 +155,12 @@ describe("credits", () => {
       .get("/credits/balance")
       .set(human.authHeaders)
       .expect(200)
-      .expect({ userId: human.user.id, balance: 0 });
+      .expect({
+        userId: human.user.id,
+        balance: 0,
+        paidBalance: 0,
+        freeBalance: 0,
+      });
   });
 
   it("creates one grant for concurrent uses of an external reference", async () => {

@@ -1,5 +1,12 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsNotEmpty, IsNumber, IsOptional, IsString } from "class-validator";
+import {
+  IsIn,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from "class-validator";
 
 export class CreateCheckoutDto {
   // No package-id check here: CreditsService rejects unknown packages with
@@ -38,6 +45,108 @@ export class SpendCreditsDto {
   reason!: string;
 }
 
+export class ReserveCreditRefundDto {
+  @ApiProperty()
+  @IsUUID()
+  purchaseId!: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  reference!: string;
+}
+
+export class LocalCreditRefundResultDto {
+  @ApiProperty()
+  @IsUUID()
+  refundId!: string;
+
+  @ApiProperty({ enum: ["succeeded", "failed"] })
+  @IsIn(["succeeded", "failed"])
+  status!: "succeeded" | "failed";
+}
+
+export class CreditRefundDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty()
+  purchaseId!: string;
+
+  @ApiProperty({ enum: ["reserved", "refunded", "released"] })
+  status!: "reserved" | "refunded" | "released";
+
+  @ApiProperty()
+  creditAmount!: number;
+
+  @ApiProperty()
+  promotionAmount!: number;
+
+  @ApiProperty()
+  grossAmount!: number;
+
+  @ApiProperty()
+  feeAmount!: number;
+
+  @ApiProperty()
+  refundAmount!: number;
+
+  @ApiProperty()
+  currency!: string;
+
+  @ApiProperty()
+  reference!: string;
+
+  @ApiProperty({
+    enum: ["user_request", "company_fault", "company_price_adjustment"],
+  })
+  reason!: "user_request" | "company_fault" | "company_price_adjustment";
+}
+
+export class CreditRefundQuoteDto {
+  @ApiProperty()
+  purchaseId!: string;
+
+  @ApiProperty()
+  currency!: string;
+
+  @ApiProperty()
+  originalCredits!: number;
+
+  @ApiProperty()
+  remainingCredits!: number;
+
+  @ApiProperty()
+  lockedCredits!: number;
+
+  @ApiProperty()
+  refundableCredits!: number;
+
+  @ApiProperty()
+  minimumCredits!: number;
+
+  @ApiProperty()
+  eligible!: boolean;
+
+  @ApiProperty()
+  grossAmount!: number;
+
+  @ApiProperty()
+  feeAmount!: number;
+
+  @ApiProperty()
+  refundAmount!: number;
+
+  @ApiProperty()
+  paidBalanceAfterRefund!: number;
+
+  @ApiProperty()
+  promotionRecoveryCredits!: number;
+
+  @ApiProperty()
+  expectedDebtIncrease!: number;
+}
+
 export class CreditCheckInDto {
   @ApiProperty()
   checkInDate!: string;
@@ -61,6 +170,15 @@ export class CreditEntryDto {
 
   @ApiProperty({ enum: ["grant", "debit"] })
   entryType!: "grant" | "debit";
+
+  @ApiProperty({ enum: ["free", "paid"], required: false })
+  creditKind?: "free" | "paid";
+
+  @ApiProperty({ required: false })
+  purchaseId?: string;
+
+  @ApiProperty({ required: false })
+  promotionCode?: string;
 
   @ApiProperty()
   amount!: number;

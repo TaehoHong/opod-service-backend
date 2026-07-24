@@ -108,3 +108,10 @@ export class DeleteAccountDto {
   @IsString()
   reasonText?: string;
 }
+
+export class LocalAdultVerificationDto {
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  providerIdentityKey?: string;
+}

@@ -13,6 +13,7 @@ import {
   AuthUserDto,
   ChangePasswordDto,
   DeleteAccountDto,
+  LocalAdultVerificationDto,
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
@@ -70,6 +71,18 @@ export class AuthController {
     @Body() body: ChangePasswordDto,
   ) {
     return this.authService.changePasswordFromAuthorization(
+      authorization,
+      body,
+    );
+  }
+
+  // Local-only stand-in for a trusted adult-verification provider callback.
+  @Post("adult-verifications/local")
+  verifyAdultIdentity(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: LocalAdultVerificationDto,
+  ) {
+    return this.authService.verifyAdultIdentityFromAuthorization(
       authorization,
       body,
     );

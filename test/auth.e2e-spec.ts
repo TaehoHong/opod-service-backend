@@ -348,7 +348,12 @@ describe("auth", () => {
       .get("/credits/balance")
       .set("Authorization", `Bearer ${first.body.accessToken}`)
       .expect(200)
-      .expect({ userId: first.body.user.id, balance: 100 });
+      .expect({
+        userId: first.body.user.id,
+        balance: 100,
+        paidBalance: 0,
+        freeBalance: 100,
+      });
 
     await request(app.getHttpServer())
       .delete("/auth/me")
@@ -366,7 +371,12 @@ describe("auth", () => {
       .get("/credits/balance")
       .set("Authorization", `Bearer ${second.body.accessToken}`)
       .expect(200)
-      .expect({ userId: second.body.user.id, balance: 100 });
+      .expect({
+        userId: second.body.user.id,
+        balance: 100,
+        paidBalance: 0,
+        freeBalance: 100,
+      });
   });
 
   it("rejects invalid account deletion requests", async () => {

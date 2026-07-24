@@ -181,6 +181,20 @@ const creditPurchase = {
   currency: "KRW",
   createdAt: isoDate,
 };
+const creditRefund = {
+  id: "refund_01",
+  purchaseId: "purchase_01",
+  status: "reserved",
+  creditAmount: 60,
+  promotionAmount: 10,
+  grossAmount: 5940,
+  feeAmount: 297,
+  refundAmount: 5643,
+  currency: "KRW",
+  reference: "refund-request-01",
+  reason: "user_request",
+  createdAt: isoDate,
+};
 const notification = {
   id: "notification_01",
   type: "message",
@@ -255,6 +269,12 @@ const operationExamples: Record<string, OperationExample> = {
     },
     response: authTokens,
   },
+  AuthController_verifyAdultIdentity: {
+    auth: true,
+    request: { providerIdentityKey: "local-provider-ci" },
+    response: { adultVerified: true, debtApplied: 120, paidDebt: 120 },
+    status: "201",
+  },
   AuthController_revokeSession: {
     request: { refreshToken: "refresh_abc123" },
     response: { revoked: true },
@@ -306,12 +326,55 @@ const operationExamples: Record<string, OperationExample> = {
   },
   CreditsController_getBalance: {
     auth: true,
-    response: { userId: "user_01", balance: 90 },
+    response: {
+      userId: "user_01",
+      balance: 90,
+      paidBalance: 80,
+      freeBalance: 10,
+    },
   },
   CreditsController_listEntries: { auth: true, response: page(creditEntry) },
   CreditsController_listPurchases: {
     auth: true,
     response: page(creditPurchase),
+  },
+  CreditsController_getRefundQuote: {
+    auth: true,
+    response: {
+      purchaseId: "purchase_01",
+      currency: "KRW",
+      originalCredits: 100,
+      remainingCredits: 60,
+      lockedCredits: 0,
+      refundableCredits: 60,
+      minimumCredits: 50,
+      eligible: true,
+      grossAmount: 5940,
+      feeAmount: 297,
+      refundAmount: 5643,
+      paidBalanceAfterRefund: 20,
+      promotionRecoveryCredits: 10,
+      expectedDebtIncrease: 0,
+    },
+  },
+  CreditsController_reserveRefund: {
+    auth: true,
+    request: {
+      purchaseId: "purchase_01",
+      reference: "refund-request-01",
+    },
+    response: creditRefund,
+    status: "201",
+  },
+  CreditsController_releaseRefund: {
+    auth: true,
+    response: { ...creditRefund, status: "released" },
+    status: "201",
+  },
+  CreditsController_handleLocalRefundResult: {
+    request: { refundId: "refund_01", status: "succeeded" },
+    response: { ...creditRefund, status: "refunded" },
+    status: "201",
   },
 
   EventsController_recordEvent: {

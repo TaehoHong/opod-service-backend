@@ -15,6 +15,10 @@ type TestUser = {
   email: string;
   passwordHash: string;
   passwordSalt: string;
+  adultVerifiedAt?: Date | null;
+  adultIdentityHash?: string | null;
+  debtIdentityHash?: string | null;
+  deletedAt?: Date | null;
 };
 
 function deferred() {
@@ -45,6 +49,11 @@ function createAuthHarness(
     reasonCategory: string | null;
     reasonText: string | null;
     createdAt: Date;
+  }> = [];
+  const creditAccounts: Array<{ userId: string; paidDebt: number }> = [];
+  const unsettledDebts: Array<{
+    identityHash: string;
+    paidDebt: number;
   }> = [];
   const refreshTokenReadWaiters: Array<Array<() => void>> = [[], []];
   const refreshSuccessorCreateStarted = deferred();
@@ -86,6 +95,10 @@ function createAuthHarness(
           id: `user-${users.length + 1}`,
           bio: "",
           profileImageUrl: null,
+          adultVerifiedAt: null,
+          adultIdentityHash: null,
+          debtIdentityHash: null,
+          deletedAt: null,
           ...data,
         };
         users.push(user);
@@ -96,6 +109,15 @@ function createAuthHarness(
           (item) => item.email === where.email || item.id === where.id,
         );
         return user ? { ...user } : null;
+      }),
+      findFirst: jest.fn(async ({ where }) => {
+        const user = users.find(
+          (item) =>
+            item.adultIdentityHash === where.adultIdentityHash &&
+            item.id !== where.id?.not &&
+            item.deletedAt === null,
+        );
+        return user ? { id: user.id } : null;
       }),
       update: jest.fn(async ({ where, data }) => {
         const user = users.find((item) => item.id === where.id);
@@ -189,6 +211,74 @@ function createAuthHarness(
         return row;
       }),
     },
+    creditAccount: {
+      findUnique: jest.fn(async ({ where }) => {
+        const account = creditAccounts.find(
+          (item) => item.userId === where.userId,
+        );
+        return account ? { ...account } : null;
+      }),
+      upsert: jest.fn(async ({ where, create, update }) => {
+        let account = creditAccounts.find(
+          (item) => item.userId === where.userId,
+        );
+        if (!account) {
+          account = { userId: create.userId, paidDebt: create.paidDebt ?? 0 };
+          creditAccounts.push(account);
+        } else if (update.paidDebt?.increment) {
+          account.paidDebt += update.paidDebt.increment;
+        }
+        return { ...account };
+      }),
+      delete: jest.fn(async ({ where }) => {
+        const index = creditAccounts.findIndex(
+          (item) => item.userId === where.userId,
+        );
+        if (index < 0) throw new Error("missing credit account");
+        return creditAccounts.splice(index, 1)[0];
+      }),
+    },
+    creditLedgerEntry: {
+      aggregate: jest.fn().mockResolvedValue({
+        _sum: { remainingAmount: 0 },
+      }),
+    },
+    creditRefund: {
+      count: jest.fn().mockResolvedValue(0),
+    },
+    creditPurchase: {
+      count: jest.fn().mockResolvedValue(0),
+    },
+    unsettledCreditDebt: {
+      findUnique: jest.fn(async ({ where }) => {
+        const debt = unsettledDebts.find(
+          (item) => item.identityHash === where.identityHash,
+        );
+        return debt ? { ...debt } : null;
+      }),
+      upsert: jest.fn(async ({ where, create, update }) => {
+        let debt = unsettledDebts.find(
+          (item) => item.identityHash === where.identityHash,
+        );
+        if (!debt) {
+          debt = {
+            identityHash: create.identityHash,
+            paidDebt: create.paidDebt,
+          };
+          unsettledDebts.push(debt);
+        } else {
+          debt.paidDebt += update.paidDebt.increment;
+        }
+        return { ...debt };
+      }),
+      delete: jest.fn(async ({ where }) => {
+        const index = unsettledDebts.findIndex(
+          (item) => item.identityHash === where.identityHash,
+        );
+        if (index < 0) throw new Error("missing unsettled debt");
+        return unsettledDebts.splice(index, 1)[0];
+      }),
+    },
     messageConversation: {
       deleteMany: jest.fn(async () => ({ count: 0 })),
     },
@@ -219,6 +309,9 @@ function createAuthHarness(
         | {
             users: TestUser[];
             refreshTokens: typeof refreshTokens;
+            creditAccounts: typeof creditAccounts;
+            unsettledDebts: typeof unsettledDebts;
+            withdrawals: typeof withdrawals;
           }
         | undefined;
       const transactionClient = {
@@ -242,6 +335,13 @@ function createAuthHarness(
             rollbackSnapshot = {
               users: users.map((user) => ({ ...user })),
               refreshTokens: refreshTokens.map((token) => ({ ...token })),
+              creditAccounts: creditAccounts.map((account) => ({
+                ...account,
+              })),
+              unsettledDebts: unsettledDebts.map((debt) => ({ ...debt })),
+              withdrawals: withdrawals.map((withdrawal) => ({
+                ...withdrawal,
+              })),
             };
             releases.push(() => {
               release();
@@ -268,6 +368,25 @@ function createAuthHarness(
             refreshTokens.length,
             ...rollbackSnapshot.refreshTokens.map((token) => ({ ...token })),
           );
+          creditAccounts.splice(
+            0,
+            creditAccounts.length,
+            ...rollbackSnapshot.creditAccounts.map((account) => ({
+              ...account,
+            })),
+          );
+          unsettledDebts.splice(
+            0,
+            unsettledDebts.length,
+            ...rollbackSnapshot.unsettledDebts.map((debt) => ({ ...debt })),
+          );
+          withdrawals.splice(
+            0,
+            withdrawals.length,
+            ...rollbackSnapshot.withdrawals.map((withdrawal) => ({
+              ...withdrawal,
+            })),
+          );
         }
         throw error;
       } finally {
@@ -285,9 +404,13 @@ function createAuthHarness(
 
   return {
     service,
+    prisma,
     grantSignupBonus,
     refreshTokens,
     withdrawals,
+    users,
+    creditAccounts,
+    unsettledDebts,
     refreshSuccessorCreateStarted: refreshSuccessorCreateStarted.promise,
     releaseRefreshSuccessorCreate: releaseRefreshSuccessorCreate.resolve,
     competingSessionLockAttempted: competingSessionLockAttempted.promise,
@@ -302,11 +425,13 @@ function createAuthService() {
 describe("AuthService", () => {
   beforeEach(() => {
     process.env.AUTH_JWT_SECRET = "test-auth-secret";
+    process.env.ADULT_IDENTITY_HASH_SECRET = "test-adult-identity-secret";
   });
 
   afterEach(() => {
     delete process.env.AUTH_JWT_SECRET;
     delete process.env.AUTH_REFRESH_TOKEN_TTL_SECONDS;
+    delete process.env.ADULT_IDENTITY_HASH_SECRET;
   });
 
   it("registers and logs in a user with tokens", async () => {
@@ -876,6 +1001,121 @@ describe("AuthService", () => {
     await expect(
       service.refresh({ refreshToken: registered.refreshToken }),
     ).rejects.toThrow(UnauthorizedException);
+  });
+
+  it("moves verified debt on withdrawal and reapplies it only after adult verification", async () => {
+    const harness = createAuthHarness();
+    const first = await harness.service.register({
+      email: "first@example.com",
+      password: "password123",
+      displayName: "First",
+    });
+    const firstAuthorization = `Bearer ${first.accessToken}`;
+
+    await expect(
+      harness.service.verifyAdultIdentityFromAuthorization(firstAuthorization, {
+        providerIdentityKey: "provider-ci-same-person",
+      }),
+    ).resolves.toEqual({
+      adultVerified: true,
+      debtApplied: 0,
+      paidDebt: 0,
+    });
+    harness.creditAccounts.push({
+      userId: first.user.id,
+      paidDebt: 120,
+    });
+
+    await harness.service.deleteAccountFromAuthorization(firstAuthorization, {
+      password: "password123",
+    });
+    expect(harness.creditAccounts).toHaveLength(0);
+    expect(harness.unsettledDebts).toEqual([
+      {
+        identityHash: expect.not.stringContaining("provider-ci-same-person"),
+        paidDebt: 120,
+      },
+    ]);
+
+    const second = await harness.service.register({
+      email: "second@example.com",
+      password: "password123",
+      displayName: "Second",
+    });
+    // Before adult verification there is no trustworthy same-person signal.
+    expect(
+      harness.creditAccounts.find(
+        (account) => account.userId === second.user.id,
+      ),
+    ).toBeUndefined();
+
+    await expect(
+      harness.service.verifyAdultIdentityFromAuthorization(
+        `Bearer ${second.accessToken}`,
+        { providerIdentityKey: "provider-ci-same-person" },
+      ),
+    ).resolves.toEqual({
+      adultVerified: true,
+      debtApplied: 120,
+      paidDebt: 120,
+    });
+    expect(harness.unsettledDebts).toHaveLength(0);
+    expect(harness.creditAccounts).toContainEqual({
+      userId: second.user.id,
+      paidDebt: 120,
+    });
+    expect(
+      harness.users.find((user) => user.id === second.user.id),
+    ).toMatchObject({
+      adultVerifiedAt: expect.any(Date),
+      adultIdentityHash: expect.any(String),
+      debtIdentityHash: expect.any(String),
+    });
+  });
+
+  it("disables the local adult-verification stub in production", async () => {
+    const harness = createAuthHarness();
+    const registered = await harness.service.register({
+      email: "adult@example.com",
+      password: "password123",
+      displayName: "Adult",
+    });
+    process.env.NODE_ENV = "production";
+    try {
+      await expect(
+        harness.service.verifyAdultIdentityFromAuthorization(
+          `Bearer ${registered.accessToken}`,
+          { providerIdentityKey: "provider-ci" },
+        ),
+      ).rejects.toThrow("Adult verification provider is not configured");
+    } finally {
+      delete process.env.NODE_ENV;
+    }
+  });
+
+  it("requires paid credits and pending payments to settle before withdrawal", async () => {
+    const harness = createAuthHarness();
+    const registered = await harness.service.register({
+      email: "settlement@example.com",
+      password: "password123",
+      displayName: "Settlement",
+    });
+    harness.prisma.creditLedgerEntry.aggregate.mockResolvedValueOnce({
+      _sum: { remainingAmount: 100 },
+    });
+
+    await expect(
+      harness.service.deleteAccountFromAuthorization(
+        `Bearer ${registered.accessToken}`,
+        { password: "password123" },
+      ),
+    ).rejects.toThrow("must be settled before withdrawal");
+    await expect(
+      harness.service.login({
+        email: "settlement@example.com",
+        password: "password123",
+      }),
+    ).resolves.toMatchObject({ user: registered.user });
   });
 
   it("rejects invalid account deletion requests", async () => {
