@@ -13,6 +13,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
+import { ConsentsService } from "../consents/consents.service";
 import { CreditsService } from "../credits/credits.service";
 import { PrismaService } from "../database/prisma.service";
 
@@ -60,7 +61,7 @@ type AuthTokens = {
 
 type AuthSessionClient = Pick<
   PrismaService,
-  "user" | "userRefreshToken" | "userEvent" | "$executeRaw"
+  "user" | "userRefreshToken" | "userEvent" | "userConsent" | "$executeRaw"
 >;
 
 type JwtPayload = {
@@ -106,11 +107,17 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly creditsService: CreditsService,
+    private readonly consentsService: ConsentsService,
   ) {}
 
   async register(
     input:
-      | { email?: unknown; password?: unknown; displayName?: unknown }
+      | {
+          email?: unknown;
+          password?: unknown;
+          displayName?: unknown;
+          consents?: unknown;
+        }
       | undefined,
   ): Promise<AuthTokens> {
     const email = this.normalizeEmail(input?.email);
@@ -122,14 +129,21 @@ export class AuthService {
       throw new ConflictException("Email is already registered");
     }
 
+    const consents = await this.consentsService.resolveRegistrationConsents(
+      input?.consents,
+    );
+
     const passwordSalt = randomBytes(16).toString("base64url");
     const passwordHash = await this.hashPassword(password, passwordSalt);
 
-    const user = await this.createAuthUser({
-      email,
-      displayName,
-      passwordHash,
-      passwordSalt,
+    // 계정과 동의 증빙은 함께 남아야 한다 — 한쪽만 남는 상태를 만들지 않는다.
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await this.createAuthUser(
+        { email, displayName, passwordHash, passwordSalt },
+        tx,
+      );
+      await this.consentsService.recordConsents(tx, created.id, consents);
+      return created;
     });
     await this.creditsService.grantSignupBonus(user.id);
 
@@ -586,14 +600,17 @@ export class AuthService {
     await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
   }
 
-  private async createAuthUser(input: {
-    email: string;
-    displayName: string;
-    passwordHash: string;
-    passwordSalt: string;
-  }): Promise<AuthUser> {
+  private async createAuthUser(
+    input: {
+      email: string;
+      displayName: string;
+      passwordHash: string;
+      passwordSalt: string;
+    },
+    client: Pick<AuthSessionClient, "user"> = this.prisma,
+  ): Promise<AuthUser> {
     try {
-      return (await this.prisma.user.create({
+      return (await client.user.create({
         data: input,
         select: authUserFields,
       })) as AuthUser;

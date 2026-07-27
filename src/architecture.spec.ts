@@ -47,6 +47,7 @@ describe("source layout", () => {
     const expectedDomainEntries = [
       "auth",
       "characters",
+      "consents",
       "credits",
       "database",
       "events",

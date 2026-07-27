@@ -145,6 +145,16 @@ enum InquiryStatus {
   @@schema("opod")
 }
 
+enum ConsentType {
+  terms_of_service
+  privacy
+  age_14
+  marketing
+
+  @@map("consent_type")
+  @@schema("opod")
+}
+
 model User {
   id                   String                  @id @default(uuid(7)) @db.Uuid
   email                String?                 @unique
@@ -160,6 +170,7 @@ model User {
   updatedAt            DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt            DateTime?               @map("deleted_at") @db.Timestamptz(6)
   characterFollows     UserCharacterFollow[]
+  consents             UserConsent[]
   creditCheckIns       CreditCheckIn[]
   creditAccount        CreditAccount?
   creditLedgerEntries  CreditLedgerEntry[]
@@ -202,6 +213,40 @@ model UserWithdrawal {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("user_withdrawals")
+  @@schema("opod")
+}
+
+// 약관·개인정보 처리방침 문서. 유형별로 effectiveAt이 지난 것 중 가장 최근
+// 시행분이 현재 버전이다. 작성·발행은 opod-admin이 담당한다.
+model TermsDocument {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  type        ConsentType
+  version     String
+  title       String
+  body        String
+  effectiveAt DateTime    @map("effective_at") @db.Timestamptz(6)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([type, version])
+  @@index([type, effectiveAt])
+  @@map("terms_documents")
+  @@schema("opod")
+}
+
+// 동의 증빙 기록. append-only이며 유형별 최신 행이 현재 동의 상태다.
+// 탈퇴 후에도 익명화된 users 행에 연결을 유지한다 (증빙 보존).
+model UserConsent {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  type      ConsentType
+  version   String
+  agreed    Boolean
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User        @relation(fields: [userId], references: [id])
+
+  @@index([userId, type, createdAt])
+  @@map("user_consents")
   @@schema("opod")
 }
 

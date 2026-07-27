@@ -3,6 +3,7 @@
 - 정책 근거: [account-support-policy.md](../account-support-policy.md)
 - 이 문서는 계정 관리 배치에서 추가되는 auth 엔드포인트를 다룬다.
   (기존 register/login/refresh/me/session은 Swagger `/docs` 참조)
+- 가입 시 약관·개인정보 동의 수집은 [api/terms.md](terms.md) 참조.
 
 ---
 
@@ -164,7 +165,8 @@ Content-Type: application/json
 6. `user_hashtag_preferences` 삭제.
 7. `user_withdrawals`에 탈퇴 사유를 기록한다. 이메일은 저장하지 않는다.
 
-크레딧 원장·구매·예약·출석, 신고, `user_events`는 익명 상태로 유지 (보존 의무).
+크레딧 원장·구매·예약·출석, 신고, `user_events`, `user_consents`는 익명 상태로
+유지 (보존 의무).
 
 ### 탈퇴 후 동작
 

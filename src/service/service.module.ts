@@ -2,6 +2,7 @@ import { Module, ValidationPipe } from "@nestjs/common";
 import { APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 import { ServiceAuthModule } from "./auth/auth.module";
 import { ServiceCharactersModule } from "./characters/characters.module";
+import { ServiceConsentsModule } from "./consents/consents.module";
 import { ServiceCreditsModule } from "./credits/credits.module";
 import { ServiceEventsModule } from "./events/events.module";
 import { ServiceFaqsModule } from "./faqs/faqs.module";
@@ -22,6 +23,7 @@ import { ServiceStoriesModule } from "./stories/stories.module";
   imports: [
     ServiceAuthModule,
     ServiceCharactersModule,
+    ServiceConsentsModule,
     ServiceCreditsModule,
     ServiceEventsModule,
     ServiceFaqsModule,

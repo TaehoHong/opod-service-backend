@@ -71,6 +71,7 @@ const serviceTags: OpenApiTag[] = [
   { name: "알림", description: "사용자 알림 API" },
   { name: "신고", description: "콘텐츠 신고 API" },
   { name: "고객지원", description: "FAQ, 공지사항, 1:1 문의 API" },
+  { name: "약관", description: "약관·개인정보 문서와 동의 기록 API" },
   { name: "검색", description: "통합 검색과 해시태그 API" },
   { name: "이벤트", description: "클라이언트 이벤트 수집 API" },
   { name: "시스템", description: "서비스 상태 확인 API" },
@@ -89,6 +90,8 @@ const tagByPathSegment: Record<string, string> = {
   faqs: "고객지원",
   notices: "고객지원",
   inquiries: "고객지원",
+  terms: "약관",
+  consents: "약관",
   search: "검색",
   hashtags: "검색",
   events: "이벤트",
@@ -228,6 +231,12 @@ const operationExamples: Record<string, OperationExample> = {
       email: "taeho@example.com",
       password: "password1234",
       displayName: "홍태호",
+      consents: [
+        { type: "terms_of_service", agreed: true },
+        { type: "privacy", agreed: true },
+        { type: "age_14", agreed: true },
+        { type: "marketing", agreed: false },
+      ],
     },
     response: authTokens,
     status: "201",
@@ -570,6 +579,83 @@ const operationExamples: Record<string, OperationExample> = {
         },
       ],
     },
+  },
+
+  TermsController_listTerms: {
+    response: [
+      {
+        type: "terms_of_service",
+        version: "1.0",
+        title: "서비스 이용약관",
+        required: true,
+        effectiveAt: isoDate,
+      },
+      {
+        type: "marketing",
+        version: "1.0",
+        title: "광고성 정보 수신 동의",
+        required: false,
+        effectiveAt: isoDate,
+      },
+    ],
+  },
+  TermsController_getTerms: {
+    response: {
+      type: "terms_of_service",
+      version: "1.0",
+      title: "서비스 이용약관",
+      required: true,
+      effectiveAt: isoDate,
+      body: "제1조(목적) ...",
+    },
+  },
+  ConsentsController_listConsents: {
+    auth: true,
+    response: [
+      {
+        type: "terms_of_service",
+        required: true,
+        agreed: true,
+        agreedVersion: "1.0",
+        currentVersion: "2.0",
+        needsConsent: true,
+      },
+      {
+        type: "marketing",
+        required: false,
+        agreed: false,
+        agreedVersion: "1.0",
+        currentVersion: "1.0",
+        needsConsent: false,
+      },
+    ],
+  },
+  ConsentsController_updateConsents: {
+    auth: true,
+    request: {
+      consents: [
+        { type: "terms_of_service", agreed: true },
+        { type: "marketing", agreed: true },
+      ],
+    },
+    response: [
+      {
+        type: "terms_of_service",
+        required: true,
+        agreed: true,
+        agreedVersion: "2.0",
+        currentVersion: "2.0",
+        needsConsent: false,
+      },
+      {
+        type: "marketing",
+        required: false,
+        agreed: true,
+        agreedVersion: "1.0",
+        currentVersion: "1.0",
+        needsConsent: false,
+      },
+    ],
   },
 
   SearchController_search: {

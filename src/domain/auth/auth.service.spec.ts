@@ -3,6 +3,7 @@ import {
   ConflictException,
   UnauthorizedException,
 } from "@nestjs/common";
+import { ConsentsService } from "../consents/consents.service";
 import { CreditsService } from "../credits/credits.service";
 import { PrismaService } from "../database/prisma.service";
 import { AuthService } from "./auth.service";
@@ -49,6 +50,19 @@ function createAuthHarness(
     reasonCategory: string | null;
     reasonText: string | null;
     createdAt: Date;
+  }> = [];
+  const termsDocuments: Array<{
+    id: string;
+    type: string;
+    version: string;
+    title: string;
+    effectiveAt: Date;
+  }> = [];
+  const userConsents: Array<{
+    userId: string;
+    type: string;
+    version: string;
+    agreed: boolean;
   }> = [];
   const creditAccounts: Array<{ userId: string; paidDebt: number }> = [];
   const unsettledDebts: Array<{
@@ -197,6 +211,32 @@ function createAuthHarness(
     },
     userEvent: {
       create: jest.fn(async ({ data }) => ({ id: "event-1", ...data })),
+    },
+    termsDocument: {
+      findFirst: jest.fn(async ({ where }) => {
+        const matches = termsDocuments
+          .filter(
+            (document) =>
+              document.type === where.type &&
+              document.effectiveAt <= where.effectiveAt.lte,
+          )
+          .sort((a, b) => b.effectiveAt.getTime() - a.effectiveAt.getTime());
+        return matches[0] ? { ...matches[0] } : null;
+      }),
+    },
+    userConsent: {
+      findFirst: jest.fn(async ({ where }) => {
+        const matches = userConsents.filter(
+          (consent) =>
+            consent.userId === where.userId && consent.type === where.type,
+        );
+        const latest = matches[matches.length - 1];
+        return latest ? { ...latest } : null;
+      }),
+      createMany: jest.fn(async ({ data }) => {
+        userConsents.push(...data);
+        return { count: data.length };
+      }),
     },
     userWithdrawal: {
       create: jest.fn(async ({ data }) => {
@@ -400,6 +440,7 @@ function createAuthHarness(
     {
       grantSignupBonus,
     } as unknown as CreditsService,
+    new ConsentsService(prisma as unknown as PrismaService),
   );
 
   return {
@@ -409,6 +450,8 @@ function createAuthHarness(
     refreshTokens,
     withdrawals,
     users,
+    termsDocuments,
+    userConsents,
     creditAccounts,
     unsettledDebts,
     refreshSuccessorCreateStarted: refreshSuccessorCreateStarted.promise,
@@ -460,6 +503,118 @@ describe("AuthService", () => {
       accessToken: expect.any(String),
       refreshToken: expect.any(String),
     });
+  });
+
+  it("records signup consents with the server-side version", async () => {
+    const harness = createAuthHarness();
+    harness.termsDocuments.push(
+      {
+        id: "terms-1",
+        type: "terms_of_service",
+        version: "1.0",
+        title: "이용약관",
+        effectiveAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        id: "privacy-1",
+        type: "privacy",
+        version: "2.1",
+        title: "개인정보 수집·이용",
+        effectiveAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        id: "age-1",
+        type: "age_14",
+        version: "1.0",
+        title: "만 14세 이상",
+        effectiveAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        id: "marketing-1",
+        type: "marketing",
+        version: "1.0",
+        title: "마케팅 수신",
+        effectiveAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    );
+
+    const registered = await harness.service.register({
+      email: "reader@example.com",
+      password: "password123",
+      displayName: "Reader",
+      consents: [
+        { type: "terms_of_service", agreed: true },
+        // 클라이언트가 보낸 버전이 아니라 시행 중인 버전이 기록되어야 한다.
+        { type: "privacy", agreed: true, version: "9.9" },
+        { type: "age_14", agreed: true },
+        { type: "marketing", agreed: false },
+      ],
+    });
+
+    expect(harness.userConsents).toEqual([
+      {
+        userId: registered.user.id,
+        type: "terms_of_service",
+        version: "1.0",
+        agreed: true,
+      },
+      {
+        userId: registered.user.id,
+        type: "privacy",
+        version: "2.1",
+        agreed: true,
+      },
+      {
+        userId: registered.user.id,
+        type: "age_14",
+        version: "1.0",
+        agreed: true,
+      },
+      {
+        userId: registered.user.id,
+        type: "marketing",
+        version: "1.0",
+        agreed: false,
+      },
+    ]);
+  });
+
+  it("rejects registration that misses a required consent", async () => {
+    const harness = createAuthHarness();
+    harness.termsDocuments.push({
+      id: "terms-1",
+      type: "terms_of_service",
+      version: "1.0",
+      title: "이용약관",
+      effectiveAt: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    await expect(
+      harness.service.register({
+        email: "reader@example.com",
+        password: "password123",
+        displayName: "Reader",
+        consents: [{ type: "terms_of_service", agreed: false }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+
+    // 동의 없는 가입은 계정도 남기지 않는다.
+    expect(harness.users).toEqual([]);
+    expect(harness.userConsents).toEqual([]);
+    expect(harness.grantSignupBonus).not.toHaveBeenCalled();
+  });
+
+  it("registers without consents while no terms document is in effect", async () => {
+    const harness = createAuthHarness();
+
+    await expect(
+      harness.service.register({
+        email: "reader@example.com",
+        password: "password123",
+        displayName: "Reader",
+      }),
+    ).resolves.toMatchObject({ user: { email: "reader@example.com" } });
+    expect(harness.userConsents).toEqual([]);
   });
 
   it("rejects missing register and login bodies with client errors", async () => {

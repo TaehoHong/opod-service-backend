@@ -1,5 +1,13 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { Allow, IsOptional, IsString } from "class-validator";
+import { Type } from "class-transformer";
+import {
+  Allow,
+  IsArray,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from "class-validator";
+import { ConsentInputDto } from "../consents/consent.dto";
 
 export class AuthUserDto {
   @ApiProperty()
@@ -57,6 +65,14 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   displayName?: string;
+
+  // 시행 중인 필수 약관은 전부 agreed: true여야 가입이 통과한다.
+  @ApiProperty({ type: [ConsentInputDto], required: false })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConsentInputDto)
+  consents?: ConsentInputDto[];
 }
 
 export class LoginDto {
