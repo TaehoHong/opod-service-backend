@@ -2,6 +2,7 @@ node_modules/
 dist/
 test/.tmp/
 .idea
+.DS_Store
 
 .env
 .env.*
