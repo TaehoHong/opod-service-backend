@@ -134,4 +134,7 @@
   결제·성인인증 provider 실연동 방향. staging/rollback/backup/monitoring.
 - **미매핑**: opod-agent가 쓰는 `agent_*` 테이블의 서비스측 read 경로(현재
   서비스 코드에서 사용 안 함). 관계 메모리 노출은 미구현.
+- 캐릭터 프로필 이미지 관계와 크롭 필드는 canonical schema에 있으나 공개
+  `characters` API의 read 모델에는 아직 노출하지 않는다. 사용자용 프로필
+  구현에서 `src/domain/characters/characters.service.ts`를 확장한다.
 - affinity 관련 코드는 존재하지 않음(스키마에 `affinity` 컬럼 없음). 정책은 초안.
