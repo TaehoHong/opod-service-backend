@@ -246,6 +246,19 @@ const operationExamples: Record<string, OperationExample> = {
     response: authTokens,
     status: "201",
   },
+  AuthController_socialLogin: {
+    request: {
+      idToken: "eyJhbGciOiJSUzI1NiIs...",
+      displayName: "홍태호",
+      consents: [
+        { type: "terms_of_service", agreed: true },
+        { type: "privacy", agreed: true },
+        { type: "age_14", agreed: true },
+      ],
+    },
+    response: authTokens,
+    status: "201",
+  },
   AuthController_refresh: {
     request: { refreshToken: "refresh_abc123" },
     response: authTokens,

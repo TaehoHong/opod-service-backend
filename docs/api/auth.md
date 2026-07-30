@@ -9,7 +9,7 @@
 
 ## 공통 인증 응답과 세션 처리
 
-register/login/refresh/password 응답의 `user`는 다음 필드를 사용한다.
+register/login/social/refresh/password 응답의 `user`는 다음 필드를 사용한다.
 
 | 필드              | 타입    | 설명                           |
 | ----------------- | ------- | ------------------------------ |
@@ -17,7 +17,7 @@ register/login/refresh/password 응답의 `user`는 다음 필드를 사용한�
 | `displayName`     | string  | 표시 이름                      |
 | `bio`             | string  | 소개. 미설정 시 빈 문자열      |
 | `profileImageUrl` | string? | 프로필 이미지가 있을 때만 포함 |
-| `email`           | string  | 정규화된 이메일                |
+| `email`           | string? | 정규화된 이메일. 없으면 `null` |
 
 로그인은 비밀번호를 검증한 뒤 사용자별 세션 advisory lock을 잡고, 비밀번호
 hash/salt가 최초 검증 시점과 같은지 다시 확인한 후 리프레시 토큰을 생성한다.
@@ -28,6 +28,57 @@ refresh는 같은 사용자별 lock 안에서 기존 토큰의 미폐기 상태�
 조건부 갱신하고 후속 토큰을 생성한다. 두 작업은 하나의 트랜잭션이므로 후속
 토큰 생성이 실패하면 기존 토큰 폐기도 롤백되며, 같은 토큰을 동시에 refresh할
 때는 한 요청만 성공한다.
+
+---
+
+## POST /auth/social/:provider — 소셜 로그인·가입
+
+- 상태: **Google 구현 완료 (2026-07-30)**
+- 현재 provider: `google` (`Google`, `GOOGLE`도 같은 값으로 정규화)
+- 환경 설정: `GOOGLE_OAUTH_CLIENT_ID` 필수. 누락 시 서버 시작 실패
+
+클라이언트가 provider SDK에서 받은 ID 토큰을 백엔드로 전달한다. 백엔드는
+Google 공개키를 이용해 서명·issuer·audience·만료를 검증하고, 검증된 `sub`를
+`provider_account_id`로 사용한다. authorization code callback이나 Google
+access/refresh token 저장은 하지 않는다.
+
+```http
+POST /auth/social/google
+Content-Type: application/json
+
+{
+  "idToken": "<google-id-token>",
+  "displayName": "홍태호",
+  "consents": [
+    { "type": "terms_of_service", "agreed": true },
+    { "type": "privacy", "agreed": true },
+    { "type": "age_14", "agreed": true }
+  ]
+}
+```
+
+| 필드 | 타입 | 규칙 |
+|---|---|---|
+| `idToken` | string | 필수. provider가 발급한 ID 토큰 |
+| `displayName` | string? | 최초 가입 fallback. 빈 문자열은 미입력 처리 |
+| `consents` | array? | 최초 가입 시 현재 필수 동의가 있으면 필요. 기존 계정 로그인에서는 무시 |
+
+신규 가입은 `users`와 `user_accounts`, 동의 기록을 한 transaction에서 생성하고
+가입 보너스를 한 번 지급한다. 표시 이름은 Google `name` → client
+`displayName` → `사용자#<랜덤 영숫자 6자리>` 순서로 정한다.
+
+로컬 계정과 Google 계정은 email이 같아도 자동 연결하지 않는다. social User의
+`users.email/password_hash/password_salt`는 null이며, Google이 verified로 준
+email만 `user_accounts.email`에 저장·갱신하여 API `user.email`로 반환한다.
+
+| 상태 | 조건 | 메시지 |
+|---|---|---|
+| 400 | `idToken` 누락·빈 값 | `idToken is required` |
+| 400 | 미지원 provider | `Social login provider is not supported` |
+| 401 | 서명·issuer·audience·만료 등 토큰 검증 실패 | `유효하지 않은 소셜 로그인 토큰입니다` |
+
+nonce 검증은 적용하지 않는다. ID 토큰 원문은 로그와 오류에 기록하지 않는다.
+Apple·Naver, 계정 연결, 소셜 계정 탈퇴와 provider revoke는 후속 범위다.
 
 ---
 
@@ -99,6 +150,7 @@ Content-Type: application/json
 | 400 | `currentPassword` 불일치 | `Current password is incorrect` |
 | 400 | `newPassword` 규칙 위반 (8자 미만 / 128자 초과 / 문자열 아님) | `Password must be 8 to 128 characters` |
 | 400 | `newPassword`가 `currentPassword`와 동일 | `New password must be different` |
+| 400 | 소셜 전용 계정 | `비밀번호 로그인이 설정되지 않은 계정입니다` |
 | 401 | 액세스 토큰 없음/무효/만료 | 기존 auth 에러와 동일 |
 
 현재 비밀번호 불일치는 401이 아닌 **400** — 클라이언트가 "재로그인 유도"와
@@ -119,6 +171,7 @@ Content-Type: application/json
 ## DELETE /auth/me — 회원탈퇴 (즉시 익명화)
 
 - 상태: **구현 완료 (2026-07-08)** — 유닛 10건 + e2e 7건(auth 스위트 누적) 통과
+- 적용 범위: email/password 로컬 계정. 소셜 계정 탈퇴·provider revoke는 TODO
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §2](../account-support-policy.md)
 - 구현: `src/domain/auth/auth.service.ts` `deleteAccountFromAuthorization`,

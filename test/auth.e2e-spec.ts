@@ -1,20 +1,40 @@
-import type { INestApplication } from "@nestjs/common";
+import { UnauthorizedException, type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
+import {
+  SOCIAL_IDENTITY_PROVIDERS,
+  SocialIdentityProvider,
+  VerifiedSocialIdentity,
+} from "../src/domain/auth/social-identity.provider";
 import { PrismaService } from "../src/domain/database/prisma.service";
 
 describe("auth", () => {
   let app: INestApplication;
+  const verifySocialIdentity = jest.fn<
+    Promise<VerifiedSocialIdentity>,
+    [string]
+  >();
+  const socialIdentityProvider: SocialIdentityProvider = {
+    provider: "google",
+    verify: verifySocialIdentity,
+  };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(SOCIAL_IDENTITY_PROVIDERS)
+      .useValue([socialIdentityProvider])
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
+  });
+
+  beforeEach(() => {
+    verifySocialIdentity.mockReset();
   });
 
   afterAll(async () => {
@@ -491,5 +511,192 @@ describe("auth", () => {
       .get("/feed")
       .set("Authorization", "Bearer invalid")
       .expect(401);
+  });
+
+  it("creates a separate Google account and reuses it across OPOD sessions", async () => {
+    const email = `shared-${randomUUID()}@example.com`;
+    const local = await request(app.getHttpServer())
+      .post("/auth/register")
+      .send({ email, password: "password123", displayName: "Local Reader" })
+      .expect(201);
+
+    verifySocialIdentity.mockResolvedValue({
+      providerAccountId: "google-account-1",
+      email,
+      displayName: "Google Reader",
+    });
+    const created = await request(app.getHttpServer())
+      .post("/auth/social/GOOGLE")
+      .send({
+        idToken: "google-token-1",
+        displayName: "Client Reader",
+      })
+      .expect(201);
+
+    expect(created.body.user).toEqual({
+      id: expect.any(String),
+      displayName: "Google Reader",
+      bio: "",
+      email,
+    });
+    expect(created.body.user.id).not.toBe(local.body.user.id);
+    expect(created.body.accessToken).toEqual(expect.any(String));
+    expect(created.body.refreshToken).toEqual(expect.any(String));
+
+    const prisma = app.get(PrismaService);
+    await expect(
+      prisma.user.findUnique({
+        where: { id: created.body.user.id },
+        select: { email: true, passwordHash: true, passwordSalt: true },
+      }),
+    ).resolves.toEqual({
+      email: null,
+      passwordHash: null,
+      passwordSalt: null,
+    });
+    await expect(
+      prisma.userAccount.findMany({
+        where: { userId: created.body.user.id },
+        select: {
+          provider: true,
+          providerAccountId: true,
+          email: true,
+        },
+      }),
+    ).resolves.toEqual([
+      {
+        provider: "google",
+        providerAccountId: "google-account-1",
+        email,
+      },
+    ]);
+
+    verifySocialIdentity.mockResolvedValue({
+      providerAccountId: "google-account-1",
+      email: `updated-${email}`,
+      displayName: "Changed Provider Name",
+    });
+    const returning = await request(app.getHttpServer())
+      .post("/auth/social/Google")
+      .send({
+        idToken: "google-token-2",
+        displayName: "Changed Client Name",
+        consents: [],
+      })
+      .expect(201);
+
+    expect(returning.body.user).toEqual({
+      ...created.body.user,
+      email: `updated-${email}`,
+    });
+    await request(app.getHttpServer())
+      .get("/auth/me")
+      .set("Authorization", `Bearer ${returning.body.accessToken}`)
+      .expect(200)
+      .expect(returning.body.user);
+
+    const updated = await request(app.getHttpServer())
+      .patch("/auth/me")
+      .set("Authorization", `Bearer ${returning.body.accessToken}`)
+      .send({ displayName: "Social Reader" })
+      .expect(200);
+    expect(updated.body).toEqual({
+      ...returning.body.user,
+      displayName: "Social Reader",
+    });
+
+    await request(app.getHttpServer())
+      .post("/auth/refresh")
+      .send({ refreshToken: returning.body.refreshToken })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.user).toEqual(updated.body);
+      });
+    await request(app.getHttpServer())
+      .patch("/auth/password")
+      .set("Authorization", `Bearer ${returning.body.accessToken}`)
+      .send({ currentPassword: "password123", newPassword: "password456" })
+      .expect(400)
+      .expect({
+        statusCode: 400,
+        message: "비밀번호 로그인이 설정되지 않은 계정입니다",
+        error: "Bad Request",
+      });
+    await request(app.getHttpServer())
+      .get("/credits/balance")
+      .set("Authorization", `Bearer ${returning.body.accessToken}`)
+      .expect(200)
+      .expect({
+        userId: created.body.user.id,
+        balance: 100,
+        paidBalance: 0,
+        freeBalance: 100,
+      });
+  });
+
+  it("serializes concurrent first Google logins into one account", async () => {
+    const providerAccountId = `google-${randomUUID()}`;
+    verifySocialIdentity.mockResolvedValue({ providerAccountId });
+
+    const responses = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        request(app.getHttpServer())
+          .post("/auth/social/google")
+          .send({ idToken: "same-google-token", displayName: " " }),
+      ),
+    );
+
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    expect(responses[0].body.user.id).toBe(responses[1].body.user.id);
+    expect(responses[0].body.user.displayName).toMatch(/^사용자#[0-9A-F]{6}$/);
+    expect(responses[0].body.user.email).toBeNull();
+
+    const prisma = app.get(PrismaService);
+    const account = await prisma.userAccount.findUnique({
+      where: {
+        provider_providerAccountId: {
+          provider: "google",
+          providerAccountId,
+        },
+      },
+      select: { userId: true },
+    });
+    expect(account?.userId).toBe(responses[0].body.user.id);
+    await expect(
+      prisma.creditLedgerEntry.count({
+        where: {
+          userId: responses[0].body.user.id,
+          externalReference: `signup_bonus:${responses[0].body.user.id}`,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("normalizes social login request failures without persisting an account", async () => {
+    const prisma = app.get(PrismaService);
+    const accountCountBefore = await prisma.userAccount.count();
+
+    await request(app.getHttpServer())
+      .post("/auth/social/google")
+      .send({})
+      .expect(400);
+    await request(app.getHttpServer())
+      .post("/auth/social/github")
+      .send({ idToken: "provider-token" })
+      .expect(400);
+
+    verifySocialIdentity.mockRejectedValueOnce(
+      new UnauthorizedException("유효하지 않은 소셜 로그인 토큰입니다"),
+    );
+    await request(app.getHttpServer())
+      .post("/auth/social/google")
+      .send({ idToken: "invalid-google-token" })
+      .expect(401)
+      .expect({
+        statusCode: 401,
+        message: "유효하지 않은 소셜 로그인 토큰입니다",
+        error: "Unauthorized",
+      });
+    await expect(prisma.userAccount.count()).resolves.toBe(accountCountBefore);
   });
 });

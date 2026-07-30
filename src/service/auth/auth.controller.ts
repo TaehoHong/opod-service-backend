@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  Param,
   Patch,
   Post,
 } from "@nestjs/common";
@@ -17,6 +18,7 @@ import {
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
+  SocialLoginDto,
   UpdateAuthUserDto,
 } from "./auth.dto";
 
@@ -32,6 +34,14 @@ export class AuthController {
   @Post("login")
   login(@Body() body: LoginDto) {
     return this.authService.login(body);
+  }
+
+  @Post("social/:provider")
+  socialLogin(
+    @Param("provider") provider: string,
+    @Body() body: SocialLoginDto,
+  ) {
+    return this.authService.socialLogin(provider, body);
   }
 
   @Post("refresh")

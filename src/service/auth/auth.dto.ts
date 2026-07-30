@@ -22,8 +22,8 @@ export class AuthUserDto {
   @ApiProperty({ required: false })
   profileImageUrl?: string;
 
-  @ApiProperty()
-  email!: string;
+  @ApiProperty({ nullable: true })
+  email!: string | null;
 }
 
 export class UpdateAuthUserDto {
@@ -87,6 +87,25 @@ export class LoginDto {
   @ApiProperty()
   @Allow()
   password?: string;
+}
+
+export class SocialLoginDto {
+  @ApiProperty()
+  @IsOptional()
+  @IsString()
+  idToken?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  displayName?: string;
+
+  @ApiProperty({ type: [ConsentInputDto], required: false })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConsentInputDto)
+  consents?: ConsentInputDto[];
 }
 
 export class RefreshTokenDto {

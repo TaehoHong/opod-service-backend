@@ -441,6 +441,7 @@ function createAuthHarness(
       grantSignupBonus,
     } as unknown as CreditsService,
     new ConsentsService(prisma as unknown as PrismaService),
+    [],
   );
 
   return {

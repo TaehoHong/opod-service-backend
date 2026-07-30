@@ -18,7 +18,7 @@
 
 | Area | Paths | 책임 | 진입점 | 의존 | 테스트 | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| auth | `src/domain/auth`, `src/service/auth` | 로컬 가입/로그인·refresh·비번변경·탈퇴·성인인증·프로필 | `AuthController`, `AuthService` | database, consents, credits | `auth.service.spec.ts`, `test/auth.e2e-spec.ts` | `src/domain/auth/auth.service.ts` |
+| auth | `src/domain/auth`, `src/service/auth` | 로컬·소셜 가입/로그인·refresh·비번변경·탈퇴·성인인증·프로필 | `AuthController`, `AuthService` | database, consents, credits, social identity provider | `auth.service.spec.ts`, `google-social-identity.provider.spec.ts`, `test/auth.e2e-spec.ts` | `src/domain/auth/auth.service.ts`, `src/domain/auth/social-identity.provider.ts` |
 | characters | `src/domain/characters`, `src/service/characters` | 캐릭터 조회·검색·관계상태 | `CharactersController`, `CharactersService` | database, follows, posts, stories | `characters.controller.spec.ts` | `src/domain/characters/characters.service.ts` |
 | feed | `src/domain/feed`, `src/service/feed` | 개인화 피드(해시태그 선호 가중) | `FeedController`, `FeedService` | database, posts, events | `feed.service.spec.ts` | `src/domain/feed/feed.service.ts` |
 | posts | `src/domain/posts`, `src/service/posts` | 게시글·댓글·반응 | `PostsController`, `PostsService` | database, auth, media-url | `posts.service.spec.ts`, `posts.controller.spec.ts` | `src/domain/posts/posts.service.ts` |
@@ -46,6 +46,7 @@
 | 커서 페이지네이션 | `parsePageQuery`/`decodeCursor`/`pageFromRows` | 목록 API 전반 | limit 기본 20·최대 50, `{items,nextCursor?}` | `src/domain/database/page.ts` |
 | UUID 검증 | `isUuid` | 404 정규화(posts, notices, inquiries…) | 비-uuid는 질의 전에 없음 처리 | `src/domain/database/uuid.ts` |
 | 인증 추출 | `AuthService.userIdFromAuthorization` 등 | 인증 필요한 모든 컨트롤러 | Bearer JWT → userId. 선택 인증은 `optional*` | `src/domain/auth/auth.service.ts` |
+| 소셜 ID 토큰 검증 | `SOCIAL_IDENTITY_PROVIDERS` / `SocialIdentityProvider` | `AuthService.socialLogin` | provider adapter가 검증 완료 `sub`·verified email·이름만 반환. 현재 Google 등록 | `src/domain/auth/social-identity.provider.ts`, `src/domain/auth/google-social-identity.provider.ts` |
 | 크레딧 예약/캡처 | `CreditsService.reserveCredits`/`captureReservation`/`releaseReservation` | messages(chat_reply) 등 액션 | 멱등·사용자 단위 직렬화·TTL 5분 | `src/domain/credits/credits.service.ts` |
 | 요금 상수 | `credit-pricing.ts` | credits, messages | `credit-policy.md`와 일치해야 함 | `src/domain/credits/credit-pricing.ts` |
 | 미디어 공개 URL | `publicMediaUrl` | posts, stories | `S3_PUBLIC_BASE_URL`로 조립 | `src/domain/media/media-url.ts` |

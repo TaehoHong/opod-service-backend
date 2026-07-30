@@ -5,6 +5,7 @@ import request from "supertest";
 import { AppModule } from "../src/app.module";
 import { CreditsService } from "../src/domain/credits/credits.service";
 import { PrismaService } from "../src/domain/database/prisma.service";
+import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
 import { registerHuman } from "./human-auth";
 
 describe("credits", () => {
@@ -15,7 +16,12 @@ describe("credits", () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(MESSAGE_REPLY_PROVIDER)
+      .useValue({
+        createReply: jest.fn().mockResolvedValue("Test assistant reply"),
+      })
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();

@@ -271,6 +271,19 @@ describe("service swagger", () => {
       accessToken: "eyJhbGciOi...",
       refreshToken: "refresh_abc123",
     });
+    const socialOperation = response.body.paths["/auth/social/{provider}"].post;
+    expect(
+      socialOperation.requestBody.content["application/json"].example,
+    ).toMatchObject({
+      idToken: "eyJhbGciOiJSUzI1NiIs...",
+      displayName: "홍태호",
+    });
+    expect(
+      socialOperation.responses["201"].content["application/json"].example,
+    ).toMatchObject({
+      accessToken: "eyJhbGciOi...",
+      refreshToken: "refresh_abc123",
+    });
     expect(
       meOperation.parameters.find(
         (parameter: { name: string }) => parameter.name === "Authorization",

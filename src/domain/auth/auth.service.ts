@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -16,17 +17,25 @@ import { promisify } from "node:util";
 import { ConsentsService } from "../consents/consents.service";
 import { CreditsService } from "../credits/credits.service";
 import { PrismaService } from "../database/prisma.service";
+import {
+  SOCIAL_IDENTITY_PROVIDERS,
+  SocialIdentityProvider,
+} from "./social-identity.provider";
 
 const scrypt = promisify(scryptCallback);
 
-type AuthUser = {
+type PublicAuthUserSource = {
   id: string;
   displayName: string;
   bio: string;
   profileImageUrl: string | null;
-  email: string;
-  passwordHash: string;
-  passwordSalt: string;
+  email: string | null;
+  userAccounts?: Array<{ email: string | null }>;
+};
+
+type AuthUser = PublicAuthUserSource & {
+  passwordHash: string | null;
+  passwordSalt: string | null;
   adultIdentityHash: string | null;
   debtIdentityHash: string | null;
 };
@@ -36,7 +45,7 @@ type PublicAuthUser = {
   displayName: string;
   bio: string;
   profileImageUrl?: string;
-  email: string;
+  email: string | null;
 };
 
 type RefreshTokenRow = {
@@ -50,7 +59,14 @@ type RefreshTokenRow = {
     bio: string;
     profileImageUrl: string | null;
     email: string | null;
+    userAccounts?: Array<{ email: string | null }>;
   };
+};
+
+type SocialAccountRow = {
+  id: string;
+  email: string | null;
+  user: PublicAuthUserSource & { deletedAt: Date | null };
 };
 
 type AuthTokens = {
@@ -61,7 +77,12 @@ type AuthTokens = {
 
 type AuthSessionClient = Pick<
   PrismaService,
-  "user" | "userRefreshToken" | "userEvent" | "userConsent" | "$executeRaw"
+  | "user"
+  | "userAccount"
+  | "userRefreshToken"
+  | "userEvent"
+  | "userConsent"
+  | "$executeRaw"
 >;
 
 type JwtPayload = {
@@ -88,6 +109,10 @@ const publicUserFields = {
   bio: true,
   profileImageUrl: true,
   email: true,
+  userAccounts: {
+    select: { email: true },
+    orderBy: { createdAt: "asc" as const },
+  },
 } as const;
 
 const withdrawalReasonCategories = [
@@ -108,6 +133,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly creditsService: CreditsService,
     private readonly consentsService: ConsentsService,
+    @Inject(SOCIAL_IDENTITY_PROVIDERS)
+    private readonly socialIdentityProviders: SocialIdentityProvider[],
   ) {}
 
   async register(
@@ -159,6 +186,8 @@ export class AuthService {
 
     if (
       !user ||
+      !user.passwordHash ||
+      !user.passwordSalt ||
       typeof password !== "string" ||
       !(await this.passwordMatches(password, user))
     ) {
@@ -173,6 +202,8 @@ export class AuthService {
       })) as AuthUser | null;
       if (
         !currentUser?.email ||
+        !currentUser.passwordHash ||
+        !currentUser.passwordSalt ||
         currentUser.passwordHash !== user.passwordHash ||
         currentUser.passwordSalt !== user.passwordSalt
       ) {
@@ -181,6 +212,104 @@ export class AuthService {
 
       return this.issueTokens(this.toPublicUser(currentUser), tx);
     });
+  }
+
+  async socialLogin(
+    providerValue: unknown,
+    input:
+      | {
+          idToken?: unknown;
+          displayName?: unknown;
+          consents?: unknown;
+        }
+      | undefined,
+  ): Promise<AuthTokens> {
+    const provider = this.requiredString(
+      providerValue,
+      "provider",
+    ).toLowerCase();
+    const identityProvider = this.socialIdentityProviders.find(
+      (candidate) => candidate.provider === provider,
+    );
+    if (!identityProvider) {
+      throw new BadRequestException("Social login provider is not supported");
+    }
+
+    const idToken = this.requiredString(input?.idToken, "idToken");
+    const identity = await identityProvider.verify(idToken);
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.lockSocialIdentity(tx, provider, identity.providerAccountId);
+
+      const existing = await this.findSocialAccount(
+        tx,
+        provider,
+        identity.providerAccountId,
+      );
+      if (existing) {
+        if (existing.user.deletedAt) {
+          throw new UnauthorizedException(
+            "유효하지 않은 소셜 로그인 토큰입니다",
+          );
+        }
+
+        const accountEmail =
+          identity.email && identity.email !== existing.email
+            ? (
+                await tx.userAccount.update({
+                  where: { id: existing.id },
+                  data: { email: identity.email },
+                  select: { email: true },
+                })
+              ).email
+            : existing.email;
+
+        return {
+          user: {
+            ...existing.user,
+            userAccounts: [{ email: accountEmail }],
+          },
+        };
+      }
+
+      const consents = await this.consentsService.resolveRegistrationConsents(
+        input?.consents,
+      );
+      const clientDisplayName =
+        typeof input?.displayName === "string"
+          ? input.displayName.trim() || undefined
+          : undefined;
+      const displayName =
+        identity.displayName?.trim() ||
+        clientDisplayName ||
+        this.randomSocialDisplayName();
+
+      const user = (await tx.user.create({
+        data: { displayName },
+        select: authUserFields,
+      })) as AuthUser;
+      const account = await tx.userAccount.create({
+        data: {
+          userId: user.id,
+          provider,
+          providerAccountId: identity.providerAccountId,
+          email: identity.email,
+        },
+        select: { email: true },
+      });
+      await this.consentsService.recordConsents(tx, user.id, consents);
+
+      return {
+        user: {
+          ...user,
+          userAccounts: [{ email: account.email }],
+        },
+      };
+    });
+
+    // The grant is idempotent, so retrying a login repairs a prior request
+    // that created the account but failed before the bonus completed.
+    await this.creditsService.grantSignupBonus(result.user.id);
+    return this.issueTokens(this.toPublicUser(result.user));
   }
 
   async refresh(
@@ -271,18 +400,10 @@ export class AuthService {
   ): Promise<PublicAuthUser> {
     const userId = await this.userIdFromAuthorization(authorization);
     const user = await this.findPublicUserById(userId);
-    if (!user?.email) {
+    if (!user) {
       throw new UnauthorizedException("Access token is invalid");
     }
-    return {
-      id: user.id,
-      displayName: user.displayName,
-      bio: user.bio,
-      ...(user.profileImageUrl
-        ? { profileImageUrl: user.profileImageUrl }
-        : {}),
-      email: user.email,
-    };
+    return user;
   }
 
   async changePasswordFromAuthorization(
@@ -290,6 +411,19 @@ export class AuthService {
     input: { currentPassword?: unknown; newPassword?: unknown } | undefined,
   ): Promise<AuthTokens> {
     const userId = await this.userIdFromAuthorization(authorization);
+
+    const user = (await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: authUserFields,
+    })) as AuthUser | null;
+    if (!user) {
+      throw new UnauthorizedException("Access token is invalid");
+    }
+    if (!user.email || !user.passwordHash || !user.passwordSalt) {
+      throw new BadRequestException(
+        "비밀번호 로그인이 설정되지 않은 계정입니다",
+      );
+    }
 
     const currentPassword = input?.currentPassword;
     if (typeof currentPassword !== "string" || !currentPassword) {
@@ -301,18 +435,7 @@ export class AuthService {
       throw new BadRequestException("New password must be different");
     }
 
-    const user = (await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: authUserFields,
-    })) as AuthUser | null;
-    if (!user?.email) {
-      throw new UnauthorizedException("Access token is invalid");
-    }
-    if (
-      !user.passwordHash ||
-      !user.passwordSalt ||
-      !(await this.passwordMatches(currentPassword, user))
-    ) {
+    if (!(await this.passwordMatches(currentPassword, user))) {
       throw new BadRequestException("Current password is incorrect");
     }
 
@@ -325,8 +448,14 @@ export class AuthService {
         where: { id: userId },
         select: authUserFields,
       })) as AuthUser | null;
-      if (!currentUser?.email) {
-        throw new UnauthorizedException("Access token is invalid");
+      if (
+        !currentUser?.email ||
+        !currentUser.passwordHash ||
+        !currentUser.passwordSalt
+      ) {
+        throw new BadRequestException(
+          "비밀번호 로그인이 설정되지 않은 계정입니다",
+        );
       }
       if (
         currentUser.passwordHash !== user.passwordHash ||
@@ -566,10 +695,7 @@ export class AuthService {
       where: { id: userId },
       data,
       select: publicUserFields,
-    })) as AuthUser;
-    if (!user.email) {
-      throw new UnauthorizedException("Access token is invalid");
-    }
+    })) as PublicAuthUserSource;
     return this.toPublicUser(user);
   }
 
@@ -598,6 +724,34 @@ export class AuthService {
   ): Promise<void> {
     const lockKey = `auth_sessions:${userId}`;
     await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  }
+
+  private async lockSocialIdentity(
+    client: Pick<AuthSessionClient, "$executeRaw">,
+    provider: string,
+    providerAccountId: string,
+  ): Promise<void> {
+    const lockKey = `social_identity:${provider}:${providerAccountId}`;
+    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  }
+
+  private async findSocialAccount(
+    client: Pick<AuthSessionClient, "userAccount">,
+    provider: string,
+    providerAccountId: string,
+  ): Promise<SocialAccountRow | null> {
+    return (await client.userAccount.findUnique({
+      where: {
+        provider_providerAccountId: { provider, providerAccountId },
+      },
+      select: {
+        id: true,
+        email: true,
+        user: {
+          select: { ...publicUserFields, deletedAt: true },
+        },
+      },
+    })) as SocialAccountRow | null;
   }
 
   private async createAuthUser(
@@ -633,8 +787,8 @@ export class AuthService {
     const user = (await this.prisma.user.findUnique({
       where: { id },
       select: { ...publicUserFields, deletedAt: true },
-    })) as (AuthUser & { deletedAt: Date | null }) | null;
-    if (!user || user.deletedAt || !user.email) {
+    })) as (PublicAuthUserSource & { deletedAt: Date | null }) | null;
+    if (!user || user.deletedAt) {
       return null;
     }
     return this.toPublicUser(user);
@@ -666,6 +820,9 @@ export class AuthService {
     password: string,
     user: AuthUser,
   ): Promise<boolean> {
+    if (!user.passwordHash || !user.passwordSalt) {
+      return false;
+    }
     const candidate = Buffer.from(
       await this.hashPassword(password, user.passwordSalt),
       "base64url",
@@ -863,6 +1020,10 @@ export class AuthService {
     return value.trim();
   }
 
+  private randomSocialDisplayName(): string {
+    return `사용자#${randomBytes(3).toString("hex").toUpperCase()}`;
+  }
+
   private profileBio(value: unknown): string {
     if (typeof value !== "string") {
       throw new BadRequestException("bio must be a string");
@@ -896,7 +1057,7 @@ export class AuthService {
     }
   }
 
-  private toPublicUser(user: AuthUser): PublicAuthUser {
+  private toPublicUser(user: PublicAuthUserSource): PublicAuthUser {
     return {
       id: user.id,
       displayName: user.displayName,
@@ -904,22 +1065,17 @@ export class AuthService {
       ...(user.profileImageUrl
         ? { profileImageUrl: user.profileImageUrl }
         : {}),
-      email: user.email,
+      email:
+        user.email ??
+        user.userAccounts?.find((account) => account.email)?.email ??
+        null,
     };
   }
 
   private toPublicUserFromRefresh(row: RefreshTokenRow): PublicAuthUser {
-    if (!row.user?.email) {
+    if (!row.user) {
       throw new UnauthorizedException("Refresh token is invalid");
     }
-    return {
-      id: row.user.id,
-      displayName: row.user.displayName,
-      bio: row.user.bio,
-      ...(row.user.profileImageUrl
-        ? { profileImageUrl: row.user.profileImageUrl }
-        : {}),
-      email: row.user.email,
-    };
+    return this.toPublicUser(row.user);
   }
 }
