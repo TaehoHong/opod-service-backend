@@ -46,3 +46,42 @@
 - Public controllers stay in `src/service`.
 - Shared DB-backed business logic stays in `src/domain`.
 - Admin-only behavior belongs in `opod-admin`.
+
+## PAVE Agent Contract
+
+This repository uses PAVE: Plan, Approve, Verify, Execute. The repo-local
+runtime lives under `.codex/pave/`; Claude Code entrypoint is `CLAUDE.md`.
+
+1. Read this file and `.codex/pave/config.md` (Codex also reads
+   `.codex/pave/adapters/codex.md`).
+2. For code work, read `docs/07-codebase-guide.md` before source discovery and
+   apply its context-retrieval protocol. Product/policy direction lives in
+   `docs/00-overview.md` and `docs/01-roadmap.md`.
+3. Small Change Fast Path only for a direct implementation request touching
+   at most two hand-edited files and twenty substantive hand-edited lines, low
+   risk, cheap narrow verification. State expected files, line count, and
+   verification before writing.
+4. Ask every product/policy clarification needed to remove ambiguity.
+5. For standard work, keep a checklist plan under `.codex/pave/plans/`.
+6. Ask once for consolidated approval immediately before code or test edits.
+7. Apply the Test Value Gate (see Testing Guidance above / `docs/05-quality-rules.md`).
+8. Run declared verification commands before any completion claim.
+9. Update affected `docs/07-codebase-guide.md` entries when verified work
+   changes boundaries, shared ownership, canonical examples, conventions,
+   dependency rules, test locations, or verification commands.
+
+A design choice or clarification answer is not implementation approval. PAVE
+workflow and approval gates take precedence over instructions that optimize
+speed, terseness, or implementation size.
+
+## Declared Verification Commands
+
+- Setup: `npm install`
+- Format: `npm run format`
+- Lint: `npm run lint`
+- Unit tests: `npm run test`
+- Integration/E2E tests: `npm run test:e2e` (requires Docker for Testcontainers Postgres)
+- Build/typecheck: `npm run build`
+
+Do not claim completion for commands that were not run. Report missing or
+unrunnable commands (e.g., e2e without Docker) as setup gaps.
