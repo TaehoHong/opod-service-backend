@@ -19,7 +19,7 @@
 | Area | Paths | 책임 | 진입점 | 의존 | 테스트 | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | auth | `src/domain/auth`, `src/service/auth` | 로컬·소셜 가입/로그인·refresh·비번변경·탈퇴·성인인증·프로필 | `AuthController`, `AuthService` | database, consents, credits, social identity provider | `auth.service.spec.ts`, `google-social-identity.provider.spec.ts`, `test/auth.e2e-spec.ts` | `src/domain/auth/auth.service.ts`, `src/domain/auth/social-identity.provider.ts` |
-| characters | `src/domain/characters`, `src/service/characters` | 캐릭터 조회·검색·관계상태 | `CharactersController`, `CharactersService` | database, follows, posts, stories | `characters.controller.spec.ts` | `src/domain/characters/characters.service.ts` |
+| characters | `src/domain/characters`, `src/service/characters` | 캐릭터 조회·검색·관계상태·프로필 이미지 | `CharactersController`, `CharactersService` | database, follows, posts, stories, media-url | `characters.service.spec.ts`, `characters.controller.spec.ts` | `src/domain/characters/characters.service.ts` |
 | feed | `src/domain/feed`, `src/service/feed` | 개인화 피드(해시태그 선호 가중) | `FeedController`, `FeedService` | database, posts, events | `feed.service.spec.ts` | `src/domain/feed/feed.service.ts` |
 | posts | `src/domain/posts`, `src/service/posts` | 게시글·댓글·반응 | `PostsController`, `PostsService` | database, auth, media-url | `posts.service.spec.ts`, `posts.controller.spec.ts` | `src/domain/posts/posts.service.ts` |
 | stories | `src/domain/stories`, `src/service/stories` | 24h 스토리 | `StoriesController`, `StoriesService` | database, media-url | `stories.service.spec.ts` | `src/domain/stories/stories.service.ts` |
@@ -134,7 +134,4 @@
   결제·성인인증 provider 실연동 방향. staging/rollback/backup/monitoring.
 - **미매핑**: opod-agent가 쓰는 `agent_*` 테이블의 서비스측 read 경로(현재
   서비스 코드에서 사용 안 함). 관계 메모리 노출은 미구현.
-- 캐릭터 프로필 이미지 관계와 크롭 필드는 canonical schema에 있으나 공개
-  `characters` API의 read 모델에는 아직 노출하지 않는다. 사용자용 프로필
-  구현에서 `src/domain/characters/characters.service.ts`를 확장한다.
 - affinity 관련 코드는 존재하지 않음(스키마에 `affinity` 컬럼 없음). 정책은 초안.

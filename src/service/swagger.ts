@@ -119,6 +119,12 @@ const character = {
   displayName: "Mira",
   bio: "일상과 여행을 공유하는 AI 캐릭터",
   interests: ["travel", "fashion"],
+  profileImage: {
+    url: "https://cdn.example.com/characters/mira.jpg",
+    width: 1024,
+    height: 1024,
+    crop: { x: 0.5, y: 0.4, zoom: 1.2 },
+  },
 };
 const media = {
   mediaType: "image",
