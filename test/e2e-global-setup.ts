@@ -23,7 +23,7 @@ export default async function globalSetup(): Promise<void> {
     mkdirSync(dirname(envFilePath), { recursive: true });
     writeFileSync(envFilePath, JSON.stringify({ DATABASE_URL: databaseUrl }));
 
-    execFileSync("npx", ["prisma", "db", "push"], {
+    execFileSync("npx", ["prisma", "migrate", "deploy"], {
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: "inherit",
     });

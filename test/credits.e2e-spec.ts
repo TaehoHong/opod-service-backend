@@ -5,6 +5,8 @@ import request from "supertest";
 import { AppModule } from "../src/app.module";
 import { CreditsService } from "../src/domain/credits/credits.service";
 import { PrismaService } from "../src/domain/database/prisma.service";
+import { PaymentsService } from "../src/domain/payments/payments.service";
+import { PurchasesService } from "../src/domain/purchases/purchases.service";
 import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
 import { registerHuman } from "./human-auth";
 
@@ -12,6 +14,8 @@ describe("credits, purchases and payments", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let credits: CreditsService;
+  let payments: PaymentsService;
+  let purchases: PurchasesService;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -22,6 +26,8 @@ describe("credits, purchases and payments", () => {
     await app.init();
     prisma = app.get(PrismaService);
     credits = app.get(CreditsService);
+    payments = app.get(PaymentsService);
+    purchases = app.get(PurchasesService);
   });
 
   afterAll(() => app.close());
@@ -35,6 +41,72 @@ describe("credits, purchases and payments", () => {
       },
     });
   }
+
+  it("serves the active database product catalog with web prices", async () => {
+    const response = await request(app.getHttpServer())
+      .get("/purchases/products?channel=web")
+      .expect(200);
+
+    expect(response.body.items).toEqual([
+      expect.objectContaining({
+        id: "credits_500",
+        creditAmount: 500,
+        providerProductId: "credits_500",
+        priceAmount: 4900,
+        currency: "KRW",
+      }),
+      expect.objectContaining({ id: "credits_1050", priceAmount: 9900 }),
+      expect.objectContaining({ id: "credits_3300", priceAmount: 29000 }),
+      expect.objectContaining({ id: "credits_5750", priceAmount: 49000 }),
+    ]);
+  });
+
+  it("blocks new sales after deactivation while replaying an existing checkout", async () => {
+    const human = await registerHuman(app);
+    const idempotencyKey = `checkout-${randomUUID()}`;
+    const first = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    const product = await prisma.creditProduct.findUniqueOrThrow({
+      where: { code: "credits_500" },
+    });
+
+    await prisma.creditProduct.update({
+      where: { id: product.id },
+      data: { isActive: false },
+    });
+    try {
+      const products = await request(app.getHttpServer())
+        .get("/purchases/products?channel=web")
+        .expect(200);
+      expect(products.body.items).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "credits_500" }),
+        ]),
+      );
+      const replay = await request(app.getHttpServer())
+        .post("/purchases/checkouts")
+        .set(human.authHeaders)
+        .set("Idempotency-Key", idempotencyKey)
+        .send({ productId: "credits_500" })
+        .expect(201);
+      expect(replay.body.id).toBe(first.body.id);
+      await request(app.getHttpServer())
+        .post("/purchases/checkouts")
+        .set(human.authHeaders)
+        .set("Idempotency-Key", `checkout-${randomUUID()}`)
+        .send({ productId: "credits_500" })
+        .expect(409);
+    } finally {
+      await prisma.creditProduct.update({
+        where: { id: product.id },
+        data: { isActive: true },
+      });
+    }
+  });
 
   it("records a captured action in the immutable ledger with its grant source", async () => {
     const human = await registerHuman(app);
@@ -149,6 +221,100 @@ describe("credits, purchases and payments", () => {
     await expect(
       prisma.paymentLedger.count({
         where: { payment: { purchaseId: checkout.body.id }, type: "refund" },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("resumes internal refund finalization without requesting the provider twice", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+    const quote = await purchases.refundQuote(human.user.id, checkout.body.id);
+    const idempotencyKey = `refund-${randomUUID()}`;
+    await prisma.creditRefund.create({
+      data: {
+        purchaseId: checkout.body.id,
+        provider: "local",
+        status: "payment_succeeded",
+        idempotencyKey,
+        creditAmount: quote.refundableCredits,
+        promotionAmount: quote.promotionRecoveryCredits,
+        lockedAmount:
+          quote.refundableCredits + quote.remainingPromotionCredits,
+        recoveryAmount:
+          quote.refundableCredits + quote.promotionRecoveryCredits,
+        debtAmount: quote.expectedDebtIncrease,
+        grossAmount: quote.grossAmount,
+        feeAmount: quote.feeAmount,
+        refundAmount: quote.refundAmount,
+        currency: quote.currency,
+        providerRefundId: `provider-refund-${randomUUID()}`,
+      },
+    });
+    const requestRefund = jest.spyOn(payments, "requestRefund");
+
+    const completed = await purchases.requestRefund({
+      userId: human.user.id,
+      purchaseId: checkout.body.id,
+      idempotencyKey,
+    });
+
+    expect(completed.status).toBe("completed");
+    expect(requestRefund).not.toHaveBeenCalled();
+    requestRefund.mockRestore();
+  });
+
+  it("serializes concurrent reversal events for the same payment", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+    const verify = jest
+      .spyOn(payments, "verifyEvent")
+      .mockResolvedValueOnce({
+        eventId: `reversal-${randomUUID()}`,
+        type: "reversed",
+        purchaseId: checkout.body.id,
+        transactionId: checkout.body.id,
+        occurredAt: new Date(),
+      })
+      .mockResolvedValueOnce({
+        eventId: `reversal-${randomUUID()}`,
+        type: "reversed",
+        purchaseId: checkout.body.id,
+        transactionId: checkout.body.id,
+        occurredAt: new Date(),
+      });
+
+    await Promise.all([
+      purchases.applyProviderEvent("local", { body: Buffer.alloc(0), headers: {} }),
+      purchases.applyProviderEvent("local", { body: Buffer.alloc(0), headers: {} }),
+    ]);
+    verify.mockRestore();
+
+    await expect(
+      prisma.creditLedger.count({
+        where: { purchaseId: checkout.body.id, type: "refund_recovery" },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.paymentLedger.count({
+        where: { payment: { purchaseId: checkout.body.id }, type: "chargeback" },
       }),
     ).resolves.toBe(1);
   });
@@ -278,5 +444,32 @@ describe("credits, purchases and payments", () => {
         where: { externalReference: `credit_reservation:${reservation.id}` },
       }),
     ).resolves.toBe(0);
+  });
+
+  it("keeps concurrent reservation release and capture consistent", async () => {
+    const human = await registerHuman(app);
+    const reservation = await credits.reserveCredits({
+      userId: human.user.id,
+      actionType: "chat_reply",
+      reference: `reservation-${randomUUID()}`,
+    });
+
+    const [capture, release] = await Promise.allSettled([
+      credits.captureReservation({ reference: reservation.reference }),
+      credits.releaseReservation({ reference: reservation.reference }),
+    ]);
+    const stored = await prisma.creditReservation.findUniqueOrThrow({
+      where: { id: reservation.id },
+    });
+    const usageCount = await prisma.creditLedger.count({
+      where: { externalReference: `credit_reservation:${reservation.id}` },
+    });
+
+    expect(stored.status === "captured" ? usageCount : 0).toBe(usageCount);
+    if (stored.status === "released") {
+      expect(capture.status).toBe("rejected");
+    } else {
+      expect(release.status).toBe("fulfilled");
+    }
   });
 });

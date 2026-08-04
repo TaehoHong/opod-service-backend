@@ -3,10 +3,10 @@
 ## 0. 상태
 
 - 설계 승인 및 구현 지시: 2026-08-04
-- 소스 구현: 완료
-- 배포 마이그레이션: 완료 — 신규개발·기존 데이터 0건 전제
+- 소스 구현: 재작업 진행 중 — 2026-08-04 전체 감사 발견사항 반영
+- 배포 마이그레이션: 재생성 예정 — 신규개발·기존 데이터 0건 전제
 - 대상: `opod-service-backend`의 사용자용 API, 도메인 로직, canonical Prisma schema
-- 제외: iOS/Android 클라이언트, 웹 프론트엔드, 관리자 API/UI, 실제 PG 정산 입금 대사
+- 제외: iOS/Android 클라이언트, 웹 프론트엔드, 실제 PG 정산 입금 대사
 - blocking decision: 0개
 
 ## 1. 목표
@@ -64,6 +64,21 @@
 | D-09 | 실제 PG 정산은 이후 추가하며 현재는 대사 가능한 식별자/금전 원장을 보존한다. | user-confirmed       | active |
 | D-10 | success redirect가 아니라 검증된 provider 결과만 지급 근거다.                | externally-evidenced | active |
 | D-11 | Store 환불/취소/차지백은 Web 50%/5% 정책을 적용하지 않는다.                  | user-confirmed       | active |
+| D-12 | 상품·지급량·채널별 외부 상품 ID는 DB에서 관리하고 Admin에서 수정한다.       | user-confirmed       | active |
+| D-13 | 결제 credential·webhook secret은 DB 상품 설정과 분리해 배포 secret으로 둔다. | externally-evidenced | active |
+| D-14 | 상품 카탈로그와 판매 채널 매핑은 전용 2테이블로 두고 중복 설정 테이블은 만들지 않는다. | user-confirmed | active |
+| D-15 | Web 기본 PG는 기존 `admin_settings` 키를 재사용하고 변경 감사는 `console_logs`를 재사용한다. | repo-evidenced | active |
+| D-16 | canonical schema 변경과 동시에 `opod-admin` 미러·조회·관리 기능을 동기화한다. | user-confirmed | active |
+
+## 4.1 2026-08-04 재감사 수정 범위
+
+- `credit_products`, `payment_product_mappings`를 추가하고 기존 8개 회계 테이블은 유지한다.
+- 구매는 상품 FK와 구매 당시 credit/금액/통화/provider 상품 ID snapshot을 함께 보존한다.
+- 상품 비활성화·가격/매핑 변경은 새 구매에만 적용하고 기존 결제·환불에는 영향을 주지 않는다.
+- provider event, 사용자 환불, credit reservation 상태 전이는 동일한 advisory lock과 조건부 갱신을 사용한다.
+- PG 환불 성공 후 내부 finalize는 중단되어도 같은 환불 ID로 재개할 수 있다.
+- Google Pub/Sub OIDC는 audience, expected service-account email, email_verified를 모두 검증한다.
+- `opod-admin`은 새 canonical schema로 전환하고 상품 관리·결제/크레딧 통합 조회를 DB pagination으로 제공한다.
 
 ## 5. 도메인과 의존 방향
 
@@ -365,3 +380,78 @@ drift 11건은 backend-only 범위 밖이라 수정하지 않았다.
 사용자는 2026-08-04 정산 기능을 차후 확장할 수 있으면 현재 설계로 진행하라고
 명시했다. 실제 정산 기능은 deferred이며, 대사용 `payment_ledger` 식별자를 현재
 extension boundary로 유지한다.
+
+## 13. 2026-08-04 다른 기기 세션 인계 체크포인트 (WIP)
+
+이 절은 위 Slice 1~4 완료 이후 시작한 **DB 기반 상품 카탈로그 및 결제 설정
+리팩터링**의 중간 상태를 기록한다. 현재 브랜치를 최종 완료 상태로 간주하면 안 된다.
+
+### 이번 체크포인트에 포함된 변경
+
+- `credit_products`, `payment_product_mappings`를 상품과 채널별 외부 상품 매핑의
+  canonical DB로 추가했다.
+- `CreditPurchase`는 `creditProductId` FK와 구매 당시 `productId` snapshot을 함께
+  보존한다.
+- Web 결제 provider는 `admin_settings.payments.webProvider`에서 읽고, 설정 부재 시
+  production은 Polar, 그 외 환경은 local로 fallback한다.
+- provider secret은 DB가 아니라 배포 환경 secret으로 계속 관리한다.
+- 구매 상품 조회와 checkout은 활성 DB 상품/매핑을 사용하며, 이미 생성된 멱등
+  checkout 재시도는 저장된 payment snapshot을 사용한다.
+- PG 네트워크 호출을 장기 DB transaction 밖으로 분리하고 checkout claim/recovery를
+  추가했다.
+- credit reservation release/capture와 payment event 처리에 사용자/payment advisory
+  lock과 조건부 상태 전이를 적용했다.
+- refund는 `payment_succeeded` 중간 상태를 저장해 PG 환불 성공 후 내부 반영 실패를
+  재개할 수 있고, 환불 외부 ID uniqueness를 provider scope로 변경했다.
+- Google Play 검증에 quantity, Pub/Sub JWT audience, service-account email,
+  `email_verified` 검증을 추가했다.
+- 하드코딩된 credit package 목록과 낮은 가치의 문서 개수 검증 테스트를 제거했다.
+- E2E DB 초기화는 `prisma db push` 대신 `prisma migrate deploy`를 사용한다.
+
+### 신규 migration과 초기 데이터 정책
+
+- `20260804035605_credit_product_catalog`
+  - 신규 개발 전제에 따라 credit 상품 4개와 development용 local Web 매핑을 seed한다.
+  - production provider 매핑은 seed하지 않고 Admin에서 설정해야 한다.
+- `20260804041000_refund_provider_identity`
+  - `credit_refunds.provider`를 추가하고 `(provider, providerRefundId)`를 unique key로 쓴다.
+- 사용자는 기존 운영 데이터가 한 건도 없는 신규 개발이라고 확인했다.
+
+### 확인된 검증 결과
+
+- `npm run db:generate` 통과
+- 임시 빈 DB에서 migration 19개 `npm run db:migrate:deploy` 통과
+- 상품 카탈로그 변경 직후 credits E2E 9개 통과
+- `google-play-iap.provider.spec.ts` 2개 통과
+- refund 상태 타입 수정 후 `npm run build` 통과
+
+아래 추가 E2E 사례를 작성한 뒤 실행하던 중 세션 인계 요청으로 중단했다. 따라서
+현재 소스 기준의 credits E2E 및 전체 검증 결과는 아직 확정되지 않았다.
+
+- 상품 비활성화 시 신규 판매 차단과 기존 checkout replay 허용
+- PG 환불 성공 후 내부 finalize 재개
+- concurrent reversal exactly-once
+- reservation release/capture 동시성 일관성
+
+### 다음 세션에서 우선 진행할 작업
+
+1. 백엔드에서 `npm run build`를 다시 실행한다.
+2. `npm run test:e2e -- --runInBand test/credits.e2e-spec.ts`를 실행하고 신규 동시성/
+   복구 테스트 실패를 수정한다.
+3. `npm run format`, `npm run lint`, `npm run test`, `npm run test:e2e`,
+   `npm run build` 전체 검증을 완료한다.
+4. `opod-admin`의 Prisma mirror를 신규 backend schema/migration과 동기화한다.
+5. Admin에 상품/채널 매핑 CRUD, Web provider 설정, `console_logs` 감사 기록을 구현한다.
+6. Admin 결제·크레딧 조회/검색/필터/정렬과 향후 정산 query가 신규 테이블 및 index를
+   사용하도록 재점검한다.
+7. 양쪽 저장소의 정책/API/codebase guide를 최종 구현과 동기화한다.
+
+### 인계 시 주의점
+
+- `opod-admin`은 이 체크포인트에서 수정하지 않았으므로 현재 clean 상태다.
+- Admin Prisma mirror를 동기화하기 전에는 backend 신규 schema와 불일치한다.
+- production 상품 매핑이 없으면 production Web 상품 조회/checkout이 불가능하다.
+- provider 선택처럼 운영자가 바꾸는 비밀 아닌 설정만 DB에 두며, API key·webhook
+  secret·service-account private key는 환경 secret에 둔다.
+- 정산 테이블/API는 아직 구현하지 않았다. 현재 payment/provider transaction/index가
+  추후 settlement item 연결 지점이다.

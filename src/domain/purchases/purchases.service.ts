@@ -11,12 +11,6 @@ import { decodeCursor, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
 import { PaymentEvent } from "../payments/payment-provider";
 import { PaymentsService } from "../payments/payments.service";
-import {
-  creditProducts,
-  CreditProductId,
-  isCreditProductId,
-  providerProductId,
-} from "./credit-products";
 
 type Tx = Prisma.TransactionClient;
 
@@ -28,19 +22,32 @@ export class PurchasesService {
     private readonly credits: CreditsService,
   ) {}
 
-  listProducts(channel: "web" | "apple" | "google") {
-    return Object.entries(creditProducts).flatMap(([id, product]) => {
-      const externalId = providerProductId(id as CreditProductId, channel);
-      return externalId
-        ? [
-            {
-              id,
-              creditAmount: product.creditAmount,
-              providerProductId: externalId,
-            },
-          ]
-        : [];
+  async listProducts(channel: "web" | "apple" | "google") {
+    const provider = await this.payments.providerForChannel(channel);
+    const mappings = await this.prisma.paymentProductMapping.findMany({
+      where: {
+        channel,
+        provider: provider.name,
+        environment: provider.environment,
+        isActive: true,
+        creditProduct: { isActive: true },
+      },
+      include: { creditProduct: true },
+      orderBy: [
+        { creditProduct: { displayOrder: "asc" } },
+        { creditProduct: { code: "asc" } },
+      ],
     });
+    return mappings.map((mapping) => ({
+      id: mapping.creditProduct.code,
+      name: mapping.creditProduct.name,
+      creditAmount: mapping.creditProduct.creditAmount,
+      providerProductId: mapping.providerProductId,
+      ...(mapping.priceAmount !== null
+        ? { priceAmount: mapping.priceAmount }
+        : {}),
+      ...(mapping.currency ? { currency: mapping.currency } : {}),
+    }));
   }
 
   accountToken(userId: string) {
@@ -67,17 +74,28 @@ export class PurchasesService {
     successUrl?: string;
     returnUrl?: string;
   }) {
-    if (!isCreditProductId(input.productId)) {
-      throw new BadRequestException("Unknown credit product");
-    }
     const idempotencyKey = input.idempotencyKey.trim();
     if (!idempotencyKey)
       throw new BadRequestException("Idempotency-Key is required");
-    const provider = this.payments.webProvider();
-    const externalProduct = providerProductId(input.productId, "web");
-    if (!externalProduct)
-      throw new ConflictException("Credit product is unavailable");
-    const product = creditProducts[input.productId];
+
+    const existing = await this.prisma.creditPurchase.findUnique({
+      where: {
+        userId_idempotencyKey: { userId: input.userId, idempotencyKey },
+      },
+      include: { payment: true },
+    });
+    if (existing) {
+      if (existing.productId !== input.productId) {
+        throw new ConflictException("Idempotency key conflict");
+      }
+      return this.ensureCheckout(existing, input);
+    }
+
+    const { product, mapping, provider } = await this.resolveProduct(
+      input.productId,
+      "web",
+    );
+    const externalProduct = mapping.providerProductId;
 
     const purchase = await this.prisma.$transaction(async (tx) => {
       await this.lockPaymentReference(
@@ -85,21 +103,22 @@ export class PurchasesService {
         "checkout",
         `${input.userId}:${idempotencyKey}`,
       );
-      const existing = await tx.creditPurchase.findUnique({
+      const raced = await tx.creditPurchase.findUnique({
         where: {
           userId_idempotencyKey: { userId: input.userId, idempotencyKey },
         },
         include: { payment: true },
       });
-      if (existing) {
-        if (existing.productId !== input.productId) {
+      if (raced) {
+        if (raced.productId !== input.productId) {
           throw new ConflictException("Idempotency key conflict");
         }
-        return existing;
+        return raced;
       }
       return tx.creditPurchase.create({
         data: {
           userId: input.userId,
+          creditProductId: product.id,
           productId: input.productId,
           creditAmount: product.creditAmount,
           idempotencyKey,
@@ -108,49 +127,15 @@ export class PurchasesService {
               channel: "web",
               provider: provider.name,
               providerProductId: externalProduct,
-              amount: product.paidAmount,
-              currency: product.currency,
+              amount: mapping.priceAmount,
+              currency: mapping.currency,
             },
           },
         },
         include: { payment: true },
       });
     });
-
-    return this.prisma.$transaction(async (tx) => {
-      await this.lockPaymentReference(tx, "checkout", purchase.id);
-      const current = await tx.creditPurchase.findUniqueOrThrow({
-        where: { id: purchase.id },
-        include: { payment: true },
-      });
-      if (current.payment?.providerCheckoutId) {
-        return {
-          ...this.toPurchase(current),
-          checkoutUrl: current.payment.providerCheckoutUrl,
-        };
-      }
-      const checkoutInput = {
-        purchaseId: purchase.id,
-        userId: input.userId,
-        providerProductId: externalProduct,
-        successUrl: input.successUrl,
-        returnUrl: input.returnUrl,
-      };
-      const checkout =
-        (await this.payments.findCheckout(provider.name, checkoutInput)) ??
-        (await this.payments.createCheckout(provider.name, checkoutInput));
-      const payment = await tx.payment.update({
-        where: { purchaseId: purchase.id },
-        data: {
-          providerCheckoutId: checkout.checkoutId,
-          providerCheckoutUrl: checkout.checkoutUrl,
-        },
-      });
-      return {
-        ...this.toPurchase({ ...current, payment }),
-        checkoutUrl: checkout.checkoutUrl,
-      };
-    });
+    return this.ensureCheckout(purchase, input);
   }
 
   async verifyInApp(input: {
@@ -159,12 +144,11 @@ export class PurchasesService {
     productId: string;
     proof: string;
   }) {
-    if (!isCreditProductId(input.productId)) {
-      throw new BadRequestException("Unknown credit product");
-    }
-    const externalProduct = providerProductId(input.productId, input.channel);
-    if (!externalProduct)
-      throw new ConflictException("Credit product is unavailable");
+    const { product, mapping } = await this.resolveProduct(
+      input.productId,
+      input.channel,
+    );
+    const externalProduct = mapping.providerProductId;
     const token = this.accountToken(input.userId)[input.channel];
     const verified = await this.payments.verifyPurchase(input.channel, {
       proof: input.proof,
@@ -194,10 +178,10 @@ export class PurchasesService {
         }
         return this.toPurchase({ ...existing.purchase, payment: existing });
       }
-      const product = creditProducts[input.productId as CreditProductId];
       const purchase = await tx.creditPurchase.create({
         data: {
           userId: input.userId,
+          creditProductId: product.id,
           productId: input.productId,
           status: "completed",
           creditAmount: product.creditAmount,
@@ -277,18 +261,21 @@ export class PurchasesService {
     purchaseId: string;
     idempotencyKey: string;
   }) {
-    const refund = await this.prisma.$transaction(async (tx) => {
+    const idempotencyKey = input.idempotencyKey.trim();
+    if (!idempotencyKey)
+      throw new BadRequestException("Idempotency-Key is required");
+    const prepared = await this.prisma.$transaction(async (tx) => {
       await this.lockUser(tx, input.userId);
       const existing = await tx.creditRefund.findUnique({
         where: {
           purchaseId_idempotencyKey: {
             purchaseId: input.purchaseId,
-            idempotencyKey: input.idempotencyKey,
+            idempotencyKey,
           },
         },
         include: { purchase: { include: { payment: true } } },
       });
-      if (existing) return existing;
+      if (existing) return { refund: existing, isNew: false };
       const quote = await this.refundQuoteWithClient(
         tx,
         input.userId,
@@ -296,11 +283,12 @@ export class PurchasesService {
       );
       if (!quote.eligible)
         throw new ConflictException("Refund is not eligible");
-      return tx.creditRefund.create({
+      const refund = await tx.creditRefund.create({
         data: {
           purchaseId: input.purchaseId,
-          idempotencyKey: input.idempotencyKey,
+          idempotencyKey,
           status: "payment_processing",
+          provider: quote.provider,
           creditAmount: quote.refundableCredits,
           promotionAmount: quote.promotionRecoveryCredits,
           lockedAmount:
@@ -316,8 +304,13 @@ export class PurchasesService {
         },
         include: { purchase: { include: { payment: true } } },
       });
+      return { refund, isNew: true };
     });
-    if (refund.providerRefundId) {
+    const refund = prepared.refund;
+    if (refund.status === "payment_succeeded") {
+      return this.completeRefund(refund.id);
+    }
+    if (!prepared.isNew || refund.providerRefundId) {
       return this.prisma.creditRefund.findUniqueOrThrow({
         where: { id: refund.id },
       });
@@ -331,17 +324,17 @@ export class PurchasesService {
         amount: refund.refundAmount,
         refundId: refund.id,
       });
+      const status =
+        result.status === "succeeded"
+          ? "payment_succeeded"
+          : result.status === "processing"
+            ? "payment_processing"
+            : result.status;
       await this.prisma.creditRefund.update({
         where: { id: refund.id },
-        data: { providerRefundId: result.providerRefundId },
+        data: { providerRefundId: result.providerRefundId, status },
       });
       if (result.status === "succeeded") return this.completeRefund(refund.id);
-      if (result.status === "failed" || result.status === "canceled") {
-        return this.prisma.creditRefund.update({
-          where: { id: refund.id },
-          data: { status: result.status },
-        });
-      }
       return this.prisma.creditRefund.findUniqueOrThrow({
         where: { id: refund.id },
       });
@@ -404,6 +397,12 @@ export class PurchasesService {
       });
     }
     if (!payment) throw new NotFoundException("Payment not found");
+    await this.lockUser(tx, payment.purchase.userId);
+    await this.lockPaymentReference(tx, provider, payment.id);
+    payment = await tx.payment.findUniqueOrThrow({
+      where: { id: payment.id },
+      include: { purchase: true },
+    });
     await tx.paymentProviderEvent.update({
       where: { id: inbox.id },
       data: { paymentId: payment.id },
@@ -538,6 +537,7 @@ export class PurchasesService {
         idempotencyKey: `provider:${event.eventId}`,
         status: "completed",
         reason: "provider_reversal",
+        provider: payment.provider,
         creditAmount: snapshot.originalPaid,
         promotionAmount: snapshot.originalPromotion,
         lockedAmount: locked,
@@ -595,7 +595,15 @@ export class PurchasesService {
     refundId: string,
     event?: PaymentEvent,
   ) {
-    const refund = await tx.creditRefund.findUniqueOrThrow({
+    let refund = await tx.creditRefund.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { purchase: { include: { payment: true } } },
+    });
+    const initialPayment = refund.purchase.payment;
+    if (!initialPayment) throw new ConflictException("Payment not found");
+    await this.lockUser(tx, refund.purchase.userId);
+    await this.lockPaymentReference(tx, initialPayment.provider, initialPayment.id);
+    refund = await tx.creditRefund.findUniqueOrThrow({
       where: { id: refundId },
       include: { purchase: { include: { payment: true } } },
     });
@@ -685,6 +693,7 @@ export class PurchasesService {
     const paidBalance = await this.credits.getPaidBalanceWithClient(tx, userId);
     return {
       purchaseId,
+      provider: purchase.payment.provider,
       currency: purchase.payment.currency ?? "KRW",
       originalCredits: originalEligibleCredits,
       remainingCredits: remainingEligibleCredits,
@@ -733,5 +742,102 @@ export class PurchasesService {
 
   private async lockPaymentReference(tx: Tx, provider: string, key: string) {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`payment:${provider}:${key}`}, 0))`;
+  }
+
+  private async ensureCheckout(
+    purchase: Prisma.CreditPurchaseGetPayload<{ include: { payment: true } }>,
+    input: {
+      userId: string;
+      successUrl?: string;
+      returnUrl?: string;
+    },
+  ) {
+    if (!purchase.payment) throw new ConflictException("Payment not found");
+    if (purchase.payment.providerCheckoutId) {
+      return {
+        ...this.toPurchase(purchase),
+        checkoutUrl: purchase.payment.providerCheckoutUrl,
+      };
+    }
+
+    const claimed = await this.prisma.payment.updateMany({
+      where: {
+        id: purchase.payment.id,
+        status: "pending",
+        providerCheckoutId: null,
+      },
+      data: { status: "processing" },
+    });
+    const checkoutInput = {
+      purchaseId: purchase.id,
+      userId: input.userId,
+      providerProductId: purchase.payment.providerProductId,
+      successUrl: input.successUrl,
+      returnUrl: input.returnUrl,
+    };
+    let checkout = await this.payments.findCheckout(
+      purchase.payment.provider,
+      checkoutInput,
+    );
+    if (!checkout) {
+      if (claimed.count === 0) {
+        const current = await this.prisma.payment.findUniqueOrThrow({
+          where: { id: purchase.payment.id },
+        });
+        if (Date.now() - current.updatedAt.getTime() < 30_000) {
+          throw new ConflictException("Checkout is being prepared");
+        }
+      }
+      checkout = await this.payments.createCheckout(
+        purchase.payment.provider,
+        checkoutInput,
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: purchase.payment!.id },
+        data: {
+          providerCheckoutId: checkout.checkoutId,
+          providerCheckoutUrl: checkout.checkoutUrl,
+        },
+      });
+      await tx.payment.updateMany({
+        where: { id: purchase.payment!.id, status: "processing" },
+        data: { status: "pending" },
+      });
+    });
+    const current = await this.prisma.creditPurchase.findUniqueOrThrow({
+      where: { id: purchase.id },
+      include: { payment: true },
+    });
+    return {
+      ...this.toPurchase(current),
+      checkoutUrl: current.payment?.providerCheckoutUrl ?? checkout.checkoutUrl,
+    };
+  }
+
+  private async resolveProduct(
+    code: string,
+    channel: "web" | "apple" | "google",
+  ) {
+    const product = await this.prisma.creditProduct.findUnique({
+      where: { code },
+    });
+    if (!product) throw new BadRequestException("Unknown credit product");
+    if (!product.isActive)
+      throw new ConflictException("Credit product is unavailable");
+    const provider = await this.payments.providerForChannel(channel);
+    const mapping = await this.prisma.paymentProductMapping.findFirst({
+      where: {
+        creditProductId: product.id,
+        channel,
+        provider: provider.name,
+        environment: provider.environment,
+        isActive: true,
+      },
+    });
+    if (!mapping)
+      throw new ConflictException("Credit product is unavailable");
+    return { product, mapping, provider };
   }
 }

@@ -26,11 +26,13 @@ export class PurchasesController {
   ) {}
 
   @Get("products")
-  listProducts(@Query("channel") channel: "web" | "apple" | "google" = "web") {
+  async listProducts(
+    @Query("channel") channel: "web" | "apple" | "google" = "web",
+  ) {
     if (!(["web", "apple", "google"] as string[]).includes(channel)) {
       throw new BadRequestException("Invalid purchase channel");
     }
-    return { items: this.purchases.listProducts(channel) };
+    return { items: await this.purchases.listProducts(channel) };
   }
 
   @Get("account-token")

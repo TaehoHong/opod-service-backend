@@ -16,6 +16,10 @@ export class PolarPaymentProvider implements PaymentProvider {
   readonly name = "polar";
   readonly channel = "web" as const;
 
+  get environment() {
+    return process.env.POLAR_SERVER === "sandbox" ? "sandbox" : "production";
+  }
+
   private client() {
     const accessToken = process.env.POLAR_ACCESS_TOKEN?.trim();
     if (!accessToken) {
@@ -23,7 +27,7 @@ export class PolarPaymentProvider implements PaymentProvider {
     }
     return new Polar({
       accessToken,
-      server: process.env.POLAR_SERVER === "sandbox" ? "sandbox" : "production",
+      server: this.environment,
     });
   }
 

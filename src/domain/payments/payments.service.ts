@@ -8,12 +8,14 @@ import { GooglePlayIapProvider } from "./google-play-iap.provider";
 import { LocalPaymentProvider } from "./local-payment.provider";
 import { PaymentChannel, PaymentProvider } from "./payment-provider";
 import { PolarPaymentProvider } from "./polar-payment.provider";
+import { PrismaService } from "../database/prisma.service";
 
 @Injectable()
 export class PaymentsService {
   private readonly providers: PaymentProvider[];
 
   constructor(
+    private readonly prisma: PrismaService,
     polar: PolarPaymentProvider,
     apple: AppleIapProvider,
     google: GooglePlayIapProvider,
@@ -22,9 +24,13 @@ export class PaymentsService {
     this.providers = [polar, apple, google, local];
   }
 
-  webProvider() {
+  async webProvider() {
+    const configured = await this.prisma.adminSetting.findUnique({
+      where: { key: "payments.webProvider" },
+      select: { value: true },
+    });
     const name =
-      process.env.PAYMENT_WEB_PROVIDER?.trim() ||
+      configured?.value.trim() ||
       (process.env.NODE_ENV === "production" ? "polar" : "local");
     return this.provider(name);
   }
@@ -38,7 +44,7 @@ export class PaymentsService {
     return provider;
   }
 
-  providerForChannel(channel: PaymentChannel) {
+  async providerForChannel(channel: PaymentChannel) {
     if (channel === "web") return this.webProvider();
     return this.providers.find((provider) => provider.channel === channel)!;
   }
@@ -65,7 +71,7 @@ export class PaymentsService {
     channel: "apple" | "google",
     input: Parameters<NonNullable<PaymentProvider["verifyPurchase"]>>[0],
   ) {
-    const provider = this.providerForChannel(channel);
+    const provider = await this.providerForChannel(channel);
     if (!provider.verifyPurchase) {
       throw new BadRequestException(
         "Provider does not support in-app purchases",

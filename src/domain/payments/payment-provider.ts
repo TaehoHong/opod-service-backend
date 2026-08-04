@@ -46,6 +46,7 @@ export type RefundResult = {
 export interface PaymentProvider {
   readonly name: string;
   readonly channel: PaymentChannel;
+  readonly environment: string;
   findCheckout?(input: CheckoutRequest): Promise<CheckoutResult | undefined>;
   createCheckout?(input: CheckoutRequest): Promise<CheckoutResult>;
   verifyPurchase?(input: {

@@ -14,12 +14,14 @@ type GoogleProductPurchase = {
   orderId?: string;
   purchaseTimeMillis?: string;
   obfuscatedExternalAccountId?: string;
+  quantity?: number;
 };
 
 @Injectable()
 export class GooglePlayIapProvider implements PaymentProvider {
   readonly name = "google_play";
   readonly channel = "google" as const;
+  readonly environment = "production";
 
   private packageName() {
     const value = process.env.GOOGLE_PLAY_PACKAGE_NAME?.trim();
@@ -57,7 +59,8 @@ export class GooglePlayIapProvider implements PaymentProvider {
     }
     if (
       purchase.purchaseState !== 0 ||
-      purchase.obfuscatedExternalAccountId !== input.expectedAccountToken
+      purchase.obfuscatedExternalAccountId !== input.expectedAccountToken ||
+      (purchase.quantity ?? 1) !== 1
     ) {
       throw new BadRequestException("Google Play purchase does not match user");
     }
@@ -83,14 +86,23 @@ export class GooglePlayIapProvider implements PaymentProvider {
   }): Promise<PaymentEvent> {
     const authorization = input.headers.authorization;
     const audience = process.env.GOOGLE_PLAY_PUBSUB_AUDIENCE?.trim();
-    if (!authorization?.startsWith("Bearer ") || !audience) {
+    const expectedEmail =
+      process.env.GOOGLE_PLAY_PUBSUB_SERVICE_ACCOUNT?.trim();
+    if (!authorization?.startsWith("Bearer ") || !audience || !expectedEmail) {
       throw new ForbiddenException("Invalid provider signature");
     }
     try {
-      await new OAuth2Client().verifyIdToken({
+      const ticket = await new OAuth2Client().verifyIdToken({
         idToken: authorization.slice(7),
         audience,
       });
+      const payload = ticket.getPayload();
+      if (
+        payload?.email !== expectedEmail ||
+        payload.email_verified !== true
+      ) {
+        throw new Error("Unexpected Pub/Sub identity");
+      }
     } catch {
       throw new ForbiddenException("Invalid provider signature");
     }

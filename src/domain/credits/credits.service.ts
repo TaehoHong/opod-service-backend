@@ -172,17 +172,33 @@ export class CreditsService {
   async releaseReservation(input: {
     reference: string;
   }): Promise<CreditReservationRecord> {
-    await this.prisma.creditReservation.updateMany({
-      where: { reference: input.reference, status: "reserved" },
-      data: { status: "released" },
-    });
-    const reservation = await this.prisma.creditReservation.findUnique({
+    const found = await this.prisma.creditReservation.findUnique({
       where: { reference: input.reference },
     });
-    if (!reservation) {
+    if (!found) {
       throw new BadRequestException("Credit reservation not found");
     }
-    return this.toReservation(reservation);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUserCredits(tx, found.userId);
+      const reservation = await tx.creditReservation.findUniqueOrThrow({
+        where: { reference: input.reference },
+      });
+      if (reservation.status !== "reserved") {
+        return this.toReservation(reservation);
+      }
+      const released = await tx.creditReservation.updateMany({
+        where: { id: reservation.id, status: "reserved" },
+        data: { status: "released" },
+      });
+      if (released.count === 0) {
+        return this.toReservation(
+          await tx.creditReservation.findUniqueOrThrow({
+            where: { id: reservation.id },
+          }),
+        );
+      }
+      return this.toReservation({ ...reservation, status: "released" });
+    });
   }
 
   async grantCredits(input: {

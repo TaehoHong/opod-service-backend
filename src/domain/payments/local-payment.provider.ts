@@ -9,6 +9,7 @@ import { PaymentEvent, PaymentProvider } from "./payment-provider";
 export class LocalPaymentProvider implements PaymentProvider {
   readonly name = "local";
   readonly channel = "web" as const;
+  readonly environment = "development";
 
   private assertAllowed() {
     if (process.env.NODE_ENV === "production") {

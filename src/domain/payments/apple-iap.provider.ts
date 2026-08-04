@@ -17,6 +17,12 @@ export class AppleIapProvider implements PaymentProvider {
   readonly name = "apple";
   readonly channel = "apple" as const;
 
+  get environment() {
+    return process.env.APPLE_ENVIRONMENT === "production"
+      ? "production"
+      : "sandbox";
+  }
+
   private verifier() {
     const bundleId = process.env.APPLE_BUNDLE_ID?.trim();
     const certificatePaths = process.env.APPLE_ROOT_CA_PATHS?.split(",")
@@ -25,7 +31,7 @@ export class AppleIapProvider implements PaymentProvider {
     if (!bundleId || !certificatePaths?.length) {
       throw new ServiceUnavailableException("Apple IAP is not configured");
     }
-    const production = process.env.APPLE_ENVIRONMENT === "production";
+    const production = this.environment === "production";
     const appAppleId = production
       ? Number(process.env.APPLE_APP_ID)
       : undefined;

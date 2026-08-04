@@ -689,9 +689,48 @@ model CreditLedger {
   @@schema("opod")
 }
 
+model CreditProduct {
+  id           String                  @id @default(uuid(7)) @db.Uuid
+  code         String                  @unique
+  name         String
+  creditAmount Int                     @map("credit_amount")
+  isActive     Boolean                 @default(true) @map("is_active")
+  displayOrder Int                     @default(0) @map("display_order")
+  createdAt    DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  mappings     PaymentProductMapping[]
+  purchases    CreditPurchase[]
+
+  @@index([isActive, displayOrder])
+  @@map("credit_products")
+  @@schema("opod")
+}
+
+model PaymentProductMapping {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  creditProductId   String         @map("credit_product_id") @db.Uuid
+  channel           PaymentChannel
+  provider          String
+  environment       String
+  providerProductId String         @map("provider_product_id")
+  priceAmount       Int?           @map("price_amount")
+  currency          String?
+  isActive          Boolean        @default(true) @map("is_active")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  creditProduct     CreditProduct  @relation(fields: [creditProductId], references: [id], onDelete: Restrict)
+
+  @@unique([creditProductId, channel, provider, environment])
+  @@unique([provider, environment, providerProductId])
+  @@index([channel, provider, environment, isActive])
+  @@map("payment_product_mappings")
+  @@schema("opod")
+}
+
 model CreditPurchase {
   id             String               @id @default(uuid(7)) @db.Uuid
   userId         String               @map("user_id") @db.Uuid
+  creditProductId String               @map("credit_product_id") @db.Uuid
   productId      String               @map("product_id")
   status         CreditPurchaseStatus @default(pending)
   creditAmount   Int                  @map("credit_amount")
@@ -700,12 +739,14 @@ model CreditPurchase {
   createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
   user           User                 @relation(fields: [userId], references: [id])
+  creditProduct  CreditProduct        @relation(fields: [creditProductId], references: [id], onDelete: Restrict)
   payment        Payment?
   ledger         CreditLedger[]
   refunds        CreditRefund[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
+  @@index([creditProductId, createdAt])
   @@index([status, createdAt])
   @@map("credit_purchases")
   @@schema("opod")
@@ -735,6 +776,8 @@ model Payment {
 
   @@unique([provider, providerCheckoutId])
   @@unique([provider, providerTransactionKey])
+  @@index([provider, providerTransactionId])
+  @@index([provider, status, createdAt])
   @@index([status, updatedAt])
   @@map("payments")
   @@schema("opod")
@@ -790,6 +833,7 @@ model CreditRefund {
   purchaseId            String             @map("purchase_id") @db.Uuid
   status                CreditRefundStatus @default(reserved)
   reason                String             @default("user_request")
+  provider              String
   idempotencyKey        String             @map("idempotency_key")
   creditAmount          Int                @map("credit_amount")
   promotionAmount       Int                @default(0) @map("promotion_amount")
@@ -808,7 +852,7 @@ model CreditRefund {
   purchase              CreditPurchase     @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
 
   @@unique([purchaseId, idempotencyKey])
-  @@unique([providerRefundId])
+  @@unique([provider, providerRefundId])
   @@index([purchaseId, status])
   @@index([status, createdAt])
   @@map("credit_refund")
