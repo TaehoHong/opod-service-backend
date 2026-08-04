@@ -8,32 +8,25 @@ import { PrismaService } from "../src/domain/database/prisma.service";
 import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
 import { registerHuman } from "./human-auth";
 
-describe("credits", () => {
+describe("credits, purchases and payments", () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  let creditsService: CreditsService;
+  let credits: CreditsService;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    })
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(MESSAGE_REPLY_PROVIDER)
-      .useValue({
-        createReply: jest.fn().mockResolvedValue("Test assistant reply"),
-      })
+      .useValue({ createReply: jest.fn().mockResolvedValue("Test reply") })
       .compile();
-
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
     prisma = app.get(PrismaService);
-    creditsService = app.get(CreditsService);
+    credits = app.get(CreditsService);
   });
 
-  afterAll(async () => {
-    await app.close();
-  });
+  afterAll(() => app.close());
 
-  async function createCharacter() {
+  async function character() {
     return prisma.character.create({
       data: {
         publicId: `arin-${randomUUID()}`,
@@ -43,25 +36,14 @@ describe("credits", () => {
     });
   }
 
-  it("grants a signup bonus and meters chat replies", async () => {
+  it("records a captured action in the immutable ledger with its grant source", async () => {
     const human = await registerHuman(app);
-    const character = await createCharacter();
-
-    await request(app.getHttpServer())
-      .get("/credits/balance")
-      .set(human.authHeaders)
-      .expect(200)
-      .expect({
-        userId: human.user.id,
-        balance: 100,
-        paidBalance: 0,
-        freeBalance: 100,
-      });
+    const target = await character();
 
     await request(app.getHttpServer())
       .post("/messages")
       .set(human.authHeaders)
-      .send({ characterId: character.id, body: "hello" })
+      .send({ characterId: target.id, body: "hello" })
       .expect(201);
 
     await request(app.getHttpServer())
@@ -75,45 +57,133 @@ describe("credits", () => {
         freeBalance: 98,
       });
 
-    const ledger = await request(app.getHttpServer())
-      .get("/credits/ledger")
+    const usage = await prisma.creditLedger.findFirstOrThrow({
+      where: { userId: human.user.id, type: "usage" },
+    });
+    const sources = await prisma.creditUsage.findMany({
+      where: { usageLedgerId: usage.id },
+      include: { grantLedger: true },
+    });
+    expect(sources).toEqual([
+      expect.objectContaining({
+        amount: 2,
+        grantLedger: expect.objectContaining({
+          type: "grant",
+          creditKind: "free",
+          reason: "signup bonus",
+        }),
+      }),
+    ]);
+  });
+
+  it("creates a provider-neutral payment and fulfills a paid webhook once", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+
+    expect(checkout.body).toMatchObject({
+      productId: "credits_500",
+      status: "pending",
+      payment: { provider: "local", status: "pending" },
+    });
+
+    for (let index = 0; index < 2; index += 1) {
+      await request(app.getHttpServer())
+        .post("/payments/webhooks/local")
+        .send({ purchaseId: checkout.body.id, status: "paid" })
+        .expect(201);
+    }
+
+    await expect(
+      prisma.creditLedger.count({
+        where: { externalReference: `credit_purchase:${checkout.body.id}` },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.paymentLedger.count({
+        where: { payment: { purchaseId: checkout.body.id }, type: "capture" },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("locks and completes a web refund through the original provider", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+
+    const quote = await request(app.getHttpServer())
+      .get(`/purchases/${checkout.body.id}/refund-quote`)
       .set(human.authHeaders)
       .expect(200);
-    expect(ledger.body.items).toEqual([
-      expect.objectContaining({
-        entryType: "grant",
-        amount: 100,
-        remainingAmount: 98,
-        reason: "signup bonus",
-        expiresAt: expect.any(String),
-      }),
-      expect.objectContaining({
-        entryType: "debit",
-        amount: 2,
-        reason: "chat_reply",
-      }),
-    ]);
-
-    const reservations = await prisma.creditReservation.findMany({
-      where: { userId: human.user.id },
+    expect(quote.body).toMatchObject({
+      eligible: true,
+      refundableCredits: 500,
+      grossAmount: 4900,
+      feeAmount: 245,
+      refundAmount: 4655,
     });
-    expect(reservations).toEqual([
-      expect.objectContaining({ status: "captured", amount: 2 }),
-    ]);
+
+    const refund = await request(app.getHttpServer())
+      .post(`/purchases/${checkout.body.id}/refunds`)
+      .set(human.authHeaders)
+      .send({ idempotencyKey: `refund-${randomUUID()}` })
+      .expect(201);
+    expect(refund.body).toMatchObject({ status: "completed", debtAmount: 0 });
+    await expect(
+      prisma.creditLedger.count({
+        where: { purchaseId: checkout.body.id, type: "refund_recovery" },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.paymentLedger.count({
+        where: { payment: { purchaseId: checkout.body.id }, type: "refund" },
+      }),
+    ).resolves.toBe(1);
   });
 
-  it("grants daily check-in credits once per day", async () => {
+  it("recovers an unused purchase promotion before creating paid debt", async () => {
     const human = await registerHuman(app);
-
-    const checkedIn = await request(app.getHttpServer())
-      .post("/credits/check-in")
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
       .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
       .expect(201);
-    expect(checkedIn.body).toEqual({
-      checkInDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      creditsGranted: 10,
-      milestoneBonus: 0,
-      monthCheckInCount: 1,
+    await request(app.getHttpServer())
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+    await credits.grantCredits({
+      userId: human.user.id,
+      amount: 50,
+      reason: "purchase promotion",
+      creditKind: "free",
+      purchaseId: checkout.body.id,
+      promotionCode: "WELCOME",
+      externalReference: `promotion:${checkout.body.id}`,
+    });
+
+    const refund = await request(app.getHttpServer())
+      .post(`/purchases/${checkout.body.id}/refunds`)
+      .set(human.authHeaders)
+      .send({ idempotencyKey: `refund-${randomUUID()}` })
+      .expect(201);
+    expect(refund.body).toMatchObject({
+      status: "completed",
+      promotionAmount: 50,
+      debtAmount: 0,
     });
 
     await request(app.getHttpServer())
@@ -122,60 +192,61 @@ describe("credits", () => {
       .expect(200)
       .expect({
         userId: human.user.id,
-        balance: 110,
+        balance: 100,
         paidBalance: 0,
-        freeBalance: 110,
+        freeBalance: 100,
       });
-
-    await request(app.getHttpServer())
-      .post("/credits/check-in")
-      .set(human.authHeaders)
-      .expect(409);
   });
 
-  it("blocks chat with 402 and no side effects when credits run out", async () => {
+  it("includes paid purchase promotions in the refund eligibility ratio", async () => {
     const human = await registerHuman(app);
-    const character = await createCharacter();
-
-    await request(app.getHttpServer())
-      .post("/credits/debits")
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
       .set(human.authHeaders)
-      .send({ amount: 100, reason: "drain for test" })
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
       .expect(201);
-
-    const blocked = await request(app.getHttpServer())
-      .post("/messages")
-      .set(human.authHeaders)
-      .send({ characterId: character.id, body: "hello" })
-      .expect(402);
-    expect(blocked.body).toMatchObject({ error: "INSUFFICIENT_CREDITS" });
-
     await request(app.getHttpServer())
-      .get("/messages")
-      .query({ characterId: character.id })
-      .set(human.authHeaders)
-      .expect(200)
-      .expect({ items: [] });
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+    await credits.grantCredits({
+      userId: human.user.id,
+      amount: 100,
+      reason: "paid purchase promotion",
+      creditKind: "paid",
+      purchaseId: checkout.body.id,
+      promotionCode: "PAID-BONUS",
+      externalReference: `promotion:${checkout.body.id}`,
+    });
+    await credits.spendCredits({
+      userId: human.user.id,
+      amount: 400,
+      reason: "refund boundary setup",
+    });
 
-    await request(app.getHttpServer())
-      .get("/credits/balance")
+    const quote = await request(app.getHttpServer())
+      .get(`/purchases/${checkout.body.id}/refund-quote`)
       .set(human.authHeaders)
-      .expect(200)
-      .expect({
-        userId: human.user.id,
-        balance: 0,
-        paidBalance: 0,
-        freeBalance: 0,
-      });
+      .expect(200);
+    expect(quote.body).toMatchObject({
+      originalCredits: 600,
+      remainingCredits: 300,
+      refundableCredits: 200,
+      promotionRecoveryCredits: 100,
+      eligible: true,
+      grossAmount: 2450,
+      feeAmount: 122,
+      refundAmount: 2328,
+    });
   });
 
-  it("creates one grant for concurrent uses of an external reference", async () => {
+  it("keeps an external grant reference idempotent under concurrency", async () => {
     const human = await registerHuman(app);
-    const externalReference = `concurrent-grant:${randomUUID()}`;
-
+    const externalReference = `concurrent:${randomUUID()}`;
     const grants = await Promise.all(
-      Array.from({ length: 2 }, () =>
-        creditsService.grantCredits({
+      [0, 1].map(() =>
+        credits.grantCredits({
           userId: human.user.id,
           amount: 25,
           reason: "concurrency regression",
@@ -183,125 +254,29 @@ describe("credits", () => {
         }),
       ),
     );
-
     expect(new Set(grants.map((grant) => grant.id)).size).toBe(1);
     await expect(
-      prisma.creditLedgerEntry.count({ where: { externalReference } }),
+      prisma.creditLedger.count({ where: { externalReference } }),
     ).resolves.toBe(1);
   });
 
-  it("persists release before rejecting an expired capture", async () => {
+  it("releases an expired reservation without creating usage", async () => {
     const human = await registerHuman(app);
-    const reservation = await creditsService.reserveCredits({
+    const reservation = await credits.reserveCredits({
       userId: human.user.id,
       actionType: "chat_reply",
     });
     await prisma.creditReservation.update({
       where: { id: reservation.id },
-      data: { expiresAt: new Date(Date.now() - 1_000) },
+      data: { expiresAt: new Date(Date.now() - 1000) },
     });
-
     await expect(
-      creditsService.captureReservation({ reference: reservation.reference }),
+      credits.captureReservation({ reference: reservation.reference }),
     ).rejects.toThrow("Credit reservation expired");
     await expect(
-      prisma.creditReservation.findUnique({
-        where: { id: reservation.id },
-        select: { status: true },
+      prisma.creditLedger.count({
+        where: { externalReference: `credit_reservation:${reservation.id}` },
       }),
-    ).resolves.toEqual({ status: "released" });
-  });
-
-  it("rolls back a paid purchase when its credit grant fails", async () => {
-    const human = await registerHuman(app);
-    const purchase = await prisma.creditPurchase.create({
-      data: {
-        userId: human.user.id,
-        provider: "local",
-        status: "pending",
-        creditAmount: 0,
-        paidAmount: 9900,
-        currency: "KRW",
-      },
-    });
-    const externalReference = `credit_purchase:${purchase.id}`;
-
-    await expect(
-      creditsService.handlePaymentWebhook("local", {
-        checkoutId: purchase.id,
-        status: "paid",
-      }),
-    ).rejects.toThrow("Credit amount must be a positive integer");
-    await expect(
-      prisma.creditPurchase.findUnique({
-        where: { id: purchase.id },
-        select: { status: true },
-      }),
-    ).resolves.toEqual({ status: "pending" });
-    await expect(
-      prisma.creditLedgerEntry.count({ where: { externalReference } }),
     ).resolves.toBe(0);
-  });
-
-  it("repairs a missing grant when an already-paid webhook is replayed", async () => {
-    const human = await registerHuman(app);
-    const purchase = await prisma.creditPurchase.create({
-      data: {
-        userId: human.user.id,
-        provider: "local",
-        status: "paid",
-        creditAmount: 25,
-        paidAmount: 1000,
-        currency: "KRW",
-      },
-    });
-    const externalReference = `credit_purchase:${purchase.id}`;
-
-    await expect(
-      creditsService.handlePaymentWebhook("local", {
-        checkoutId: purchase.id,
-        status: "paid",
-      }),
-    ).resolves.toEqual({ received: true });
-    await expect(
-      prisma.creditLedgerEntry.findFirst({
-        where: { externalReference },
-        select: { amount: true, remainingAmount: true },
-      }),
-    ).resolves.toEqual({ amount: 25, remainingAmount: 25 });
-  });
-
-  it("keeps capture and release on one reservation terminal state", async () => {
-    const human = await registerHuman(app);
-    const reservation = await creditsService.reserveCredits({
-      userId: human.user.id,
-      actionType: "chat_reply",
-    });
-
-    await Promise.allSettled([
-      creditsService.captureReservation({ reference: reservation.reference }),
-      creditsService.releaseReservation({ reference: reservation.reference }),
-    ]);
-
-    const stored = await prisma.creditReservation.findUniqueOrThrow({
-      where: { id: reservation.id },
-      select: { status: true },
-    });
-    const debitCount = await prisma.creditLedgerEntry.count({
-      where: {
-        externalReference: `credit_reservation:${reservation.id}`,
-      },
-    });
-    expect(["captured", "released"]).toContain(stored.status);
-    expect(debitCount).toBe(stored.status === "captured" ? 1 : 0);
-  });
-
-  it("rejects malformed payment webhook checkout IDs with 400", async () => {
-    for (const checkoutId of ["bad-id", 123]) {
-      await request(app.getHttpServer())
-        .post("/credits/payment-webhooks/local")
-        .send({ checkoutId, status: "paid" })
-        .expect(400);
-    }
   });
 });

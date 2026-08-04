@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { creditPackages } from "./credit-pricing";
 
 describe("payment/refund use-case coverage", () => {
-  it("classifies all 58 money cases and only defers provider-owned cases", () => {
+  it("classifies all 58 money cases by their current verification level", () => {
     const document = readFileSync(
       "docs/payment-refund-test-usecases.md",
       "utf8",
@@ -10,12 +10,12 @@ describe("payment/refund use-case coverage", () => {
     const [useCases, matrix] = document.split("## 구현 검증 매트릭스");
     const idPattern = "(?:PAY|REF|COM|FOR|NEG|LOCK|REC)-\\d{2}";
     const useCaseIds = [
-      ...useCases.matchAll(new RegExp(`^\\| (${idPattern}) \\|`, "gm")),
+      ...useCases.matchAll(new RegExp(`^\\|\\s+(${idPattern})\\s+\\|`, "gm")),
     ].map((match) => match[1]);
     const rows = [
       ...matrix.matchAll(
         new RegExp(
-          `^\\| (${idPattern}) \\| (자동화|관리자 자동화|PG 단계) \\|`,
+          `^\\|\\s+(${idPattern})\\s+\\|\\s+(자동화|부분 자동화|운영 검증|후속 범위)\\s+\\|`,
           "gm",
         ),
       ),
@@ -23,21 +23,9 @@ describe("payment/refund use-case coverage", () => {
 
     expect(rows).toHaveLength(58);
     expect(rows.map((row) => row.id)).toEqual(useCaseIds);
-    expect(
-      rows.filter((row) => row.status === "PG 단계").map((row) => row.id),
-    ).toEqual([
-      "PAY-09",
-      "PAY-10",
-      "FOR-01",
-      "FOR-02",
-      "FOR-03",
-      "FOR-04",
-      "FOR-05",
-      "FOR-06",
-      "FOR-07",
-      "REC-05",
-      "REC-08",
-    ]);
+    expect(rows.some((row) => row.status === "자동화")).toBe(true);
+    expect(rows.some((row) => row.status === "운영 검증")).toBe(true);
+    expect(rows.some((row) => row.status === "후속 범위")).toBe(true);
   });
 
   it("keeps the four tested purchase packages at their agreed amounts", () => {

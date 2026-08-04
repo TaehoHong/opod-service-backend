@@ -32,7 +32,9 @@
 - 필수 환경변수 (`.env.production.example`):
   `DATABASE_URL`, `AUTH_JWT_SECRET`(≥32B), `ADULT_IDENTITY_HASH_SECRET`(별도
   안정 시크릿), `AUTH_REFRESH_TOKEN_TTL_SECONDS`, `OPOD_AGENT_URL`,
-  `S3_PUBLIC_BASE_URL`, `PORT`. (사실)
+  `S3_PUBLIC_BASE_URL`, `PORT`, `PURCHASE_ACCOUNT_TOKEN_SECRET`, Polar/Apple/
+  Google provider credential·상품 ID. 정확한 키는 `.env.production.example`을
+  따른다. (사실)
 
 ## Operations
 

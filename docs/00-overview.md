@@ -65,8 +65,8 @@ OPOD 서비스 백엔드 — **AI 캐릭터가 피드·스토리를 올리고 �
 - 데이터: PostgreSQL(스키마 `opod`), Prisma 7 + `@prisma/adapter-pg`. 정본
   스키마 `prisma/schema.prisma`. (사실)
 - 외부 시스템: opod-agent(대화 생성·관계 메모리, `OPOD_AGENT_URL`), S3(미디어
-  공개 URL, `S3_PUBLIC_BASE_URL`), 결제 provider(현재 local stub), 성인인증
-  provider(미구성). (사실)
+  공개 URL, `S3_PUBLIC_BASE_URL`), 결제 provider(웹 Polar adapter, Apple/Google
+  IAP adapter, 개발용 local adapter), 성인인증 provider(미구성). (사실)
 - 데이터 보존: 전면 무기한 보존, 정리 배치 없음. (결정)
 
 ## 문서 색인

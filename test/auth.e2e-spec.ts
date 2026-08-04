@@ -329,7 +329,7 @@ describe("auth", () => {
 
     // 크레딧 원장(가입 보너스)은 익명 상태로 잔존.
     await expect(
-      prisma.creditLedgerEntry.count({ where: { userId } }),
+      prisma.creditLedger.count({ where: { userId } }),
     ).resolves.toBeGreaterThan(0);
 
     // 탈퇴 사유가 기록된다.
@@ -663,7 +663,7 @@ describe("auth", () => {
     });
     expect(account?.userId).toBe(responses[0].body.user.id);
     await expect(
-      prisma.creditLedgerEntry.count({
+      prisma.creditLedger.count({
         where: {
           userId: responses[0].body.user.id,
           externalReference: `signup_bonus:${responses[0].body.user.id}`,

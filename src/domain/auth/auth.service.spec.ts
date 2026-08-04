@@ -278,9 +278,20 @@ function createAuthHarness(
         return creditAccounts.splice(index, 1)[0];
       }),
     },
-    creditLedgerEntry: {
-      aggregate: jest.fn().mockResolvedValue({
-        _sum: { remainingAmount: 0 },
+    creditLedger: {
+      create: jest.fn(async ({ data }) => {
+        if (
+          data.type === "adjustment" &&
+          data.creditKind === "paid" &&
+          data.amount < 0
+        ) {
+          const account = {
+            userId: data.userId,
+            paidDebt: -data.amount,
+          };
+          creditAccounts.push(account);
+        }
+        return data;
       }),
     },
     creditRefund: {
@@ -435,10 +446,15 @@ function createAuthHarness(
     },
   );
 
+  const getPaidBalanceWithClient = jest.fn(async (_tx, userId: string) => {
+    const debt = creditAccounts.find((account) => account.userId === userId);
+    return -(debt?.paidDebt ?? 0);
+  });
   const service = new AuthService(
     prisma as unknown as PrismaService,
     {
       grantSignupBonus,
+      getPaidBalanceWithClient,
     } as unknown as CreditsService,
     new ConsentsService(prisma as unknown as PrismaService),
     [],
@@ -448,6 +464,7 @@ function createAuthHarness(
     service,
     prisma,
     grantSignupBonus,
+    getPaidBalanceWithClient,
     refreshTokens,
     withdrawals,
     users,
@@ -1185,7 +1202,10 @@ describe("AuthService", () => {
     await harness.service.deleteAccountFromAuthorization(firstAuthorization, {
       password: "password123",
     });
-    expect(harness.creditAccounts).toHaveLength(0);
+    expect(harness.creditAccounts).toContainEqual({
+      userId: first.user.id,
+      paidDebt: 120,
+    });
     expect(harness.unsettledDebts).toEqual([
       {
         identityHash: expect.not.stringContaining("provider-ci-same-person"),
@@ -1256,9 +1276,7 @@ describe("AuthService", () => {
       password: "password123",
       displayName: "Settlement",
     });
-    harness.prisma.creditLedgerEntry.aggregate.mockResolvedValueOnce({
-      _sum: { remainingAmount: 100 },
-    });
+    harness.getPaidBalanceWithClient.mockResolvedValueOnce(100);
 
     await expect(
       harness.service.deleteAccountFromAuthorization(

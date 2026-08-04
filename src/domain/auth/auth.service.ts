@@ -523,41 +523,35 @@ export class AuthService {
       }
       await this.lockUser(tx, userId);
 
-      const [account, paidCredits, activeRefunds, pendingPurchases] =
-        await Promise.all([
-          tx.creditAccount.findUnique({ where: { userId } }),
-          tx.creditLedgerEntry.aggregate({
-            _sum: { remainingAmount: true },
-            where: {
-              userId,
-              entryType: "grant",
-              creditKind: "paid",
-              remainingAmount: { gt: 0 },
+      const [paidBalance, activeRefunds, pendingPurchases] = await Promise.all([
+        this.creditsService.getPaidBalanceWithClient(tx, userId),
+        tx.creditRefund.count({
+          where: {
+            purchase: { userId },
+            status: {
+              in: ["reserved", "payment_processing", "payment_succeeded"],
             },
-          }),
-          tx.creditRefund.count({
-            where: { userId, status: "reserved" },
-          }),
-          tx.creditPurchase.count({
-            where: { userId, status: "pending" },
-          }),
-        ]);
-      if (
-        (paidCredits._sum.remainingAmount ?? 0) > 0 ||
-        activeRefunds > 0 ||
-        pendingPurchases > 0
-      ) {
+          },
+        }),
+        tx.creditPurchase.count({
+          where: {
+            userId,
+            status: { in: ["pending", "payment_processing"] },
+          },
+        }),
+      ]);
+      if (paidBalance > 0 || activeRefunds > 0 || pendingPurchases > 0) {
         throw new ConflictException(
           "Paid credits and pending payments must be settled before withdrawal",
         );
       }
-      if (account?.paidDebt && identityHash) {
+      const paidDebt = Math.max(0, -paidBalance);
+      if (paidDebt > 0 && identityHash) {
         await tx.unsettledCreditDebt.upsert({
           where: { identityHash },
-          create: { identityHash, paidDebt: account.paidDebt },
-          update: { paidDebt: { increment: account.paidDebt } },
+          create: { identityHash, paidDebt },
+          update: { paidDebt: { increment: paidDebt } },
         });
-        await tx.creditAccount.delete({ where: { userId } });
       }
 
       // users 행은 결제·분쟁 기록의 익명 FK 대상으로 유지한다.
@@ -639,17 +633,22 @@ export class AuthService {
         throw new ConflictException("Adult identity is already linked");
       }
 
-      const [unsettled, account] = await Promise.all([
+      const [unsettled, currentPaidBalance] = await Promise.all([
         tx.unsettledCreditDebt.findUnique({ where: { identityHash } }),
-        tx.creditAccount.findUnique({ where: { userId } }),
+        this.creditsService.getPaidBalanceWithClient(tx, userId),
       ]);
       const debtApplied = unsettled?.paidDebt ?? 0;
-      const paidDebt = (account?.paidDebt ?? 0) + debtApplied;
+      const paidDebt = Math.max(0, -currentPaidBalance) + debtApplied;
       if (debtApplied > 0) {
-        await tx.creditAccount.upsert({
-          where: { userId },
-          create: { userId, paidDebt: debtApplied },
-          update: { paidDebt: { increment: debtApplied } },
+        await tx.creditLedger.create({
+          data: {
+            userId,
+            type: "adjustment",
+            creditKind: "paid",
+            amount: -debtApplied,
+            reason: "unsettled identity debt transfer",
+            externalReference: `identity_debt:${identityHash}`,
+          },
         });
         await tx.unsettledCreditDebt.delete({ where: { identityHash } });
       }

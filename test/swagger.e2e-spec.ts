@@ -209,6 +209,8 @@ describe("service swagger", () => {
         "팔로우",
         "메시지",
         "크레딧",
+        "크레딧 구매",
+        "결제",
         "알림",
         "신고",
         "고객지원",
@@ -595,15 +597,19 @@ describe("service swagger", () => {
     const entryRef = pageSchema.properties.items.items.$ref.split("/").at(-1);
     const entrySchema = response.body.components.schemas[entryRef];
 
-    expect(entrySchema.required).not.toContain("remainingAmount");
     expect(entrySchema.required).not.toContain("expiresAt");
     expect(entrySchema.required).not.toContain("externalReference");
-    expect(entrySchema.properties.remainingAmount).toEqual({ type: "number" });
+    expect(entrySchema.properties.type.enum).toEqual([
+      "grant",
+      "usage",
+      "refund_recovery",
+      "adjustment",
+    ]);
     expect(entrySchema.properties.expiresAt).toEqual({ type: "string" });
     expect(entrySchema.properties.externalReference).toEqual({
       type: "string",
     });
-    for (const path of ["/credits/ledger", "/credits/purchases"]) {
+    for (const path of ["/credits/ledger"]) {
       for (const name of ["cursor", "limit"]) {
         expect(
           response.body.paths[path].get.parameters.find(

@@ -67,7 +67,9 @@ const serviceTags: OpenApiTag[] = [
   { name: "게시글", description: "게시글, 댓글, 반응 API" },
   { name: "팔로우", description: "캐릭터 팔로우 API" },
   { name: "메시지", description: "대화와 메시지 API" },
-  { name: "크레딧", description: "크레딧 결제와 사용 내역 API" },
+  { name: "크레딧", description: "크레딧 잔액과 사용 내역 API" },
+  { name: "크레딧 구매", description: "크레딧 상품, 구매와 환불 API" },
+  { name: "결제", description: "결제 provider 알림 수신 API" },
   { name: "알림", description: "사용자 알림 API" },
   { name: "신고", description: "콘텐츠 신고 API" },
   { name: "고객지원", description: "FAQ, 공지사항, 1:1 문의 API" },
@@ -85,6 +87,8 @@ const tagByPathSegment: Record<string, string> = {
   follows: "팔로우",
   messages: "메시지",
   credits: "크레딧",
+  payments: "결제",
+  purchases: "크레딧 구매",
   notifications: "알림",
   reports: "신고",
   faqs: "고객지원",
@@ -173,9 +177,8 @@ const message = {
 const creditEntry = {
   id: "credit_entry_01",
   userId: "user_01",
-  entryType: "debit",
+  type: "usage",
   amount: 10,
-  remainingAmount: 90,
   expiresAt: "2026-08-05T08:00:00.000Z",
   reason: "message",
   externalReference: "message_01",
@@ -183,24 +186,28 @@ const creditEntry = {
 };
 const creditPurchase = {
   id: "purchase_01",
-  provider: "local",
+  productId: "credits_1050",
   status: "pending",
-  creditAmount: 100,
-  paidAmount: 9900,
-  currency: "KRW",
+  creditAmount: 1050,
   createdAt: isoDate,
+  payment: {
+    channel: "web",
+    provider: "local",
+    status: "pending",
+    amount: 9900,
+    currency: "KRW",
+  },
 };
 const creditRefund = {
   id: "refund_01",
   purchaseId: "purchase_01",
-  status: "reserved",
+  status: "payment_processing",
   creditAmount: 60,
   promotionAmount: 10,
   grossAmount: 5940,
   feeAmount: 297,
   refundAmount: 5643,
   currency: "KRW",
-  reference: "refund-request-01",
   reason: "user_request",
   createdAt: isoDate,
 };
@@ -321,19 +328,44 @@ const operationExamples: Record<string, OperationExample> = {
     },
   },
 
-  CreditsController_createCheckout: {
-    auth: true,
-    request: { creditPackageId: "credits_100" },
+  PurchasesController_listProducts: {
     response: {
-      checkoutId: "purchase_01",
-      provider: "local",
+      items: [
+        {
+          id: "credits_1050",
+          creditAmount: 1050,
+          providerProductId: "credits_1050",
+        },
+      ],
+    },
+  },
+  PurchasesController_accountToken: {
+    auth: true,
+    response: {
+      apple: "00000000-0000-5000-8000-000000000000",
+      google:
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    },
+  },
+  PurchasesController_createCheckout: {
+    auth: true,
+    request: { productId: "credits_1050" },
+    response: {
+      ...creditPurchase,
       checkoutUrl: "https://payments.local/checkout/purchase_01",
     },
     status: "201",
   },
-  CreditsController_handlePaymentWebhook: {
-    request: { checkoutId: "purchase_01", status: "paid" },
-    response: { received: true },
+  PurchasesController_verifyApple: {
+    auth: true,
+    request: { productId: "credits_1050", proof: "signed-transaction" },
+    response: { ...creditPurchase, status: "completed" },
+    status: "201",
+  },
+  PurchasesController_verifyGoogle: {
+    auth: true,
+    request: { productId: "credits_1050", proof: "purchase-token" },
+    response: { ...creditPurchase, status: "completed" },
     status: "201",
   },
   CreditsController_spendCredits: {
@@ -362,11 +394,11 @@ const operationExamples: Record<string, OperationExample> = {
     },
   },
   CreditsController_listEntries: { auth: true, response: page(creditEntry) },
-  CreditsController_listPurchases: {
+  PurchasesController_list: {
     auth: true,
     response: page(creditPurchase),
   },
-  CreditsController_getRefundQuote: {
+  PurchasesController_refundQuote: {
     auth: true,
     response: {
       purchaseId: "purchase_01",
@@ -385,23 +417,15 @@ const operationExamples: Record<string, OperationExample> = {
       expectedDebtIncrease: 0,
     },
   },
-  CreditsController_reserveRefund: {
+  PurchasesController_requestRefund: {
     auth: true,
-    request: {
-      purchaseId: "purchase_01",
-      reference: "refund-request-01",
-    },
+    request: { idempotencyKey: "refund-request-01" },
     response: creditRefund,
     status: "201",
   },
-  CreditsController_releaseRefund: {
-    auth: true,
-    response: { ...creditRefund, status: "released" },
-    status: "201",
-  },
-  CreditsController_handleLocalRefundResult: {
-    request: { refundId: "refund_01", status: "succeeded" },
-    response: { ...creditRefund, status: "refunded" },
+  PaymentsController_handleWebhook: {
+    request: { type: "checkout.updated", data: {} },
+    response: { processed: true },
     status: "201",
   },
 

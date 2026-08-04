@@ -14,6 +14,8 @@ import { ServiceMessagesModule } from "./messages/messages.module";
 import { ServiceNoticesModule } from "./notices/notices.module";
 import { ServiceNotificationsModule } from "./notifications/notifications.module";
 import { ServicePostsModule } from "./posts/posts.module";
+import { ServicePaymentsModule } from "./payments/payments.module";
+import { ServicePurchasesModule } from "./purchases/purchases.module";
 import { RequestLoggingInterceptor } from "./request-logging.interceptor";
 import { ServiceReportsModule } from "./reports/reports.module";
 import { ServiceSearchModule } from "./search/search.module";
@@ -35,6 +37,8 @@ import { ServiceStoriesModule } from "./stories/stories.module";
     ServiceNoticesModule,
     ServiceNotificationsModule,
     ServicePostsModule,
+    ServicePaymentsModule,
+    ServicePurchasesModule,
     ServiceReportsModule,
     ServiceSearchModule,
     ServiceStoriesModule,
