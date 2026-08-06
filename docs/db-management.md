@@ -67,9 +67,45 @@ b73a336) DB에는 남아 있었다 — db push로 정합화했다. **개발 DB�
 잔존이 있을 가능성이 높으니** 1단계 drift 확인에서 email_hash 제거가 나오면
 예상된 차이다.
 
-**개발 DB는 다음 backend 배포 전에 위 절차를 1회 실행해야 한다** — 하지
-않으면 컨테이너 시작 시 migrate deploy가 0_init을 새로 적용하려다 기존
-테이블과 충돌한다.
+**개발 DB baseline도 완료됐다 (2026-08-06 확인).** `opod._prisma_migrations`에
+`0_init`이 적용됨으로 기록돼 있고 17건 전부 `finished_at`이 채워져 있다.
+"다음 배포 전에 1회 실행해야 한다"던 이전 문장은 해소됐다.
+
+### 마이그레이션 상태 확인 방법
+
+**`_prisma_migrations`는 `public`이 아니라 `opod` 스키마에 있다.** multiSchema
+설정 때문이다. `public`에서 찾고 "없다"고 판단하는 실수를 하지 말 것.
+
+```bash
+# 로컬 DB
+docker exec ai_sns_postgres psql -U ai_sns -d ai_sns \
+  -c "select migration_name, (finished_at is not null) as ok from opod._prisma_migrations order by 1"
+
+# 개발 DB
+ssh <host> 'cd ~/opod-backend && docker compose exec -T postgres \
+  psql -U ai_sns -d ai_sns -c "select migration_name, (finished_at is not null) as ok from opod._prisma_migrations order by 1"'
+```
+
+DB 기록과 `prisma/migrations/` 파일 목록이 어긋나면(diverge) `migrate dev`가
+막힌다. **파일이 없는데 DB에만 기록된 마이그레이션**이 특히 위험하다 — 되돌릴
+SQL이 없어 Prisma가 복구 불가로 판단하고 reset을 요구한다. 브랜치를 삭제할 때
+그 브랜치의 마이그레이션을 로컬에 적용한 적이 있으면 이 상태가 된다
+(2026-08-06 로컬 DB 사례: `feat/oauth-social-login` 삭제 후 reset으로 해소).
+
+### 배포 전 점검 — 기본값 없는 NOT NULL 컬럼
+
+배포는 컨테이너 시작 시 `migrate deploy`로 자동 적용된다. 실패하면
+`_prisma_migrations`에 `finished_at = null` 행이 남고 **이후 배포가 전부 이
+실패에 막힌다** — 사람이 `migrate resolve`로 풀기 전까지.
+
+가장 흔한 실패 원인은 기본값 없는 `NOT NULL` 컬럼 추가다. Prisma가 마이그레이션
+파일 상단에 `Warnings:` 블록으로 알려주므로, 미적용 마이그레이션에 그 경고가
+있으면 **대상 테이블의 행 수를 배포 전에 확인**한다. 0이면 안전하고, 1건이라도
+있으면 백필을 넣거나 데이터를 정리해야 한다.
+
+예: `20260804035605_credit_product_catalog`가
+`credit_purchases.credit_product_id`를 기본값 없이 추가한다. 2026-08-06 확인
+시 개발 DB의 `credit_purchases`가 0건이라 안전으로 판정했다.
 
 ## pgvector 확장 설계 (차후 — 트리거 도달 시)
 
