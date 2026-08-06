@@ -37,7 +37,9 @@ Status: 운영 중 (마이그레이션 체계 도입 2026-07-19)
 4. **배포 순서**: 스키마 변경이 포함된 릴리스는 **backend 먼저** 배포(=
    마이그레이션 적용) 후 admin을 배포한다. admin은 스키마를 적용하지 않고
    전제한다.
-5. `db:push`는 로컬 개발 편의 전용으로 강등. 운영 DB에 직접 실행하지 않는다.
+5. `db:push`는 **로컬 DB** 전용으로 강등. 개발 DB에 직접 실행하지 않는다.
+   (DB 용어는 [02-development-rules.md](./02-development-rules.md) "DB 환경 용어"
+   가 정본이다 — 로컬 / 개발 / 운영(아직 없음) / 테스트.)
 
 ### 기존 DB baseline (최초 1회)
 
@@ -61,11 +63,11 @@ DATABASE_URL=<url> npx prisma migrate deploy
 
 로컬 DB는 2026-07-19에 baseline 완료. 이때 두 번째 drift 사례가 확인됐다:
 `user_withdrawals.email_hash` 컬럼·인덱스가 스키마에선 제거됐는데(커밋
-b73a336) DB에는 남아 있었다 — db push로 정합화했다. **운영 DB에도 같은
+b73a336) DB에는 남아 있었다 — db push로 정합화했다. **개발 DB에도 같은
 잔존이 있을 가능성이 높으니** 1단계 drift 확인에서 email_hash 제거가 나오면
 예상된 차이다.
 
-**운영 DB는 다음 backend 배포 전에 위 절차를 1회 실행해야 한다** — 하지
+**개발 DB는 다음 backend 배포 전에 위 절차를 1회 실행해야 한다** — 하지
 않으면 컨테이너 시작 시 migrate deploy가 0_init을 새로 적용하려다 기존
 테이블과 충돌한다.
 

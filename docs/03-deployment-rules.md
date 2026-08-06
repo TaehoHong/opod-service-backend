@@ -4,11 +4,17 @@
 
 ## Environments
 
-- Local: Docker Postgres(`docker/docker-compose.yml`, 5433) + `npm run start:dev`.
-  `.env`에서 환경변수 로드. (사실)
+> DB를 가리키는 용어는 [02-development-rules.md](./02-development-rules.md)
+> "DB 환경 용어"가 정본이다 — 로컬 / 개발 / 운영(아직 없음) / 테스트.
+
+- 로컬: 개별 PC의 Docker Postgres(`docker/docker-compose.yml`, 5433) +
+  `npm run start:dev`. `.env`에서 환경변수 로드. (사실)
+- 개발 서버: `dev-run-taeho`(`deploy.sh`의 원격 호스트). 서버가
+  `~/opod-backend/docker-compose.yml`과 `.env`를 소유한다. **`deploy.sh`가
+  배포하는 대상은 여기다.** (결정 2026-08-06 — 이전 문서는 이를 "Production"
+  이라 적었으나 오기였다)
+- 운영: **아직 없다.** (결정 2026-08-06)
 - Staging: **미정** — 별도 staging 환경 없음(확인됨). (미해결)
-- Production: 자택 단일 서버(`deploy.sh`의 원격 호스트). 서버가
-  `~/opod-backend/docker-compose.yml`과 `.env`를 소유한다. (사실)
 
 ## Release Flow
 

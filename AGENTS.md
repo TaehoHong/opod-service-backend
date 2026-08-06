@@ -40,6 +40,17 @@
   validation, state changes, database effects, error responses, and integration
   boundaries.
 
+## DB 환경 용어 (정본: `docs/02-development-rules.md`)
+
+DB를 가리킬 때 아래 네 단어만 쓴다. 파괴적 작업의 대상이 흐려지지 않게 한다.
+
+- **로컬 DB** — 개별 PC의 localhost(`npm run db:up`, 5433). `db:push`·
+  `migrate reset`이 허용되는 유일한 대상.
+- **개발 DB** — `dev-run-taeho` 서버의 DB. `deploy.sh`가 배포하는 대상. 공용이라
+  파괴적 작업 금지.
+- **운영 DB** — 아직 없다. 다른 환경을 "운영"이라 부르지 않는다.
+- **테스트 DB** — Testcontainers 일회용 컨테이너. 상태가 남지 않는다.
+
 ## Boundaries
 
 - Do not add `src/admin` or admin UI code here.

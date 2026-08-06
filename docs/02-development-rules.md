@@ -8,7 +8,7 @@
 - Setup: `npm install`
 - Prisma client 생성: `npm run db:generate`
 - 로컬 DB 기동: `npm run db:up` (docker/docker-compose.yml, Postgres 5433)
-- 로컬 스키마 적용: `npm run db:push` (로컬 전용 — 운영 직접 실행 금지)
+- 로컬 스키마 적용: `npm run db:push` (**로컬 DB 전용** — 개발 DB 직접 실행 금지)
 - 마이그레이션 생성: `npm run db:migrate` (prisma migrate dev)
 - 서비스 실행: `npm run start:dev`
 - Format: `npm run format` (prettier --check)
@@ -66,6 +66,21 @@
     생략한다. 정본 예: `src/service/search`, `src/service/health`.
 - **커밋/브랜치 = Conventional Commits + main 직커밋** (결정): `feat`/`fix`/
   `chore`/`refactor`/`docs` 프리픽스, main 브랜치 중심 직커밋.
+
+## DB 환경 용어 (2026-08-06 결정 — 정본)
+
+DB를 가리킬 때 **아래 네 단어만 쓴다.** 문서·주석·커밋 메시지·대화 전부에
+적용한다. "개발 DB"와 "로컬 DB"를 섞어 쓰면 파괴적 작업의 대상이 흐려진다.
+
+| 용어 | 실체 | 비고 |
+|---|---|---|
+| **로컬 DB** | 작업 중인 개별 PC의 localhost. `npm run db:up`이 띄우는 Docker Postgres(`docker/docker-compose.yml`, 5433) | 개발자마다 따로 있다. `db:push`·`migrate reset` 허용 대상은 여기뿐 |
+| **개발 DB** | `dev-run-taeho` 서버에 떠 있는 개발서버용 DB. `deploy.sh`의 원격 호스트 | 공용이다. 파괴적 작업 금지 |
+| **운영 DB** | **아직 없다** | 생기기 전까지 "운영"을 다른 환경을 가리키는 데 쓰지 않는다 |
+| **테스트 DB** | Testcontainers가 테스트 실행마다 새로 띄우는 일회용 컨테이너 | 매번 빈 DB에 `prisma migrate deploy` 전체 적용. 상태가 남지 않는다 |
+
+`deploy.sh`가 배포하는 대상은 **개발 DB**다. 배포·마이그레이션 문서에서 이를
+"Production"이라 부르지 않는다.
 
 ## Review Rules
 
