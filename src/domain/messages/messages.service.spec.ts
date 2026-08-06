@@ -83,6 +83,7 @@ describe("MessagesService", () => {
             userId: "human-1",
             characterId: "ai-1",
           }),
+          update: jest.fn(),
         },
         message: createMessageStore(create, [
           { senderType: "user", body: "previous question" },
@@ -147,6 +148,7 @@ describe("MessagesService", () => {
             userId: "human-1",
             characterId: "ai-1",
           }),
+          update: jest.fn(),
         },
         message: createMessageStore(create),
       },
@@ -178,7 +180,10 @@ describe("MessagesService", () => {
     );
     const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasCharacter: jest.fn().mockResolvedValue(true) },
-      { messageConversation: { upsert }, message: { create } },
+      {
+        messageConversation: { upsert, update: jest.fn() },
+        message: { create },
+      },
       credits,
     );
 
@@ -219,7 +224,10 @@ describe("MessagesService", () => {
       });
     const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasCharacter: jest.fn().mockResolvedValue(true) },
-      { messageConversation: { upsert }, message: createMessageStore(create) },
+      {
+        messageConversation: { upsert, update: jest.fn() },
+        message: createMessageStore(create),
+      },
       createCreditsStub(),
       { recordEvent: jest.fn().mockResolvedValue(undefined) },
       createReplyStub(),
@@ -438,7 +446,8 @@ describe("MessagesService", () => {
         userId: "human-1",
         character: { status: "active" },
       },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // 대화 시작 시각이 아니라 마지막 활동 기준 정렬이어야 한다.
+      orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
       take: 2,
       include: {
         character: {
@@ -543,6 +552,7 @@ describe("MessagesService", () => {
             userId: "human-1",
             characterId: "character-1",
           }),
+          update: jest.fn(),
         },
         message: createMessageStore(
           jest
@@ -597,6 +607,7 @@ describe("MessagesService", () => {
             userId: "human-1",
             characterId: "character-1",
           }),
+          update: jest.fn(),
         },
         message: createMessageStore(
           jest
@@ -651,6 +662,7 @@ describe("MessagesService", () => {
             userId: "human-1",
             characterId: "character-1",
           }),
+          update: jest.fn(),
         },
         message: createMessageStore(
           jest

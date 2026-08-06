@@ -80,6 +80,39 @@ describe("message read receipts", () => {
     await expect(unreadCountFor(human.authHeaders)).resolves.toBe(1);
   });
 
+  it("orders conversations by last activity, not by when they started", async () => {
+    const human = await registerHuman(app);
+    const older = await character();
+    const newer = await character();
+
+    async function send(characterId: string, body: string) {
+      await request(app.getHttpServer())
+        .post("/messages")
+        .set(human.authHeaders)
+        .send({ characterId, body })
+        .expect(201);
+    }
+
+    async function orderedCharacterIds() {
+      const response = await request(app.getHttpServer())
+        .get("/messages/conversations")
+        .set(human.authHeaders)
+        .expect(200);
+      return response.body.items.map(
+        (item: { character: { id: string } }) => item.character.id,
+      );
+    }
+
+    await send(older.id, "먼저 시작한 대화");
+    await send(newer.id, "나중에 시작한 대화");
+    await expect(orderedCharacterIds()).resolves.toEqual([newer.id, older.id]);
+
+    // 먼저 시작한 대화에 새 메시지가 오면 최상단으로 올라와야 한다. 정렬 키가
+    // 대화 생성 시각이거나 lastMessageAt을 갱신하지 않으면 순서가 그대로다.
+    await send(older.id, "오래된 대화에 새 메시지");
+    await expect(orderedCharacterIds()).resolves.toEqual([older.id, newer.id]);
+  });
+
   it("rejects a read for a conversation the user has not started", async () => {
     const human = await registerHuman(app);
     const target = await character();

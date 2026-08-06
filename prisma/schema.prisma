@@ -649,6 +649,9 @@ model MessageConversation {
   // 유저가 이 대화를 마지막으로 읽은 시각. null이면 한 번도 읽지 않았다는 뜻이라
   // 캐릭터 메시지 전부가 미읽음이다. 앱이 대화를 실제로 보여줄 때 갱신한다.
   lastReadAt  DateTime? @map("last_read_at") @db.Timestamptz(6)
+  // 대화 목록 정렬 키. 관계의 MAX(createdAt)으로는 정렬할 수 없어 비정규화했다.
+  // 메시지가 추가될 때마다 갱신한다.
+  lastMessageAt DateTime @default(now()) @map("last_message_at") @db.Timestamptz(6)
   user        User      @relation(fields: [userId], references: [id])
   character   Character @relation(fields: [characterId], references: [id])
   messages    Message[]

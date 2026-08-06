@@ -208,7 +208,8 @@ export class MessagesService {
 
     const conversations = await this.prisma.messageConversation.findMany({
       where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // 대화가 시작된 시각이 아니라 마지막 활동 기준으로 정렬한다.
+      orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,
       ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       include: {
@@ -324,6 +325,13 @@ export class MessagesService {
         senderType,
         body,
       },
+    });
+    // 대화 목록 정렬 키. 유저 메시지든 캐릭터 답장이든 마지막 활동 시각이
+    // 갱신돼야 하므로 전송 경로가 아니라 여기서 찍는다 — 나중에 선톡처럼
+    // 다른 경로가 생겨도 자동으로 반영된다.
+    await this.prisma.messageConversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: message.createdAt },
     });
     return this.toMessage(message as PrismaMessage);
   }
