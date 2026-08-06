@@ -9,6 +9,8 @@ import { createHash, createHmac } from "node:crypto";
 import { CreditsService } from "../credits/credits.service";
 import { decodeCursor, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
+import { NOTIFICATION_TYPES } from "../notifications/notification-types";
+import { NotificationsService } from "../notifications/notifications.service";
 import { PaymentEvent } from "../payments/payment-provider";
 import { PaymentsService } from "../payments/payments.service";
 
@@ -20,6 +22,7 @@ export class PurchasesService {
     private readonly prisma: PrismaService,
     private readonly payments: PaymentsService,
     private readonly credits: CreditsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async listProducts(channel: "web" | "apple" | "google") {
@@ -469,6 +472,18 @@ export class PurchasesService {
           where: { id: payment.purchaseId },
           data: { status: "completed", fulfilledAt: new Date() },
         });
+        // 웹훅은 비동기라 유저가 앱을 떠난 뒤 지급될 수 있다 — 알림 가치가
+        // 실제로 있는 몇 안 되는 경로다. 트랜잭션 안에서 만들어야 재전송이
+        // inbox(`payment_provider_events`)에서 걸러진다. 커밋 후 별도로 만들면
+        // 그 가드를 우회해 배달마다 알림이 쌓인다.
+        await this.notifications.createNotificationWithClient(tx, {
+          userId: payment.purchase.userId,
+          type: NOTIFICATION_TYPES.creditPurchaseCompleted,
+          title: "크레딧 충전 완료",
+          body: `크레딧 ${payment.purchase.creditAmount}개가 지급되었습니다.`,
+          targetType: "purchase",
+          targetId: payment.purchaseId,
+        });
       }
     } else if (event.type === "failed") {
       if (["pending", "verified", "processing"].includes(payment.status)) {
@@ -602,7 +617,11 @@ export class PurchasesService {
     const initialPayment = refund.purchase.payment;
     if (!initialPayment) throw new ConflictException("Payment not found");
     await this.lockUser(tx, refund.purchase.userId);
-    await this.lockPaymentReference(tx, initialPayment.provider, initialPayment.id);
+    await this.lockPaymentReference(
+      tx,
+      initialPayment.provider,
+      initialPayment.id,
+    );
     refund = await tx.creditRefund.findUniqueOrThrow({
       where: { id: refundId },
       include: { purchase: { include: { payment: true } } },
@@ -639,6 +658,16 @@ export class PurchasesService {
     await tx.creditPurchase.update({
       where: { id: refund.purchaseId },
       data: { status: "refunded" },
+    });
+    // 위 `refund.status === "completed"` 가드를 통과한 경로만 여기 닿으므로
+    // 환불 1건당 알림 1건이다.
+    await this.notifications.createNotificationWithClient(tx, {
+      userId: refund.purchase.userId,
+      type: NOTIFICATION_TYPES.creditRefundCompleted,
+      title: "환불 완료",
+      body: "환불이 정상 처리되었습니다.",
+      targetType: "refund",
+      targetId: refund.id,
     });
     return tx.creditRefund.update({
       where: { id: refund.id },
@@ -836,8 +865,7 @@ export class PurchasesService {
         isActive: true,
       },
     });
-    if (!mapping)
-      throw new ConflictException("Credit product is unavailable");
+    if (!mapping) throw new ConflictException("Credit product is unavailable");
     return { product, mapping, provider };
   }
 }

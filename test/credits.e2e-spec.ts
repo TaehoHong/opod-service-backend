@@ -180,6 +180,16 @@ describe("credits, purchases and payments", () => {
         where: { payment: { purchaseId: checkout.body.id }, type: "capture" },
       }),
     ).resolves.toBe(1);
+    // 웹훅을 두 번 보냈다. 알림을 트랜잭션 밖에서 만들면 inbox 멱등 가드를
+    // 우회해 배달마다 쌓이므로 이 단언이 먼저 깨진다.
+    await expect(
+      prisma.notification.findMany({
+        where: { userId: human.user.id, type: "credit.purchase_completed" },
+        select: { targetType: true, targetId: true },
+      }),
+    ).resolves.toEqual([
+      { targetType: "purchase", targetId: checkout.body.id },
+    ]);
   });
 
   it("locks and completes a web refund through the original provider", async () => {
@@ -223,6 +233,11 @@ describe("credits, purchases and payments", () => {
         where: { payment: { purchaseId: checkout.body.id }, type: "refund" },
       }),
     ).resolves.toBe(1);
+    await expect(
+      prisma.notification.count({
+        where: { userId: human.user.id, type: "credit.refund_completed" },
+      }),
+    ).resolves.toBe(1);
   });
 
   it("resumes internal refund finalization without requesting the provider twice", async () => {
@@ -247,8 +262,7 @@ describe("credits, purchases and payments", () => {
         idempotencyKey,
         creditAmount: quote.refundableCredits,
         promotionAmount: quote.promotionRecoveryCredits,
-        lockedAmount:
-          quote.refundableCredits + quote.remainingPromotionCredits,
+        lockedAmount: quote.refundableCredits + quote.remainingPromotionCredits,
         recoveryAmount:
           quote.refundableCredits + quote.promotionRecoveryCredits,
         debtAmount: quote.expectedDebtIncrease,
@@ -302,8 +316,14 @@ describe("credits, purchases and payments", () => {
       });
 
     await Promise.all([
-      purchases.applyProviderEvent("local", { body: Buffer.alloc(0), headers: {} }),
-      purchases.applyProviderEvent("local", { body: Buffer.alloc(0), headers: {} }),
+      purchases.applyProviderEvent("local", {
+        body: Buffer.alloc(0),
+        headers: {},
+      }),
+      purchases.applyProviderEvent("local", {
+        body: Buffer.alloc(0),
+        headers: {},
+      }),
     ]);
     verify.mockRestore();
 
@@ -314,7 +334,10 @@ describe("credits, purchases and payments", () => {
     ).resolves.toBe(1);
     await expect(
       prisma.paymentLedger.count({
-        where: { payment: { purchaseId: checkout.body.id }, type: "chargeback" },
+        where: {
+          payment: { purchaseId: checkout.body.id },
+          type: "chargeback",
+        },
       }),
     ).resolves.toBe(1);
   });

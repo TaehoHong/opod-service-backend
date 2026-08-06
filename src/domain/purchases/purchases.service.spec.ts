@@ -1,7 +1,12 @@
 import { PurchasesService } from "./purchases.service";
 
 describe("PurchasesService account binding", () => {
-  const service = new PurchasesService({} as never, {} as never, {} as never);
+  const service = new PurchasesService(
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
 
   afterEach(() => {
     delete process.env.PURCHASE_ACCOUNT_TOKEN_SECRET;
