@@ -6,10 +6,17 @@
 export const NOTIFICATION_TYPES = {
   creditPurchaseCompleted: "credit.purchase_completed",
   creditRefundCompleted: "credit.refund_completed",
+  characterNewPost: "character.new_post",
+  characterNewStory: "character.new_story",
 } as const;
 
 export type NotificationType =
   (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
 
 // targetId가 가리키는 대상. 클라이언트가 상세를 다시 조회하는 데 쓴다.
-export type NotificationTargetType = "purchase" | "refund";
+export type NotificationTargetType = "purchase" | "refund" | "post" | "story";
+
+// 한 번의 sync가 만들 수 있는 팔로우 알림 수 상한. 오래 앱을 열지 않은 유저가
+// 알림함을 수백 건으로 채우는 것을 막는다. 상한을 넘긴 분량은 조용히 버리지
+// 않고 응답의 `skipped`로 보고한다.
+export const FOLLOW_NOTIFICATION_SYNC_LIMIT = 50;

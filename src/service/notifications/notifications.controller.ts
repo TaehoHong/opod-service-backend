@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Param,
   Patch,
+  Post,
   Query,
 } from "@nestjs/common";
 import { ApiQuery } from "@nestjs/swagger";
@@ -19,6 +20,17 @@ export class NotificationsController {
     private readonly authService: AuthService,
     private readonly notificationsService: NotificationsService,
   ) {}
+
+  // 팔로우 알림은 앱이 이 경로를 부를 때 만들어진다. GET에 부수효과를 두지
+  // 않으려고 별도 POST로 분리했다 — 앱이 노출 시점을 제어한다.
+  @Post("sync")
+  async syncFollowNotifications(
+    @Headers("authorization") authorization: string | undefined,
+  ) {
+    const userId =
+      await this.authService.userIdFromAuthorization(authorization);
+    return this.notificationsService.syncFollowNotifications({ userId });
+  }
 
   @Get()
   @ApiQuery({ name: "cursor", required: false })

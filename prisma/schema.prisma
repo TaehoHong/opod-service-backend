@@ -448,6 +448,9 @@ model UserCharacterFollow {
   userId      String    @map("user_id") @db.Uuid
   characterId String    @map("character_id") @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  // 팔로우 알림 워터마크. 이 시각 이후 게시글·스토리만 알림 대상이다.
+  // 기본값이 팔로우 시각이라 팔로우 이전 콘텐츠는 알림되지 않는다.
+  notifiedUpToAt DateTime @default(now()) @map("notified_up_to_at") @db.Timestamptz(6)
   user        User      @relation(fields: [userId], references: [id])
   character   Character @relation(fields: [characterId], references: [id])
 
