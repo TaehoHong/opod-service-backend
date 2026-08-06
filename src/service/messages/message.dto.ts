@@ -14,3 +14,10 @@ export class SendMessageDto {
   @IsString()
   body!: string;
 }
+
+export class MarkConversationReadDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  characterId!: string;
+}

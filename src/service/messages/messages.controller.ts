@@ -3,7 +3,7 @@ import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { MessagesService } from "../../domain/messages/messages.service";
 import { parsePageQuery } from "../../domain/database/page";
-import { SendMessageDto } from "./message.dto";
+import { MarkConversationReadDto, SendMessageDto } from "./message.dto";
 
 @Controller("messages")
 export class MessagesController {
@@ -20,6 +20,16 @@ export class MessagesController {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
     return this.messagesService.sendMessage({ ...body, userId });
+  }
+
+  @Post("read")
+  async markConversationRead(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: MarkConversationReadDto,
+  ) {
+    const userId =
+      await this.authService.userIdFromAuthorization(authorization);
+    return this.messagesService.markConversationRead({ ...body, userId });
   }
 
   @Get("conversations")

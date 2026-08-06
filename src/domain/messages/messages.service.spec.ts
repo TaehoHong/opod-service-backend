@@ -356,6 +356,7 @@ describe("MessagesService", () => {
         userId: "human-1",
         characterId: "ai-2",
         createdAt,
+        lastReadAt: null,
         character: {
           id: "ai-2",
           publicId: "nari",
@@ -378,6 +379,7 @@ describe("MessagesService", () => {
         userId: "human-1",
         characterId: "ai-1",
         createdAt,
+        lastReadAt: null,
         character: {
           id: "ai-1",
           publicId: "arin",
@@ -388,10 +390,17 @@ describe("MessagesService", () => {
         messages: [],
       },
     ]);
+    // 미읽음 수는 대화별 groupBy 한 번으로 받아 해당 대화에만 실린다.
+    const groupBy = jest
+      .fn()
+      .mockResolvedValue([
+        { conversationId: "conversation-2", _count: { _all: 3 } },
+      ]);
     const service = new (MessagesService as unknown as MessagesServiceCtor)(
       { hasCharacter: jest.fn() },
       {
         messageConversation: { findMany },
+        message: { groupBy },
       },
       createCreditsStub(),
     );
@@ -419,7 +428,7 @@ describe("MessagesService", () => {
             body: "reply",
             createdAt: createdAt.toISOString(),
           },
-          unreadCount: 0,
+          unreadCount: 3,
         },
       ],
       nextCursor: expect.any(String),

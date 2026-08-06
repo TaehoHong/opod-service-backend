@@ -1,4 +1,9 @@
-import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { CharactersService } from "../characters/characters.service";
 import { CreditsService } from "../credits/credits.service";
@@ -37,13 +42,18 @@ type ConversationSummary = {
     interests: string[];
   };
   lastMessage?: Message;
-  unreadCount: 0;
+  unreadCount: number;
 };
 
 type PrismaConversationSummary = {
   id: string;
   character: ConversationSummary["character"];
   messages: PrismaMessage[];
+};
+
+type ConversationReadReceipt = {
+  conversationId: string;
+  lastReadAt: string;
 };
 
 @Injectable()
@@ -217,10 +227,12 @@ export class MessagesService {
         },
       },
     });
+    const unreadCounts = await this.unreadCountsFor(conversations);
     const page = pageFromRows(
       conversations.map((conversation) =>
         this.toConversationSummary(
           conversation as unknown as PrismaConversationSummary,
+          unreadCounts.get(conversation.id) ?? 0,
         ),
       ),
       input.limit,
@@ -234,6 +246,30 @@ export class MessagesService {
         unreadCount: item.unreadCount,
       })),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
+  }
+
+  // 읽음은 앱이 대화를 실제로 보여줬을 때 명시적으로 찍는다. 조회(GET)에
+  // 부수효과를 두지 않고, 메시지 전송이 자동으로 읽음 처리하지도 않는다.
+  async markConversationRead(input: {
+    userId: string;
+    characterId: string;
+  }): Promise<ConversationReadReceipt> {
+    await this.assertCharacter(input.characterId);
+
+    const conversation = await this.findConversation(input);
+    if (!conversation) {
+      throw new NotFoundException("Conversation not found");
+    }
+
+    const updated = await this.prisma.messageConversation.update({
+      where: { id: conversation.id },
+      data: { lastReadAt: new Date() },
+      select: { id: true, lastReadAt: true },
+    });
+    return {
+      conversationId: updated.id,
+      lastReadAt: updated.lastReadAt!.toISOString(),
     };
   }
 
@@ -304,6 +340,7 @@ export class MessagesService {
 
   private toConversationSummary(
     conversation: PrismaConversationSummary,
+    unreadCount: number,
   ): ConversationSummary {
     const [lastMessage] = conversation.messages;
     return {
@@ -311,8 +348,33 @@ export class MessagesService {
       conversationId: conversation.id,
       character: conversation.character,
       ...(lastMessage ? { lastMessage: this.toMessage(lastMessage) } : {}),
-      // ponytail: no read-receipt table yet; replace with real unread count when reads exist.
-      unreadCount: 0,
+      unreadCount,
     };
+  }
+
+  // 대화별 미읽음 수를 한 번의 groupBy로 계산한다. 대화마다 기준 시각이 달라
+  // OR 창을 쓴다. 유저 자신이 보낸 메시지는 세지 않는다 — 그러면 대화를 시작한
+  // 순간부터 배지가 붙는다.
+  private async unreadCountsFor(
+    conversations: { id: string; lastReadAt: Date | null }[],
+  ): Promise<Map<string, number>> {
+    if (conversations.length === 0) {
+      return new Map();
+    }
+    const grouped = await this.prisma.message.groupBy({
+      by: ["conversationId"],
+      where: {
+        senderType: "character",
+        OR: conversations.map((conversation) => ({
+          conversationId: conversation.id,
+          // lastReadAt이 null이면 한 번도 읽지 않은 대화라 전부 미읽음이다.
+          ...(conversation.lastReadAt
+            ? { createdAt: { gt: conversation.lastReadAt } }
+            : {}),
+        })),
+      },
+      _count: { _all: true },
+    });
+    return new Map(grouped.map((row) => [row.conversationId, row._count._all]));
   }
 }
