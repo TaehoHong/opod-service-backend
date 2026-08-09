@@ -16,6 +16,27 @@ export const MESSAGE_REPLY_PROVIDER = Symbol("MESSAGE_REPLY_PROVIDER");
 
 type MessageReplyEnv = Record<string, string | undefined>;
 
+/**
+ * The Agent answers only after the model has finished generating, so this wait
+ * covers a whole turn — not a handshake. A local model (MLX/Ollama) loads its
+ * weights on the first request and can sit silent past a minute before the first
+ * token, which is why the default is minutes rather than seconds: cutting the
+ * request there costs the reply *and* the credits already reserved for it.
+ *
+ * Deployments fronted by a fast hosted model should turn this down via
+ * OPOD_AGENT_TIMEOUT_MS — a stuck upstream otherwise holds the request open.
+ */
+const DEFAULT_REPLY_TIMEOUT_MS = 300_000;
+
+function replyTimeoutMs(env: MessageReplyEnv): number {
+  const configured = Number(env.OPOD_AGENT_TIMEOUT_MS);
+  // Number("") is 0 and Number(undefined) is NaN — both mean "unset" here, and
+  // a zero or negative timeout would abort every turn instantly.
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_REPLY_TIMEOUT_MS;
+}
+
 export function createMessageReplyProvider(
   env: MessageReplyEnv = process.env,
   fetchReply: typeof fetch = fetch,
@@ -25,6 +46,8 @@ export function createMessageReplyProvider(
   if (!apiUrl) {
     throw new Error("OPOD_AGENT_URL is required");
   }
+
+  const timeoutMs = replyTimeoutMs(env);
 
   return {
     async createReply(input) {
@@ -42,7 +65,7 @@ export function createMessageReplyProvider(
           body: JSON.stringify({
             messages: input.messages,
           }),
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
 
         if (!response.ok) {
