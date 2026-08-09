@@ -26,6 +26,17 @@ type CharacterRelationship = {
   characterId: string;
   isFollowing: boolean;
   followedAt?: string;
+  /**
+   * How far the DM relationship with this character has come. 1 for anyone who
+   * has never talked to them. Derived from lifetime bond XP by opod-agent and
+   * stored, so nothing here knows the curve.
+   *
+   * Only this axis is exposed. The row also carries `warmth`, which decays with
+   * time — that one stays server-side on purpose. DM replies cost credits, so
+   * showing a gauge that visibly cools would turn the relationship into a
+   * reason to spend rather than a result of talking.
+   */
+  bondLevel: number;
 };
 
 type PrismaCharacterFollow =
@@ -96,19 +107,36 @@ export class FollowsService {
   }): Promise<CharacterRelationship> {
     await this.assertUserAndCharacter(input);
 
-    const follow = await this.prisma.userCharacterFollow.findUnique({
-      where: {
-        userId_characterId: {
-          userId: input.userId,
-          characterId: input.characterId,
+    // agent_relationship_state is opod-agent's table (schema.prisma keeps the
+    // ownership note); this service only ever reads bond_level from it, and
+    // never writes. It has no FK to users/characters — identity reaches the
+    // Agent through X-Opod-* headers — so an absent row simply means "they have
+    // never talked", which is level 1.
+    const [follow, bond] = await Promise.all([
+      this.prisma.userCharacterFollow.findUnique({
+        where: {
+          userId_characterId: {
+            userId: input.userId,
+            characterId: input.characterId,
+          },
         },
-      },
-    });
+      }),
+      this.prisma.agentRelationshipState.findUnique({
+        where: {
+          userId_characterId: {
+            userId: input.userId,
+            characterId: input.characterId,
+          },
+        },
+        select: { bondLevel: true },
+      }),
+    ]);
 
     return {
       characterId: input.characterId,
       isFollowing: follow !== null,
       ...(follow ? { followedAt: follow.createdAt.toISOString() } : {}),
+      bondLevel: bond?.bondLevel ?? 1,
     };
   }
 

@@ -123,6 +123,7 @@ describe("FollowsService", () => {
       characterId: "character-1",
       createdAt,
     });
+    const bondFindUnique = jest.fn().mockResolvedValue({ bondLevel: 4 });
     const service = new (
       FollowsService as unknown as new (
         usersService: unknown,
@@ -132,7 +133,10 @@ describe("FollowsService", () => {
     )(
       { hasUser: jest.fn().mockResolvedValue(true) },
       { hasCharacter: jest.fn().mockResolvedValue(true) },
-      { userCharacterFollow: { findUnique } },
+      {
+        userCharacterFollow: { findUnique },
+        agentRelationshipState: { findUnique: bondFindUnique },
+      },
     );
 
     await expect(
@@ -144,6 +148,7 @@ describe("FollowsService", () => {
       characterId: "character-1",
       isFollowing: true,
       followedAt: createdAt.toISOString(),
+      bondLevel: 4,
     });
     expect(findUnique).toHaveBeenCalledWith({
       where: {
@@ -152,6 +157,48 @@ describe("FollowsService", () => {
           characterId: "character-1",
         },
       },
+    });
+    // Read-only, and only the one column: warmth and the daily counters stay
+    // inside the Agent's boundary.
+    expect(bondFindUnique).toHaveBeenCalledWith({
+      where: {
+        userId_characterId: {
+          userId: "user-1",
+          characterId: "character-1",
+        },
+      },
+      select: { bondLevel: true },
+    });
+  });
+
+  it("reports level 1 when the two have never talked", async () => {
+    const service = new (
+      FollowsService as unknown as new (
+        usersService: unknown,
+        charactersService: unknown,
+        prisma: unknown,
+      ) => FollowsService
+    )(
+      { hasUser: jest.fn().mockResolvedValue(true) },
+      { hasCharacter: jest.fn().mockResolvedValue(true) },
+      {
+        userCharacterFollow: { findUnique: jest.fn().mockResolvedValue(null) },
+        // No agent_relationship_state row — the Agent has never seen this pair.
+        agentRelationshipState: {
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+      },
+    );
+
+    await expect(
+      service.getCharacterRelationship({
+        userId: "user-1",
+        characterId: "character-1",
+      }),
+    ).resolves.toEqual({
+      characterId: "character-1",
+      isFollowing: false,
+      bondLevel: 1,
     });
   });
 
