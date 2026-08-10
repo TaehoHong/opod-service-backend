@@ -43,9 +43,24 @@ export type CreditReservationRecord = {
   amount: number;
   status: "reserved" | "captured" | "released";
   reference: string;
-  expiresAt: string;
+  // 소유한 작업이 수명을 관리하는 예약에는 없다.
+  expiresAt?: string;
   createdAt: string;
 };
+
+/**
+ * 활성 예약 = 아직 `reserved`이고, TTL이 있다면 아직 안 지난 것.
+ *
+ * `expiresAt`이 null인 예약은 소유한 작업이 직접 capture/release하므로 시간으로
+ * 만료되지 않는다. 잔액과 환불 가능 여부를 판단하는 쪽이 각자 다른 조건을 쓰면
+ * 진행 중인 DM 답변의 예약이 한쪽에서만 보이게 되므로 조건을 한 곳에 둔다.
+ */
+export function activeReservationFilter(now: Date = new Date()) {
+  return {
+    status: "reserved" as const,
+    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+  };
+}
 
 type GrantSnapshot = {
   grant: LedgerRow;
@@ -65,6 +80,9 @@ export class CreditsService {
     userId: string;
     actionType: CreditActionType;
     reference?: string;
+    // null을 명시하면 TTL 없는 job-managed 예약이 된다. 호출한 쪽이 capture나
+    // release를 책임진다.
+    expiresAt?: Date | null;
   }): Promise<CreditReservationRecord> {
     const amount = creditActionPrices[input.actionType];
     const reference = input.reference?.trim() || crypto.randomUUID();
@@ -95,7 +113,10 @@ export class CreditsService {
           actionType: input.actionType,
           amount,
           reference,
-          expiresAt: new Date(Date.now() + reservationTtlMs),
+          expiresAt:
+            input.expiresAt === undefined
+              ? new Date(Date.now() + reservationTtlMs)
+              : input.expiresAt,
         },
       });
       return this.toReservation(reservation);
@@ -105,12 +126,44 @@ export class CreditsService {
   async captureReservation(input: {
     reference: string;
   }): Promise<CreditReservationRecord> {
-    const reference = input.reference?.trim();
-    if (!reference) {
-      throw new BadRequestException("Credit reservation reference is required");
-    }
+    const reference = this.requireReference(input.reference);
+    const result = await this.prisma.$transaction((tx) =>
+      this.captureReservationInTx(tx, reference),
+    );
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    if (result.expired) {
+      throw new ConflictException("Credit reservation expired");
+    }
+    return this.toReservation(result.reservation);
+  }
+
+  /**
+   * 캡처를 호출자의 트랜잭션 안에서 수행한다. DM 답변처럼 캐릭터 메시지 저장과
+   * 크레딧 캡처가 하나의 완료 단위여야 할 때 쓴다.
+   *
+   * 공개 메서드와 달리 만료 판정도 그 자리에서 던지므로 호출자의 트랜잭션이
+   * 통째로 롤백된다. job-managed 예약은 `expiresAt`이 null이라 이 경로로 오지
+   * 않는다.
+   */
+  async captureReservationWithClient(
+    client: Prisma.TransactionClient,
+    input: { reference: string },
+  ): Promise<CreditReservationRecord> {
+    const result = await this.captureReservationInTx(
+      client,
+      this.requireReference(input.reference),
+    );
+    if (result.expired) {
+      throw new ConflictException("Credit reservation expired");
+    }
+    return this.toReservation(result.reservation);
+  }
+
+  private async captureReservationInTx(
+    tx: Prisma.TransactionClient,
+    reference: string,
+  ) {
+    {
       const found = await tx.creditReservation.findUnique({
         where: { reference },
       });
@@ -127,7 +180,9 @@ export class CreditsService {
       if (reservation.status === "released") {
         throw new ConflictException("Credit reservation was released");
       }
-      if (reservation.expiresAt <= new Date()) {
+      // expiresAt이 null이면 소유한 작업이 수명을 관리하므로 시간으로 만료되지
+      // 않는다. 그 예약은 작업이 직접 capture하거나 release한다.
+      if (reservation.expiresAt && reservation.expiresAt <= new Date()) {
         const released = await tx.creditReservation.update({
           where: { id: reservation.id },
           data: { status: "released" },
@@ -161,27 +216,42 @@ export class CreditsService {
         data: { status: "captured" },
       });
       return { expired: false, reservation: captured };
-    });
-
-    if (result.expired) {
-      throw new ConflictException("Credit reservation expired");
     }
-    return this.toReservation(result.reservation);
   }
 
   async releaseReservation(input: {
     reference: string;
   }): Promise<CreditReservationRecord> {
-    const found = await this.prisma.creditReservation.findUnique({
-      where: { reference: input.reference },
-    });
-    if (!found) {
-      throw new BadRequestException("Credit reservation not found");
-    }
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction((tx) =>
+      this.releaseReservationInTx(tx, input.reference),
+    );
+  }
+
+  /**
+   * 해제를 호출자의 트랜잭션 안에서 수행한다. 작업을 failed로 닫는 것과 예약
+   * 해제가 함께 반영돼야 예약이 영원히 잠기지 않는다.
+   */
+  async releaseReservationWithClient(
+    client: Prisma.TransactionClient,
+    input: { reference: string },
+  ): Promise<CreditReservationRecord> {
+    return this.releaseReservationInTx(client, input.reference);
+  }
+
+  private async releaseReservationInTx(
+    tx: Prisma.TransactionClient,
+    reference: string,
+  ): Promise<CreditReservationRecord> {
+    {
+      const found = await tx.creditReservation.findUnique({
+        where: { reference },
+      });
+      if (!found) {
+        throw new BadRequestException("Credit reservation not found");
+      }
       await this.lockUserCredits(tx, found.userId);
       const reservation = await tx.creditReservation.findUniqueOrThrow({
-        where: { reference: input.reference },
+        where: { reference },
       });
       if (reservation.status !== "reserved") {
         return this.toReservation(reservation);
@@ -198,7 +268,15 @@ export class CreditsService {
         );
       }
       return this.toReservation({ ...reservation, status: "released" });
-    });
+    }
+  }
+
+  private requireReference(reference: string): string {
+    const trimmed = reference?.trim();
+    if (!trimmed) {
+      throw new BadRequestException("Credit reservation reference is required");
+    }
+    return trimmed;
   }
 
   async grantCredits(input: {
@@ -645,7 +723,7 @@ export class CreditsService {
       }),
       client.creditReservation.aggregate({
         _sum: { amount: true },
-        where: { userId, status: "reserved", expiresAt: { gt: new Date() } },
+        where: { userId, ...activeReservationFilter() },
       }),
     ]);
     const sumByKind = (
@@ -719,7 +797,7 @@ export class CreditsService {
       amount: row.amount,
       status: row.status,
       reference: row.reference,
-      expiresAt: row.expiresAt.toISOString(),
+      ...(row.expiresAt ? { expiresAt: row.expiresAt.toISOString() } : {}),
       createdAt: row.createdAt.toISOString(),
     };
   }

@@ -1,9 +1,21 @@
-import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { MessagesService } from "../../domain/messages/messages.service";
 import { parsePageQuery } from "../../domain/database/page";
-import { MarkConversationReadDto, SendMessageDto } from "./message.dto";
+import {
+  MarkConversationReadDto,
+  RetryReplyDto,
+  SendMessageDto,
+} from "./message.dto";
 
 @Controller("messages")
 export class MessagesController {
@@ -20,6 +32,18 @@ export class MessagesController {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
     return this.messagesService.sendMessage({ ...body, userId });
+  }
+
+  // 답변 작업을 다시 큐에 넣기만 하므로 202다. 실제 답변은 워커가 만든다.
+  @Post("retry")
+  @HttpCode(202)
+  async retryReply(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: RetryReplyDto,
+  ) {
+    const userId =
+      await this.authService.userIdFromAuthorization(authorization);
+    return this.messagesService.retryReply({ ...body, userId });
   }
 
   @Post("read")

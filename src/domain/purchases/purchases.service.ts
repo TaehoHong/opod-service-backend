@@ -6,7 +6,10 @@ import {
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { createHash, createHmac } from "node:crypto";
-import { CreditsService } from "../credits/credits.service";
+import {
+  activeReservationFilter,
+  CreditsService,
+} from "../credits/credits.service";
 import { decodeCursor, PageInput, pageFromRows } from "../database/page";
 import { PrismaService } from "../database/prisma.service";
 import { NOTIFICATION_TYPES } from "../notifications/notification-types";
@@ -692,7 +695,7 @@ export class PurchasesService {
     if (purchase.payment?.channel !== "web")
       throw new ConflictException("Store managed refund");
     const activeReservations = await tx.creditReservation.count({
-      where: { userId, status: "reserved", expiresAt: { gt: new Date() } },
+      where: { userId, ...activeReservationFilter() },
     });
     if (activeReservations > 0)
       throw new ConflictException("Credit usage is in progress");

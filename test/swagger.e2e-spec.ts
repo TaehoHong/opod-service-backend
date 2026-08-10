@@ -751,6 +751,40 @@ describe("service swagger", () => {
     await app.close();
   });
 
+  it("documents that a sent message does not carry the reply", async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [MessagesDocModule],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+
+    setupServiceSwagger(app, [MessagesDocModule]);
+    await app.init();
+
+    const response = await request(app.getHttpServer())
+      .get("/docs-json")
+      .expect(200);
+    const sendMessage = response.body.paths["/messages"].post;
+    const retryReply = response.body.paths["/messages/retry"].post;
+
+    // 라우트 이름만 보면 답변이 돌아올 것처럼 읽힌다. 그 오해가 통합 실패의
+    // 가장 흔한 원인이라 문서가 명시해야 한다.
+    expect(sendMessage.description).toContain("GET /messages");
+    expect(
+      sendMessage.responses["201"].content["application/json"].example.messages,
+    ).toHaveLength(1);
+    // 크레딧 부족은 호출자가 분기해야 하는 실패라 성공 예시만으로 부족하다.
+    expect(
+      sendMessage.responses["402"].content["application/json"].example,
+    ).toMatchObject({ error: "INSUFFICIENT_CREDITS" });
+
+    expect(retryReply.responses["202"]).toBeDefined();
+    expect(Object.keys(retryReply.responses)).toEqual(
+      expect.arrayContaining(["404", "409"]),
+    );
+
+    await app.close();
+  });
+
   it("documents feed as feed-only posts", async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [TestAppModule],

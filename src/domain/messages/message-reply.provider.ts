@@ -1,4 +1,17 @@
-import { ServiceUnavailableException } from "@nestjs/common";
+/**
+ * Agent 호출 실패. `retryable`이 워커의 재시도 여부를 가른다 — 같은 요청을 세 번
+ * 보내도 결과가 같을 실패(계약 불일치, 4xx)까지 재시도하면 크레딧을 잡아둔 채
+ * 시간만 쓴다. `reason`은 내부 분류라 사용자에게 노출하지 않는다.
+ */
+export class MessageReplyError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly retryable: boolean,
+  ) {
+    super(`LLM reply provider failed: ${reason}`);
+    this.name = "MessageReplyError";
+  }
+}
 
 export type MessageReplyInput = {
   userId: string;
@@ -51,8 +64,9 @@ export function createMessageReplyProvider(
 
   return {
     async createReply(input) {
+      let response: Awaited<ReturnType<typeof fetch>>;
       try {
-        const response = await fetchReply(apiUrl, {
+        response = await fetchReply(apiUrl, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -67,38 +81,58 @@ export function createMessageReplyProvider(
           }),
           signal: AbortSignal.timeout(timeoutMs),
         });
-
-        if (!response.ok) {
-          throw new ServiceUnavailableException("LLM reply provider failed");
-        }
-
-        const reply = contentFromChatCompletion(await response.json());
-        if (!reply) {
-          throw new ServiceUnavailableException("LLM reply provider failed");
-        }
-
-        return reply;
       } catch (error) {
-        if (error instanceof ServiceUnavailableException) {
-          throw error;
-        }
-        throw new ServiceUnavailableException("LLM reply provider failed");
+        // 연결 실패와 timeout은 둘 다 다음 시도에 성공할 수 있다.
+        throw new MessageReplyError(abortReason(error) ?? "network", true);
       }
+
+      if (!response.ok) {
+        // 4xx는 같은 요청을 다시 보내도 같은 답이라 재시도하지 않는다. 429는
+        // 지금 몰린 것뿐이라 예외다.
+        const retryable = response.status >= 500 || response.status === 429;
+        throw new MessageReplyError(`http_${response.status}`, retryable);
+      }
+
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new MessageReplyError("unreadable_body", true);
+      }
+
+      const parsed = contentFromChatCompletion(payload);
+      if (parsed === "malformed") {
+        // choices 자체가 없다 = 응답 계약이 어긋났다. 재시도해도 같다.
+        throw new MessageReplyError("invalid_response", false);
+      }
+      if (!parsed) {
+        // 형식은 맞는데 내용이 비었다 = 생성이 헛돈 것. 다시 시도할 값이 있다.
+        throw new MessageReplyError("empty_reply", true);
+      }
+
+      return parsed;
     },
   };
 }
 
-function contentFromChatCompletion(value: unknown): string | null {
-  if (!isRecord(value)) {
+function abortReason(error: unknown): string | null {
+  if (!(error instanceof Error)) {
     return null;
   }
-  const choices = value.choices;
-  if (!Array.isArray(choices)) {
-    return null;
+  return error.name === "TimeoutError" || error.name === "AbortError"
+    ? "timeout"
+    : null;
+}
+
+function contentFromChatCompletion(
+  value: unknown,
+): string | "malformed" | null {
+  if (!isRecord(value) || !Array.isArray(value.choices)) {
+    return "malformed";
   }
-  const first = choices[0];
+  const first = value.choices[0];
   if (!isRecord(first) || !isRecord(first.message)) {
-    return null;
+    return "malformed";
   }
   const content = first.message.content;
   return typeof content === "string" && content.trim() ? content.trim() : null;

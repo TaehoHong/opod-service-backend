@@ -41,6 +41,14 @@
   `S3_PUBLIC_BASE_URL`, `PORT`, `PURCHASE_ACCOUNT_TOKEN_SECRET`, Polar/Apple/
   Google provider credential·상품 ID. 정확한 키는 `.env.production.example`을
   따른다. (사실)
+- DM 답변 worker는 서비스 프로세스 안에서 함께 돈다. 기본값으로 동작하므로
+  설정은 선택이며, 모두 `MESSAGE_REPLY_` 접두사다: `WORKER_ENABLED`(false면 API만
+  뜨고 worker는 안 돔), `POLL_INTERVAL_MS`(1000), `CONCURRENCY`(동시에 처리할 대화
+  수, 4), `MAX_ATTEMPTS`(3), `DEADLINE_MS`(900000), `LEASE_MS`(360000),
+  `RETRY_BACKOFF_MS`(5000). (사실)
+- 인스턴스를 여러 개 띄워도 lease와 대화 단위 advisory lock이 중복 처리를 막는다.
+  worker를 한 프로세스에만 두고 싶으면 나머지에 `MESSAGE_REPLY_WORKER_ENABLED=false`
+  를 준다. (사실)
 
 ## Operations
 

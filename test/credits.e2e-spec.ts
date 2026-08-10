@@ -8,6 +8,7 @@ import { PrismaService } from "../src/domain/database/prisma.service";
 import { PaymentsService } from "../src/domain/payments/payments.service";
 import { PurchasesService } from "../src/domain/purchases/purchases.service";
 import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
+import { MessageReplyWorker } from "../src/domain/messages/message-reply.worker";
 import { registerHuman } from "./human-auth";
 
 describe("credits, purchases and payments", () => {
@@ -16,6 +17,7 @@ describe("credits, purchases and payments", () => {
   let credits: CreditsService;
   let payments: PaymentsService;
   let purchases: PurchasesService;
+  let replyWorker: MessageReplyWorker;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -28,6 +30,7 @@ describe("credits, purchases and payments", () => {
     credits = app.get(CreditsService);
     payments = app.get(PaymentsService);
     purchases = app.get(PurchasesService);
+    replyWorker = app.get(MessageReplyWorker);
   });
 
   afterAll(() => app.close());
@@ -117,6 +120,21 @@ describe("credits, purchases and payments", () => {
       .set(human.authHeaders)
       .send({ characterId: target.id, body: "hello" })
       .expect(201);
+
+    // 답변이 오기 전에도 예약분은 쓸 수 있는 잔액에서 빠져 있어야 한다. 만료가
+    // 없는 예약이라 시간이 지나도 되살아나지 않는다.
+    await request(app.getHttpServer())
+      .get("/credits/balance")
+      .set(human.authHeaders)
+      .expect(200)
+      .expect({
+        userId: human.user.id,
+        balance: 98,
+        paidBalance: 0,
+        freeBalance: 100,
+      });
+
+    await replyWorker.runOnce();
 
     await request(app.getHttpServer())
       .get("/credits/balance")
@@ -447,6 +465,50 @@ describe("credits, purchases and payments", () => {
     await expect(
       prisma.creditLedger.count({ where: { externalReference } }),
     ).resolves.toBe(1);
+  });
+
+  it("keeps a job-managed reservation active past the normal TTL", async () => {
+    const human = await registerHuman(app);
+    const reservation = await credits.reserveCredits({
+      userId: human.user.id,
+      actionType: "chat_reply",
+      expiresAt: null,
+    });
+    // 일반 예약이라면 진작 만료됐을 시점으로 밀어도 살아 있어야 한다. 만료되면
+    // 답변 성공과 예약 만료가 경합해 크레딧을 못 받는 답변이 생긴다.
+    await prisma.creditReservation.update({
+      where: { id: reservation.id },
+      data: { createdAt: new Date(Date.now() - 60 * 60_000) },
+    });
+
+    await request(app.getHttpServer())
+      .get("/credits/balance")
+      .set(human.authHeaders)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.balance).toBe(98);
+      });
+    await expect(
+      credits.captureReservation({ reference: reservation.reference }),
+    ).resolves.toMatchObject({ status: "captured" });
+  });
+
+  it("blocks a refund while a job-managed reservation is still open", async () => {
+    const human = await registerHuman(app);
+    const target = await character();
+
+    await request(app.getHttpServer())
+      .post("/messages")
+      .set(human.authHeaders)
+      .send({ characterId: target.id, body: "hello" })
+      .expect(201);
+
+    // 진행 중인 DM 답변이 만료 조건으로만 걸러지면 이 예약은 보이지 않고,
+    // 환불이 통과해 원장이 음수로 간다.
+    const reservations = await prisma.creditReservation.count({
+      where: { userId: human.user.id, status: "reserved", expiresAt: null },
+    });
+    expect(reservations).toBe(1);
   });
 
   it("releases an expired reservation without creating usage", async () => {

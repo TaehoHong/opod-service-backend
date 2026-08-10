@@ -8,6 +8,8 @@ type OpenApiDocument = {
 
 type OpenApiOperation = {
   operationId?: string;
+  summary?: string;
+  description?: string;
   parameters?: unknown[];
   requestBody?: unknown;
   responses?: Record<string, unknown>;
@@ -22,9 +24,15 @@ type OpenApiTag = {
 
 type OperationExample = {
   auth?: boolean | "optional";
+  // 라우트 이름만 봐서는 알 수 없는 동작을 적는다. 응답 예시로 드러나는 사실은
+  // 반복하지 않는다.
+  summary?: string;
+  description?: string;
   request?: unknown;
   response?: unknown;
   status?: string;
+  // 호출자가 분기해야 하는 실패만 적는다. 인증 누락처럼 전역으로 같은 것은 뺀다.
+  errors?: Record<string, { description: string; example?: unknown }>;
 };
 
 export function setupServiceSwagger(
@@ -167,12 +175,30 @@ const postReaction = {
   reactionType: "like",
   createdAt: isoDate,
 };
+// 사용자 메시지와 그 답변은 같은 turnId를 공유한다. 답변이 비동기로 오므로
+// 목록에서는 두 메시지 사이에 다른 턴이 끼어 있을 수 있다.
 const message = {
   id: "message_01",
   conversationId: "conversation_01",
   senderType: "user",
   body: "안녕",
   createdAt: isoDate,
+  turnId: "message_01",
+  replyStatus: "pending",
+};
+const characterMessage = {
+  id: "message_02",
+  conversationId: "conversation_01",
+  senderType: "character",
+  body: "안녕! 오늘 필름 한 통 다 썼어.",
+  createdAt: "2026-07-05T08:00:12.000Z",
+  turnId: "message_01",
+  replyStatus: "completed",
+};
+const insufficientCredits = {
+  statusCode: 402,
+  message: "Insufficient credits",
+  error: "INSUFFICIENT_CREDITS",
 };
 const creditEntry = {
   id: "credit_entry_01",
@@ -472,20 +498,99 @@ const operationExamples: Record<string, OperationExample> = {
 
   MessagesController_sendMessage: {
     auth: true,
+    summary: "캐릭터에게 메시지 보내기 (답변은 비동기)",
+    description: [
+      "**응답에 캐릭터 답변은 들어 있지 않다.** `messages`에는 방금 저장한 사용자",
+      "메시지 한 건만 담기고, 답변은 서버 워커가 별도로 생성해 저장한다.",
+      "",
+      "답변을 받으려면 `GET /messages`를 마지막 `nextCursor`로 주기적으로 조회한다.",
+      "사용자 메시지의 `replyStatus`가 `pending`에서 `completed`나 `failed`로 바뀌고,",
+      "`completed`면 같은 `turnId`를 가진 캐릭터 메시지가 함께 조회된다.",
+      "",
+      "크레딧은 전송 시점에 예약하고 답변이 성공할 때 차감한다. 답변이 최종",
+      "실패하면 예약은 해제되어 차감되지 않는다.",
+    ].join("\n"),
     request: { characterId: "character_01", body: "안녕" },
     response: { conversationId: "conversation_01", messages: [message] },
     status: "201",
+    errors: {
+      "400": { description: "본문이 비었거나 존재하지 않는 캐릭터" },
+      "402": {
+        description: "가용 크레딧 부족. 메시지는 저장되지 않는다",
+        example: insufficientCredits,
+      },
+    },
   },
   MessagesController_listConversations: {
     auth: true,
+    summary: "대화 목록",
+    description: [
+      "마지막 활동 시각 내림차순. `unreadCount`는 마지막 읽음 이후 도착한 **캐릭터**",
+      "메시지 수이며, 사용자 자신이 보낸 메시지는 세지 않는다.",
+    ].join("\n"),
     response: page({
       conversationId: "conversation_01",
       character,
-      lastMessage: message,
-      unreadCount: 0,
+      lastMessage: characterMessage,
+      unreadCount: 1,
     }),
   },
-  MessagesController_getMessages: { auth: true, response: page(message) },
+  MessagesController_getMessages: {
+    auth: true,
+    summary: "대화 메시지 조회 (답변 폴링 경로)",
+    description: [
+      "오래된 메시지부터의 cursor 페이지네이션. 새 메시지 폴링에 같은 엔드포인트를",
+      "쓴다 — 마지막 `nextCursor`를 넘기면 그 이후만 돌아온다.",
+      "",
+      "`replyStatus`는 그 메시지가 속한 턴의 답변 상태다.",
+      "`pending`(생성 대기·진행 중) · `completed`(답변 저장됨) ·",
+      "`failed`(최종 실패, `POST /messages/retry`로 재시도 가능).",
+      "비동기 전환 이전에 저장된 메시지에는 `turnId`와 `replyStatus`가 없다.",
+      "",
+      "답변이 늦게 도착하므로 시간순 목록에서 답변이 그다음 질문보다 뒤에 올 수",
+      "있다. 어떤 답변이 어떤 질문의 것인지는 순서가 아니라 `turnId`로 판단한다.",
+    ].join("\n"),
+    response: page(characterMessage),
+  },
+  MessagesController_markConversationRead: {
+    auth: true,
+    summary: "대화 읽음 처리",
+    description: [
+      "앱이 대화를 실제로 화면에 보여줬을 때 호출한다. 메시지 조회와 전송은 읽음을",
+      "찍지 않으므로, 이 호출을 빠뜨리면 `unreadCount`가 줄지 않는다.",
+    ].join("\n"),
+    request: { characterId: "character_01" },
+    response: { conversationId: "conversation_01", lastReadAt: isoDate },
+    status: "201",
+    errors: {
+      "404": { description: "아직 시작하지 않은 대화" },
+    },
+  },
+  MessagesController_retryReply: {
+    auth: true,
+    summary: "실패한 답변 재시도",
+    description: [
+      "`replyStatus`가 `failed`인 본인 턴만 다시 큐에 넣는다. 새 크레딧 예약을",
+      "만들고 해당 대화의 마지막 순서로 배치하므로, 대기 중인 다른 턴이 있으면",
+      "그 뒤에 처리된다.",
+      "",
+      "202는 재등록까지만 뜻한다. 결과는 `GET /messages` 폴링으로 확인한다.",
+      "같은 턴에 재시도를 동시에 여러 번 보내도 작업과 예약은 하나만 생긴다.",
+    ].join("\n"),
+    request: { turnId: "message_01" },
+    response: { turnId: "message_01", replyStatus: "pending" },
+    status: "202",
+    errors: {
+      "402": {
+        description: "가용 크레딧 부족",
+        example: insufficientCredits,
+      },
+      "404": { description: "없는 턴이거나 다른 사용자의 대화" },
+      "409": {
+        description: "이미 처리 중(`pending`)이거나 성공한(`completed`) 턴",
+      },
+    },
+  },
 
   NotificationsController_listNotifications: {
     auth: true,
@@ -736,6 +841,12 @@ function addOperationExamples(document: OpenApiDocument) {
       if (example.auth) {
         addAuth(operation, example.auth === "optional");
       }
+      if (example.summary) {
+        operation.summary = example.summary;
+      }
+      if (example.description) {
+        operation.description = example.description;
+      }
       if (example.request !== undefined) {
         operation.requestBody = jsonContentWithExample(
           operation.requestBody,
@@ -745,6 +856,9 @@ function addOperationExamples(document: OpenApiDocument) {
       }
       if (example.response !== undefined) {
         addResponseExample(operation, example.status, example.response);
+      }
+      if (example.errors) {
+        addErrorResponses(operation, example.errors);
       }
     }
   }
@@ -815,6 +929,23 @@ function addResponseExample(
       ...jsonContentWithExample(existing, example, false),
     },
   };
+}
+
+function addErrorResponses(
+  operation: OpenApiOperation,
+  errors: NonNullable<OperationExample["errors"]>,
+) {
+  const responses = operation.responses ?? {};
+
+  for (const [status, error] of Object.entries(errors)) {
+    responses[status] = {
+      description: error.description,
+      ...(error.example === undefined
+        ? {}
+        : jsonContentWithExample({}, error.example, false)),
+    };
+  }
+  operation.responses = responses;
 }
 
 function firstResponseStatus(responses: Record<string, unknown>) {
