@@ -325,6 +325,7 @@ const operationExamples: Record<string, OperationExample> = {
       characterId: "character_01",
       isFollowing: true,
       followedAt: isoDate,
+      bondLevel: 3,
     },
   },
 

@@ -1301,10 +1301,38 @@ model AgentCoreMemory {
 }
 
 // Reflection-trigger accumulator; consumed atomically (UPDATE … RETURNING).
+// Per-relationship state. Two unrelated things share this row because they
+// share its key: the reflection trigger, and the Bond.
+//
+// Bond has two axes on purpose (opod-agent src/memory/bond.ts). `bondXp` is a
+// lifetime accumulator that never decreases — it is the only relationship
+// number that may ever be shown to a user. `warmth` is contact temperature and
+// decays with wall-clock time; it stays internal and only shapes tone. One
+// combined number can express neither "we go back years" nor "but it's been a
+// month" without contradicting the other.
+//
+// `warmth` is stored as-of `last_decay_at`; readers project it forward instead
+// of writing on read, so the chat hot path stays read-only.
 model AgentRelationshipState {
   userId                    String   @map("user_id")
   characterId               String   @map("character_id")
   importanceSinceReflection Float    @default(0) @map("importance_since_reflection")
+  // Lifetime bond accumulator, and the level derived from it. The level is
+  // denormalised on purpose: this service serves GET /characters/:id/relationship
+  // and needs it, and a stored column is the one way it can have it without a
+  // second copy of the agent's level curve living here and drifting. The Agent
+  // writes both; nothing here computes a level. Retuning the curve leaves stored
+  // levels stale until each relationship's next grant — better than a level that
+  // silently drops on deploy.
+  bondXp                    Int      @default(0) @map("bond_xp")
+  bondLevel                 Int      @default(1) @map("bond_level")
+  warmth                    Float    @default(20)
+  lastDecayAt               DateTime @default(now()) @map("last_decay_at") @db.Timestamptz(6)
+  // Daily bond cap. Date is KST YYYY-MM-DD text — the same convention
+  // credit_check_ins.check_in_date uses, so "today" means one thing product-wide
+  // and a timezone change can't silently roll the day.
+  dailyBondDate             String   @default("") @map("daily_bond_date")
+  dailyBondXp               Int      @default(0) @map("daily_bond_xp")
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@id([userId, characterId])
