@@ -97,10 +97,7 @@ export class GooglePlayIapProvider implements PaymentProvider {
         audience,
       });
       const payload = ticket.getPayload();
-      if (
-        payload?.email !== expectedEmail ||
-        payload.email_verified !== true
-      ) {
+      if (payload?.email !== expectedEmail || payload.email_verified !== true) {
         throw new Error("Unexpected Pub/Sub identity");
       }
     } catch {
