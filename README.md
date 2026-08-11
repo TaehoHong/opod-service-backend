@@ -31,7 +31,7 @@ compose files in this repo or overwrite them during deploy.
 ./deploy.sh
 ```
 
-This builds the Linux image locally, uploads it with the server deploy script,
-and restarts only the `api` service. Keep ports, database URL, volumes, nginx,
-certificates, and PostgreSQL exposure in the server-local
-`~/opod-backend/docker-compose.yml` and `.env`.
+This sends the local build context to the VPS Docker daemon over SSH, builds the
+Linux/amd64 image natively on the VPS, and restarts only the `api` service. Keep
+ports, database URL, volumes, nginx, certificates, and PostgreSQL exposure in
+the server-local `~/opod-backend/docker-compose.yml` and `.env`.
