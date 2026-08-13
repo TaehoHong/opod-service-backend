@@ -77,12 +77,14 @@ export class PurchasesService {
     userId: string;
     productId: string;
     idempotencyKey: string;
+    customerIpAddress?: string;
     successUrl?: string;
     returnUrl?: string;
   }) {
     const idempotencyKey = input.idempotencyKey.trim();
     if (!idempotencyKey)
       throw new BadRequestException("Idempotency-Key is required");
+    this.assertCheckoutRedirects(input.successUrl, input.returnUrl);
 
     const existing = await this.prisma.creditPurchase.findUnique({
       where: {
@@ -101,7 +103,11 @@ export class PurchasesService {
       input.productId,
       "web",
     );
+    if (mapping.priceAmount === null || !mapping.currency?.trim()) {
+      throw new ConflictException("Credit product price is unavailable");
+    }
     const externalProduct = mapping.providerProductId;
+    const currency = mapping.currency.trim().toUpperCase();
 
     const purchase = await this.prisma.$transaction(async (tx) => {
       await this.lockPaymentReference(
@@ -134,7 +140,7 @@ export class PurchasesService {
               provider: provider.name,
               providerProductId: externalProduct,
               amount: mapping.priceAmount,
-              currency: mapping.currency,
+              currency,
             },
           },
         },
@@ -255,6 +261,20 @@ export class PurchasesService {
     );
   }
 
+  async getByCheckoutId(userId: string, checkoutId: string) {
+    const normalized = checkoutId.trim();
+    if (!normalized) throw new NotFoundException("Purchase not found");
+    const purchase = await this.prisma.creditPurchase.findFirst({
+      where: {
+        userId,
+        payment: { providerCheckoutId: normalized },
+      },
+      include: { payment: true },
+    });
+    if (!purchase) throw new NotFoundException("Purchase not found");
+    return this.toPurchase(purchase);
+  }
+
   async refundQuote(userId: string, purchaseId: string) {
     return this.prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
@@ -297,12 +317,12 @@ export class PurchasesService {
           provider: quote.provider,
           creditAmount: quote.refundableCredits,
           promotionAmount: quote.promotionRecoveryCredits,
+          freePromotionAmount: quote.freePromotionRecoveryCredits,
           lockedAmount:
             quote.refundableCredits + quote.remainingPromotionCredits,
           recoveryAmount:
             quote.refundableCredits + quote.promotionRecoveryCredits,
-          debtAmount:
-            quote.promotionRecoveryCredits - quote.remainingPromotionCredits,
+          debtAmount: 0,
           grossAmount: quote.grossAmount,
           feeAmount: quote.feeAmount,
           refundAmount: quote.refundAmount,
@@ -421,11 +441,29 @@ export class PurchasesService {
         return this.failProviderEvent(tx, inbox.id, "product_mismatch");
       }
       if (
-        payment.amount !== null &&
+        event.netAmount !== undefined &&
+        event.taxAmount !== undefined &&
         event.amount !== undefined &&
-        payment.amount !== event.amount
+        event.amount !== event.netAmount + event.taxAmount
       ) {
         return this.failProviderEvent(tx, inbox.id, "amount_mismatch");
+      }
+      const reportedAmounts = [event.netAmount, event.amount].filter(
+        (amount): amount is number => amount !== undefined,
+      );
+      if (
+        reportedAmounts.length > 0 &&
+        (payment.amount === null || !reportedAmounts.includes(payment.amount))
+      ) {
+        return this.failProviderEvent(tx, inbox.id, "amount_mismatch");
+      }
+      if (
+        event.currency &&
+        (!payment.currency ||
+          payment.currency.trim().toUpperCase() !==
+            event.currency.trim().toUpperCase())
+      ) {
+        return this.failProviderEvent(tx, inbox.id, "currency_mismatch");
       }
       if (
         payment.status === "paid" &&
@@ -452,6 +490,8 @@ export class PurchasesService {
           data: {
             status: "paid",
             providerTransactionId: event.transactionId,
+            netAmount: event.netAmount,
+            taxAmount: event.taxAmount,
             providerTransactionKey:
               event.transactionKey ??
               (event.transactionId
@@ -499,6 +539,22 @@ export class PurchasesService {
           data: { status: "failed" },
         });
       }
+    } else if (
+      event.type === "refunded" &&
+      event.netAmount !== undefined &&
+      event.refundedAmount !== undefined
+    ) {
+      const failed = await this.applyCumulativeRefund(
+        tx,
+        payment,
+        {
+          ...event,
+          netAmount: event.netAmount,
+          refundedAmount: event.refundedAmount,
+        },
+        inbox.id,
+      );
+      if (failed) return failed;
     } else if (event.type === "refunded") {
       const pendingRefund = await tx.creditRefund.findFirst({
         where: {
@@ -532,6 +588,179 @@ export class PurchasesService {
       },
     });
     return { processed: false, error: code };
+  }
+
+  private async applyCumulativeRefund(
+    tx: Tx,
+    initialPayment: Prisma.PaymentGetPayload<{ include: { purchase: true } }>,
+    event: PaymentEvent & { netAmount: number; refundedAmount: number },
+    inboxId: string,
+  ) {
+    if (
+      event.netAmount <= 0 ||
+      event.refundedAmount <= 0 ||
+      event.refundedAmount > event.netAmount ||
+      (initialPayment.netAmount !== null &&
+        initialPayment.netAmount !== event.netAmount) ||
+      (initialPayment.taxAmount !== null &&
+        event.taxAmount !== undefined &&
+        initialPayment.taxAmount !== event.taxAmount)
+    ) {
+      return this.failProviderEvent(tx, inboxId, "refund_amount_mismatch");
+    }
+    if (
+      event.currency &&
+      (!initialPayment.currency ||
+        initialPayment.currency.trim().toUpperCase() !==
+          event.currency.trim().toUpperCase())
+    ) {
+      return this.failProviderEvent(tx, inboxId, "currency_mismatch");
+    }
+
+    const refunded = await tx.paymentLedger.aggregate({
+      where: {
+        paymentId: initialPayment.id,
+        type: { in: ["refund", "chargeback"] },
+      },
+      _sum: { amount: true },
+    });
+    let previousRefundedAmount = refunded._sum.amount ?? 0;
+    if (event.refundedAmount < previousRefundedAmount) {
+      return this.failProviderEvent(tx, inboxId, "refund_amount_mismatch");
+    }
+
+    const pendingRefund = await tx.creditRefund.findFirst({
+      where: {
+        purchaseId: initialPayment.purchaseId,
+        status: { in: ["payment_processing", "payment_succeeded"] },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    if (pendingRefund) {
+      const increase = event.refundedAmount - previousRefundedAmount;
+      if (increase < pendingRefund.refundAmount) {
+        return this.failProviderEvent(tx, inboxId, "refund_amount_mismatch");
+      }
+      await this.completeRefundWithClient(tx, pendingRefund.id, event);
+      previousRefundedAmount += pendingRefund.refundAmount;
+    }
+    if (event.refundedAmount === previousRefundedAmount) return;
+
+    const payment = await tx.payment.findUniqueOrThrow({
+      where: { id: initialPayment.id },
+      include: { purchase: true },
+    });
+    const snapshot = await this.credits.getPurchaseCreditSnapshotWithClient(
+      tx,
+      {
+        userId: payment.purchase.userId,
+        purchaseId: payment.purchaseId,
+      },
+    );
+    const recovered = await tx.creditRefund.aggregate({
+      where: { purchaseId: payment.purchaseId, status: "completed" },
+      _sum: {
+        creditAmount: true,
+        promotionAmount: true,
+        freePromotionAmount: true,
+      },
+    });
+    const previousBaseRecovery = Math.max(0, recovered._sum.creditAmount ?? 0);
+    const previousPaidPromotionRecovery = Math.max(
+      0,
+      (recovered._sum.promotionAmount ?? 0) -
+        (recovered._sum.freePromotionAmount ?? 0),
+    );
+    const originalPaidCredits =
+      snapshot.originalPaid + snapshot.originalPaidPromotion;
+    const targetPaidRecovery = Math.floor(
+      (originalPaidCredits * event.refundedAmount) / event.netAmount,
+    );
+    const targetBaseRecovery = Math.floor(
+      (snapshot.originalPaid * event.refundedAmount) / event.netAmount,
+    );
+    const targetPaidPromotionRecovery = targetPaidRecovery - targetBaseRecovery;
+    const baseRecovery = Math.max(0, targetBaseRecovery - previousBaseRecovery);
+    const paidPromotionRecovery = Math.max(
+      0,
+      targetPaidPromotionRecovery - previousPaidPromotionRecovery,
+    );
+    const paidRecovery = baseRecovery + paidPromotionRecovery;
+    const freePromotionRecovery = Math.max(
+      0,
+      snapshot.remainingPromotion - snapshot.remainingPaidPromotion,
+    );
+    const recoveryAmount = paidRecovery + freePromotionRecovery;
+    const availablePaidCredits =
+      snapshot.remainingPaid + snapshot.remainingPaidPromotion;
+    const debtAmount = Math.max(0, paidRecovery - availablePaidCredits);
+    const refundIncrease = event.refundedAmount - previousRefundedAmount;
+    const refund = await tx.creditRefund.create({
+      data: {
+        purchaseId: payment.purchaseId,
+        idempotencyKey: `provider:${event.eventId}`,
+        status: "completed",
+        reason: "provider_reversal",
+        provider: payment.provider,
+        creditAmount: baseRecovery,
+        promotionAmount: paidPromotionRecovery + freePromotionRecovery,
+        freePromotionAmount: freePromotionRecovery,
+        lockedAmount: 0,
+        recoveryAmount,
+        debtAmount,
+        grossAmount: refundIncrease,
+        feeAmount: 0,
+        refundAmount: refundIncrease,
+        currency: event.currency ?? payment.currency ?? "UNKNOWN",
+        providerTransactionId: event.transactionId,
+        completedAt: event.occurredAt,
+      },
+    });
+    if (recoveryAmount > 0) {
+      await this.credits.recordRefundRecoveryWithClient(tx, {
+        userId: payment.purchase.userId,
+        purchaseId: payment.purchaseId,
+        amount: recoveryAmount,
+        refundId: refund.id,
+        reason: "provider partial refund",
+      });
+    }
+    const fullyRefunded = event.refundedAmount === event.netAmount;
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        netAmount: event.netAmount,
+        taxAmount: event.taxAmount,
+        status:
+          payment.status === "refunded"
+            ? "refunded"
+            : fullyRefunded
+              ? "reversed"
+              : "partially_refunded",
+        ...(fullyRefunded ? { refundedAt: event.occurredAt } : {}),
+        ledger: {
+          create: {
+            type: "refund",
+            direction: "outflow",
+            amount: refundIncrease,
+            currency: event.currency ?? payment.currency,
+            providerTransactionId: event.transactionId,
+            providerEventId: event.eventId,
+            details: {
+              cumulativeRefundedAmount: event.refundedAmount,
+              refundedTaxAmount: event.refundedTaxAmount,
+            },
+            occurredAt: event.occurredAt,
+          },
+        },
+      },
+    });
+    if (payment.purchase.status !== "refunded") {
+      await tx.creditPurchase.update({
+        where: { id: payment.purchaseId },
+        data: { status: fullyRefunded ? "reversed" : "completed" },
+      });
+    }
   }
 
   private async forceReversal(
@@ -644,7 +873,7 @@ export class PurchasesService {
         paymentId: payment.id,
         type: "refund",
         direction: "outflow",
-        amount: event?.amount ?? refund.refundAmount,
+        amount: refund.refundAmount,
         currency: event?.currency ?? refund.currency,
         providerTransactionId: refund.providerRefundId,
         providerEventId: event?.eventId,
@@ -714,10 +943,17 @@ export class PurchasesService {
       snapshot.locked === 0 &&
       originalEligibleCredits > 0 &&
       remainingEligibleCredits * 2 >= originalEligibleCredits;
+    const paymentAmount =
+      purchase.payment.provider === "polar"
+        ? purchase.payment.netAmount
+        : purchase.payment.amount;
+    if (purchase.payment.provider === "polar" && paymentAmount === null) {
+      throw new ConflictException("Payment refund amount is unavailable");
+    }
     const grossAmount =
-      eligible && purchase.payment.amount
+      eligible && paymentAmount
         ? Math.floor(
-            (purchase.payment.amount * remainingEligibleCredits) /
+            (paymentAmount * remainingEligibleCredits) /
               originalEligibleCredits,
           )
         : 0;
@@ -737,13 +973,12 @@ export class PurchasesService {
       feeAmount,
       refundAmount: grossAmount - feeAmount,
       paidBalanceAfterRefund:
-        paidBalance - refundableCredits - snapshot.originalPromotion,
+        paidBalance - refundableCredits - snapshot.remainingPaidPromotion,
       remainingPromotionCredits: snapshot.remainingPromotion,
-      promotionRecoveryCredits: snapshot.originalPromotion,
-      expectedDebtIncrease: Math.max(
-        0,
-        snapshot.originalPromotion - snapshot.remainingPromotion,
-      ),
+      promotionRecoveryCredits: snapshot.remainingPromotion,
+      freePromotionRecoveryCredits:
+        snapshot.remainingPromotion - snapshot.remainingPaidPromotion,
+      expectedDebtIncrease: 0,
     };
   }
 
@@ -768,6 +1003,58 @@ export class PurchasesService {
     };
   }
 
+  private assertCheckoutRedirects(successUrl?: string, returnUrl?: string) {
+    if (successUrl) {
+      const url = this.checkoutRedirectUrl(successUrl);
+      if (
+        url.pathname !== "/profile/payment-return" ||
+        url.searchParams.size !== 1 ||
+        url.searchParams.get("checkout_id") !== "{CHECKOUT_ID}" ||
+        url.hash
+      ) {
+        throw new BadRequestException("Checkout success URL is invalid");
+      }
+    }
+    if (returnUrl) {
+      const url = this.checkoutRedirectUrl(returnUrl);
+      if (url.pathname !== "/profile" || url.search || url.hash) {
+        throw new BadRequestException("Checkout return URL is invalid");
+      }
+    }
+  }
+
+  private checkoutRedirectUrl(value: string) {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new BadRequestException("Checkout redirect URL is invalid");
+    }
+    const configured = process.env.WEB_APP_URL?.trim();
+    const allowedOrigins = new Set(["https://opod-web.vercel.app"]);
+    if (configured) {
+      try {
+        const configuredUrl = new URL(configured);
+        if (
+          configuredUrl.protocol !== "http:" &&
+          configuredUrl.protocol !== "https:"
+        ) {
+          throw new Error("unsupported protocol");
+        }
+        allowedOrigins.add(configuredUrl.origin);
+      } catch {
+        throw new ConflictException("Web app URL is invalid");
+      }
+    }
+    const local =
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+      (url.protocol === "http:" || url.protocol === "https:");
+    if (!local && !allowedOrigins.has(url.origin)) {
+      throw new BadRequestException("Checkout redirect origin is invalid");
+    }
+    return url;
+  }
+
   private async lockUser(tx: Tx, userId: string) {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`credits:${userId}`}, 0))`;
   }
@@ -780,11 +1067,18 @@ export class PurchasesService {
     purchase: Prisma.CreditPurchaseGetPayload<{ include: { payment: true } }>,
     input: {
       userId: string;
+      customerIpAddress?: string;
       successUrl?: string;
       returnUrl?: string;
     },
   ) {
     if (!purchase.payment) throw new ConflictException("Payment not found");
+    if (
+      purchase.payment.amount === null ||
+      !purchase.payment.currency?.trim()
+    ) {
+      throw new ConflictException("Credit product price is unavailable");
+    }
     if (purchase.payment.providerCheckoutId) {
       return {
         ...this.toPurchase(purchase),
@@ -804,6 +1098,8 @@ export class PurchasesService {
       purchaseId: purchase.id,
       userId: input.userId,
       providerProductId: purchase.payment.providerProductId,
+      currency: purchase.payment.currency ?? undefined,
+      customerIpAddress: input.customerIpAddress,
       successUrl: input.successUrl,
       returnUrl: input.returnUrl,
     };

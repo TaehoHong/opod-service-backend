@@ -64,6 +64,48 @@ describe("credits, purchases and payments", () => {
     ]);
   });
 
+  it("accepts a forwarded checkout IP only from an explicitly trusted proxy", async () => {
+    const human = await registerHuman(app);
+    const createCheckout = jest.spyOn(payments, "createCheckout");
+    const express = app.getHttpAdapter().getInstance();
+
+    try {
+      await request(app.getHttpServer())
+        .post("/purchases/checkouts")
+        .set(human.authHeaders)
+        .set("Idempotency-Key", `checkout-${randomUUID()}`)
+        .set("X-Forwarded-For", "203.0.113.10")
+        .send({
+          productId: "credits_500",
+          customerIpAddress: "198.51.100.20",
+        })
+        .expect(201);
+
+      expect(createCheckout).toHaveBeenCalledWith(
+        "local",
+        expect.objectContaining({ customerIpAddress: "127.0.0.1" }),
+      );
+
+      express.set("trust proxy", 1);
+      createCheckout.mockClear();
+      await request(app.getHttpServer())
+        .post("/purchases/checkouts")
+        .set(human.authHeaders)
+        .set("Idempotency-Key", `checkout-${randomUUID()}`)
+        .set("X-Forwarded-For", "203.0.113.10")
+        .send({ productId: "credits_500" })
+        .expect(201);
+
+      expect(createCheckout).toHaveBeenCalledWith(
+        "local",
+        expect.objectContaining({ customerIpAddress: "203.0.113.10" }),
+      );
+    } finally {
+      express.set("trust proxy", false);
+      createCheckout.mockRestore();
+    }
+  });
+
   it("blocks new sales after deactivation while replaying an existing checkout", async () => {
     const human = await registerHuman(app);
     const idempotencyKey = `checkout-${randomUUID()}`;
@@ -109,6 +151,107 @@ describe("credits, purchases and payments", () => {
         data: { isActive: true },
       });
     }
+  });
+
+  it.each(["priceAmount", "currency"] as const)(
+    "blocks a web checkout without mapping %s",
+    async (field) => {
+      const human = await registerHuman(app);
+      const mapping = await prisma.paymentProductMapping.findFirstOrThrow({
+        where: {
+          provider: "local",
+          environment: "development",
+          providerProductId: "credits_500",
+        },
+      });
+      const original = mapping[field];
+      await prisma.paymentProductMapping.update({
+        where: { id: mapping.id },
+        data: { [field]: null },
+      });
+
+      try {
+        await request(app.getHttpServer())
+          .post("/purchases/checkouts")
+          .set(human.authHeaders)
+          .set("Idempotency-Key", `checkout-${randomUUID()}`)
+          .send({ productId: "credits_500" })
+          .expect(409);
+      } finally {
+        await prisma.paymentProductMapping.update({
+          where: { id: mapping.id },
+          data: { [field]: original },
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "external success origin",
+      successUrl:
+        "https://evil.example/profile/payment-return?checkout_id={CHECKOUT_ID}",
+      returnUrl: "http://localhost:3000/profile",
+    },
+    {
+      name: "unexpected success path",
+      successUrl: "http://localhost:3000/profile?checkout_id={CHECKOUT_ID}",
+      returnUrl: "http://localhost:3000/profile",
+    },
+    {
+      name: "external return origin",
+      successUrl:
+        "http://localhost:3000/profile/payment-return?checkout_id={CHECKOUT_ID}",
+      returnUrl: "https://evil.example/profile",
+    },
+  ])("rejects an untrusted checkout $name", async (testCase) => {
+    const human = await registerHuman(app);
+
+    await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({
+        productId: "credits_500",
+        successUrl: testCase.successUrl,
+        returnUrl: testCase.returnUrl,
+      })
+      .expect(400);
+  });
+
+  it("returns a checkout only to the owning user", async () => {
+    const owner = await registerHuman(app);
+    const stranger = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(owner.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({
+        productId: "credits_500",
+        successUrl:
+          "http://localhost:3000/profile/payment-return?checkout_id={CHECKOUT_ID}",
+        returnUrl: "http://localhost:3000/profile",
+      })
+      .expect(201);
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { purchaseId: checkout.body.id },
+    });
+
+    await request(app.getHttpServer())
+      .get(`/purchases/checkouts/${payment.providerCheckoutId}`)
+      .set(owner.authHeaders)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          id: checkout.body.id,
+          status: "pending",
+          payment: { status: "pending" },
+        });
+      });
+    await request(app.getHttpServer())
+      .get(`/purchases/checkouts/${payment.providerCheckoutId}`)
+      .set(stranger.authHeaders)
+      .expect(404);
   });
 
   it("records a captured action in the immutable ledger with its grant source", async () => {
@@ -210,6 +353,108 @@ describe("credits, purchases and payments", () => {
     ]);
   });
 
+  it.each([
+    { name: "tax-inclusive", netAmount: 4455, taxAmount: 445, amount: 4900 },
+    { name: "tax-exclusive", netAmount: 4900, taxAmount: 490, amount: 5390 },
+  ])("fulfills a $name Polar-compatible amount", async (order) => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    const eventId = `paid-${randomUUID()}`;
+    const verify = jest.spyOn(payments, "verifyEvent").mockResolvedValue({
+      eventId,
+      type: "paid",
+      purchaseId: checkout.body.id,
+      transactionId: `order-${randomUUID()}`,
+      providerProductId: "credits_500",
+      ...order,
+      currency: "krw",
+      occurredAt: new Date(),
+    });
+
+    try {
+      await expect(
+        purchases.applyProviderEvent("local", {
+          body: Buffer.alloc(0),
+          headers: {},
+        }),
+      ).resolves.toEqual({ processed: true });
+    } finally {
+      verify.mockRestore();
+    }
+
+    await expect(
+      prisma.creditLedger.count({
+        where: { externalReference: `credit_purchase:${checkout.body.id}` },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.paymentLedger.findFirstOrThrow({
+        where: { providerEventId: eventId },
+        select: { amount: true, currency: true },
+      }),
+    ).resolves.toEqual({ amount: order.amount, currency: "krw" });
+  });
+
+  it.each([
+    {
+      name: "amount",
+      event: { netAmount: 5000, taxAmount: 400, amount: 5400, currency: "KRW" },
+      error: "amount_mismatch",
+    },
+    {
+      name: "tax total",
+      event: { netAmount: 4900, taxAmount: 490, amount: 5400, currency: "KRW" },
+      error: "amount_mismatch",
+    },
+    {
+      name: "currency",
+      event: { netAmount: 4455, taxAmount: 445, amount: 4900, currency: "USD" },
+      error: "currency_mismatch",
+    },
+  ])(
+    "withholds credits on a Polar-compatible $name mismatch",
+    async (case_) => {
+      const human = await registerHuman(app);
+      const checkout = await request(app.getHttpServer())
+        .post("/purchases/checkouts")
+        .set(human.authHeaders)
+        .set("Idempotency-Key", `checkout-${randomUUID()}`)
+        .send({ productId: "credits_500" })
+        .expect(201);
+      const verify = jest.spyOn(payments, "verifyEvent").mockResolvedValue({
+        eventId: `paid-${randomUUID()}`,
+        type: "paid",
+        purchaseId: checkout.body.id,
+        transactionId: `order-${randomUUID()}`,
+        providerProductId: "credits_500",
+        ...case_.event,
+        occurredAt: new Date(),
+      });
+
+      try {
+        await expect(
+          purchases.applyProviderEvent("local", {
+            body: Buffer.alloc(0),
+            headers: {},
+          }),
+        ).resolves.toEqual({ processed: false, error: case_.error });
+      } finally {
+        verify.mockRestore();
+      }
+
+      await expect(
+        prisma.creditLedger.count({
+          where: { externalReference: `credit_purchase:${checkout.body.id}` },
+        }),
+      ).resolves.toBe(0);
+    },
+  );
+
   it("locks and completes a web refund through the original provider", async () => {
     const human = await registerHuman(app);
     const checkout = await request(app.getHttpServer())
@@ -256,6 +501,40 @@ describe("credits, purchases and payments", () => {
         where: { userId: human.user.id, type: "credit.refund_completed" },
       }),
     ).resolves.toBe(1);
+  });
+
+  it("quotes a Polar refund and fee from the pre-tax payment amount", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post("/payments/webhooks/local")
+      .send({ purchaseId: checkout.body.id, status: "paid" })
+      .expect(201);
+    await prisma.payment.update({
+      where: { purchaseId: checkout.body.id },
+      data: {
+        provider: "polar",
+        netAmount: 4455,
+        taxAmount: 445,
+      },
+    });
+
+    const quote = await request(app.getHttpServer())
+      .get(`/purchases/${checkout.body.id}/refund-quote`)
+      .set(human.authHeaders)
+      .expect(200);
+
+    expect(quote.body).toMatchObject({
+      provider: "polar",
+      grossAmount: 4455,
+      feeAmount: 222,
+      refundAmount: 4233,
+    });
   });
 
   it("resumes internal refund finalization without requesting the provider twice", async () => {
@@ -360,7 +639,127 @@ describe("credits, purchases and payments", () => {
     ).resolves.toBe(1);
   });
 
-  it("recovers an unused purchase promotion before creating paid debt", async () => {
+  it("recovers only cumulative Polar partial-refund increments", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    const transactionId = `polar-order-${randomUUID()}`;
+    const paid = jest.spyOn(payments, "verifyEvent").mockResolvedValue({
+      eventId: `paid-${randomUUID()}`,
+      type: "paid",
+      purchaseId: checkout.body.id,
+      transactionId,
+      providerProductId: "credits_500",
+      netAmount: 4900,
+      taxAmount: 490,
+      amount: 5390,
+      currency: "KRW",
+      occurredAt: new Date(),
+    });
+    await purchases.applyProviderEvent("local", {
+      body: Buffer.alloc(0),
+      headers: {},
+    });
+    paid.mockRestore();
+    await credits.grantCredits({
+      userId: human.user.id,
+      amount: 100,
+      reason: "paid purchase promotion",
+      creditKind: "paid",
+      purchaseId: checkout.body.id,
+      promotionCode: "PAID-BONUS",
+      externalReference: `paid-promotion:${checkout.body.id}`,
+    });
+    await credits.grantCredits({
+      userId: human.user.id,
+      amount: 50,
+      reason: "free purchase promotion",
+      creditKind: "free",
+      purchaseId: checkout.body.id,
+      promotionCode: "FREE-BONUS",
+      externalReference: `free-promotion:${checkout.body.id}`,
+    });
+    await credits.spendCredits({
+      userId: human.user.id,
+      amount: 120,
+      reason: "consume signup and part of free promotion",
+    });
+
+    for (const refundedAmount of [2450, 3675, 3675, 4900]) {
+      const verify = jest.spyOn(payments, "verifyEvent").mockResolvedValue({
+        eventId: `refund-${randomUUID()}`,
+        type: "refunded",
+        transactionId,
+        netAmount: 4900,
+        taxAmount: 490,
+        refundedAmount,
+        refundedTaxAmount: Math.floor(refundedAmount / 10),
+        amount: refundedAmount,
+        currency: "KRW",
+        occurredAt: new Date(),
+      });
+      try {
+        await expect(
+          purchases.applyProviderEvent("local", {
+            body: Buffer.alloc(0),
+            headers: {},
+          }),
+        ).resolves.toEqual({ processed: true });
+      } finally {
+        verify.mockRestore();
+      }
+    }
+
+    await expect(
+      prisma.creditRefund.aggregate({
+        where: {
+          purchaseId: checkout.body.id,
+          reason: "provider_reversal",
+        },
+        _count: true,
+        _sum: {
+          grossAmount: true,
+          creditAmount: true,
+          promotionAmount: true,
+          recoveryAmount: true,
+          freePromotionAmount: true,
+          debtAmount: true,
+        },
+      }),
+    ).resolves.toMatchObject({
+      _count: 3,
+      _sum: {
+        grossAmount: 4900,
+        creditAmount: 500,
+        promotionAmount: 130,
+        recoveryAmount: 630,
+        freePromotionAmount: 30,
+        debtAmount: 0,
+      },
+    });
+    await expect(
+      prisma.payment.findFirstOrThrow({
+        where: { purchaseId: checkout.body.id },
+        select: { status: true, netAmount: true, taxAmount: true },
+      }),
+    ).resolves.toEqual({
+      status: "reversed",
+      netAmount: 4900,
+      taxAmount: 490,
+    });
+    await expect(
+      prisma.creditPurchase.findUniqueOrThrow({
+        where: { id: checkout.body.id },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "reversed" });
+  });
+
+  it("does not convert a used free purchase promotion into paid debt", async () => {
     const human = await registerHuman(app);
     const checkout = await request(app.getHttpServer())
       .post("/purchases/checkouts")
@@ -381,6 +780,11 @@ describe("credits, purchases and payments", () => {
       promotionCode: "WELCOME",
       externalReference: `promotion:${checkout.body.id}`,
     });
+    await credits.spendCredits({
+      userId: human.user.id,
+      amount: 150,
+      reason: "consume signup and purchase promotion credits",
+    });
 
     const refund = await request(app.getHttpServer())
       .post(`/purchases/${checkout.body.id}/refunds`)
@@ -389,7 +793,8 @@ describe("credits, purchases and payments", () => {
       .expect(201);
     expect(refund.body).toMatchObject({
       status: "completed",
-      promotionAmount: 50,
+      promotionAmount: 0,
+      freePromotionAmount: 0,
       debtAmount: 0,
     });
 
@@ -399,9 +804,9 @@ describe("credits, purchases and payments", () => {
       .expect(200)
       .expect({
         userId: human.user.id,
-        balance: 100,
+        balance: 0,
         paidBalance: 0,
-        freeBalance: 100,
+        freeBalance: 0,
       });
   });
 

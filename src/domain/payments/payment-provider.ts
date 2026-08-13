@@ -4,6 +4,8 @@ export type CheckoutRequest = {
   purchaseId: string;
   userId: string;
   providerProductId: string;
+  currency?: string;
+  customerIpAddress?: string;
   successUrl?: string;
   returnUrl?: string;
 };
@@ -33,6 +35,10 @@ export type PaymentEvent = {
   transactionId?: string;
   transactionKey?: string;
   providerProductId?: string;
+  netAmount?: number;
+  taxAmount?: number;
+  refundedAmount?: number;
+  refundedTaxAmount?: number;
   amount?: number;
   currency?: string;
   occurredAt: Date;

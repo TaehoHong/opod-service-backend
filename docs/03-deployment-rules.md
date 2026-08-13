@@ -19,9 +19,8 @@
 ## Release Flow
 
 - 브랜치 전략: main 중심. (사실 — 현재 리포 상태)
-- 배포: `./deploy.sh` — SSH로 로컬 build context를 개발 서버 Docker daemon에
-  전송 → 서버에서 linux/amd64 이미지 네이티브 빌드 → server-local Compose로
-  `api` 서비스만 재시작. (사실)
+- 배포: `./deploy.sh` — linux/amd64 이미지 로컬 빌드 → `docker save` → 서버로
+  scp → 서버의 `deploy.sh` 실행(`api` 서비스만 재시작). (사실)
 - 스키마 마이그레이션: 컨테이너 시작 시 `prisma migrate deploy` 자동 실행
   (`docker/Dockerfile` CMD). 미적용 마이그레이션만 순서대로 적용. (사실)
 - 배포 순서: 스키마 변경 포함 릴리스는 **backend 먼저** 배포(마이그레이션 적용)
@@ -40,8 +39,9 @@
   `DATABASE_URL`, `AUTH_JWT_SECRET`(≥32B), `ADULT_IDENTITY_HASH_SECRET`(별도
   안정 시크릿), `AUTH_REFRESH_TOKEN_TTL_SECONDS`, `OPOD_AGENT_URL`,
   `S3_PUBLIC_BASE_URL`, `PORT`, `PURCHASE_ACCOUNT_TOKEN_SECRET`, Polar/Apple/
-  Google provider credential·상품 ID. 정확한 키는 `.env.production.example`을
-  따른다. (사실)
+  Google provider credential·상품 ID. Nginx 한 단계를 거치는 배포라면
+  `TRUST_PROXY_HOPS=1`로 실제 고객 IP를 복원한다. 실제 hop 수는 배포 토폴로지와
+  일치시켜야 한다. 정확한 키는 `.env.production.example`을 따른다. (사실)
 - DM 답변 worker는 서비스 프로세스 안에서 함께 돈다. 기본값으로 동작하므로
   설정은 선택이며, 모두 `MESSAGE_REPLY_` 접두사다: `WORKER_ENABLED`(false면 API만
   뜨고 worker는 안 돔), `POLL_INTERVAL_MS`(1000), `CONCURRENCY`(동시에 처리할 대화
@@ -62,5 +62,8 @@
     `llm_logs`(LLM 호출). **전면 무기한 보존, 정리 배치 없음**. (결정)
 - CORS: `https://opod-web.vercel.app` 및 localhost/127.0.0.1 허용
   (`src/main.ts`). (사실)
+- Proxy IP: 기본은 forwarded header를 신뢰하지 않는다. 배포 환경이 명시한
+  `TRUST_PROXY_HOPS`만큼만 신뢰하고, 그 결과인 `request.ip`를 Polar checkout의
+  `customer_ip_address`로 전달한다. (사실)
 - Backups: **미정** — 문서화된 백업 절차 없음. (미해결)
 - Monitoring: **미정** — 문서화된 모니터링 없음. (미해결)

@@ -7,8 +7,10 @@ import {
   Param,
   Post,
   Query,
+  Req,
 } from "@nestjs/common";
 import { ApiQuery } from "@nestjs/swagger";
+import { isIP } from "node:net";
 import { AuthService } from "../../domain/auth/auth.service";
 import { parsePageQuery } from "../../domain/database/page";
 import { PurchasesService } from "../../domain/purchases/purchases.service";
@@ -42,17 +44,28 @@ export class PurchasesController {
     );
   }
 
+  @Get("checkouts/:checkoutId")
+  async getByCheckoutId(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("checkoutId") checkoutId: string,
+  ) {
+    const userId = await this.auth.userIdFromAuthorization(authorization);
+    return this.purchases.getByCheckoutId(userId, checkoutId);
+  }
+
   @Post("checkouts")
   async createCheckout(
     @Headers("authorization") authorization: string | undefined,
     @Headers("idempotency-key") idempotencyKey: string | undefined,
     @Body() body: CreatePurchaseCheckoutDto,
+    @Req() request: { ip?: string },
   ) {
     const userId = await this.auth.userIdFromAuthorization(authorization);
     return this.purchases.createCheckout({
+      ...body,
       userId,
       idempotencyKey: idempotencyKey ?? "",
-      ...body,
+      customerIpAddress: checkoutCustomerIp(request.ip),
     });
   }
 
@@ -104,4 +117,9 @@ export class PurchasesController {
     const userId = await this.auth.userIdFromAuthorization(authorization);
     return this.purchases.requestRefund({ userId, purchaseId, ...body });
   }
+}
+
+function checkoutCustomerIp(value: string | undefined) {
+  const normalized = value?.startsWith("::ffff:") ? value.slice(7) : value;
+  return normalized && isIP(normalized) ? normalized : undefined;
 }
