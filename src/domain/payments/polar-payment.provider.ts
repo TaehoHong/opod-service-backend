@@ -25,7 +25,10 @@ export class PolarPaymentProvider implements PaymentProvider {
   }
 
   private client() {
-    const accessToken = process.env.POLAR_ACCESS_TOKEN?.trim();
+    const accessToken =
+      this.environment === "sandbox"
+        ? process.env.POLAR_SANDBOX_API_KEY?.trim()
+        : process.env.POLAR_ACCESS_TOKEN?.trim();
     if (!accessToken) {
       throw new ServiceUnavailableException("Polar is not configured");
     }

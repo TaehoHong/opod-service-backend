@@ -9,6 +9,8 @@ describe("PolarPaymentProvider", () => {
 
   afterEach(() => {
     delete process.env.POLAR_ACCESS_TOKEN;
+    delete process.env.POLAR_SANDBOX_API_KEY;
+    delete process.env.POLAR_SERVER;
     delete process.env.POLAR_WEBHOOK_SECRET;
     jest.clearAllMocks();
   });
@@ -92,6 +94,32 @@ describe("PolarPaymentProvider", () => {
         customerIpAddress: "203.0.113.10",
       }),
     );
+  });
+
+  it("uses the sandbox credential only for the sandbox server", async () => {
+    process.env.POLAR_SERVER = "sandbox";
+    process.env.POLAR_ACCESS_TOKEN = "production-token";
+    process.env.POLAR_SANDBOX_API_KEY = "sandbox-token";
+    const create = jest.fn().mockResolvedValue({
+      id: "polar-checkout-1",
+      url: "https://sandbox.polar.sh/checkout/1",
+    });
+    jest
+      .mocked(Polar)
+      .mockImplementation(() => ({ checkouts: { create } }) as never);
+    const provider = new PolarPaymentProvider();
+
+    await provider.createCheckout({
+      purchaseId: "purchase-1",
+      userId: "user-1",
+      providerProductId: "polar-product-1",
+      currency: "KRW",
+    });
+
+    expect(Polar).toHaveBeenCalledWith({
+      accessToken: "sandbox-token",
+      server: "sandbox",
+    });
   });
 
   it("rejects a Polar paid event with a missing tax amount", async () => {

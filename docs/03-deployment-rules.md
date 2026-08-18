@@ -42,6 +42,9 @@
   Google provider credential·상품 ID. Nginx 한 단계를 거치는 배포라면
   `TRUST_PROXY_HOPS=1`로 실제 고객 IP를 복원한다. 실제 hop 수는 배포 토폴로지와
   일치시켜야 한다. 정확한 키는 `.env.production.example`을 따른다. (사실)
+- Polar credential은 environment별로 분리한다. `POLAR_SERVER=sandbox`는
+  `POLAR_SANDBOX_API_KEY`, production은 `POLAR_ACCESS_TOKEN`만 사용한다. 한쪽
+  credential을 다른 environment의 fallback으로 사용하지 않는다. (결정 2026-08-18)
 - DM 답변 worker는 서비스 프로세스 안에서 함께 돈다. 기본값으로 동작하므로
   설정은 선택이며, 모두 `MESSAGE_REPLY_` 접두사다: `WORKER_ENABLED`(false면 API만
   뜨고 worker는 안 돔), `POLL_INTERVAL_MS`(1000), `CONCURRENCY`(동시에 처리할 대화
