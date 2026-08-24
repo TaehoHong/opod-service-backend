@@ -368,6 +368,60 @@ export class CreditsService {
     });
   }
 
+  async getCheckInStatus(input: { userId: string; month?: string }) {
+    const today = this.kstDateString(new Date());
+    const currentMonth = today.slice(0, 7);
+    const month = input.month ?? currentMonth;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      throw new BadRequestException("Check-in month must use YYYY-MM");
+    }
+    if (month > currentMonth) {
+      throw new BadRequestException("Future check-in month is not allowed");
+    }
+
+    const checkedInDates = (
+      await this.prisma.creditCheckIn.findMany({
+        where: {
+          userId: input.userId,
+          checkInDate: { startsWith: `${month}-` },
+        },
+        select: { checkInDate: true },
+        orderBy: { checkInDate: "asc" },
+      })
+    ).map(({ checkInDate }) => checkInDate);
+    const checkedInToday =
+      month === currentMonth
+        ? checkedInDates.includes(today)
+        : Boolean(
+            await this.prisma.creditCheckIn.findUnique({
+              where: {
+                userId_checkInDate: {
+                  userId: input.userId,
+                  checkInDate: today,
+                },
+              },
+              select: { id: true },
+            }),
+          );
+    const monthCheckInCount = checkedInDates.length;
+
+    return {
+      today,
+      month,
+      checkedInToday,
+      checkedInDates,
+      monthCheckInCount,
+      dailyCredits: dailyCheckInCredits,
+      milestones: Object.entries(checkInMilestoneBonuses).map(
+        ([count, bonusCredits]) => ({
+          count: Number(count),
+          bonusCredits,
+          achieved: monthCheckInCount >= Number(count),
+        }),
+      ),
+    };
+  }
+
   async checkIn(input: { userId: string }) {
     const checkInDate = this.kstDateString(new Date());
     return this.prisma.$transaction(async (tx) => {

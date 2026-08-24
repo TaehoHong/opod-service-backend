@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsNumber, IsOptional, IsString } from "class-validator";
+import { IsNumber, IsOptional, IsString, Matches } from "class-validator";
 
 // Fields stay optional at the validation layer so missing values still reach
 // CreditsService.validateEntryInput, which owns the ledger error messages.
@@ -27,6 +27,47 @@ export class CreditCheckInDto {
 
   @ApiProperty()
   monthCheckInCount!: number;
+}
+
+export class CheckInQueryDto {
+  @ApiProperty({ required: false, example: "2026-08" })
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  month?: string;
+}
+
+export class CheckInMilestoneDto {
+  @ApiProperty()
+  count!: number;
+
+  @ApiProperty()
+  bonusCredits!: number;
+
+  @ApiProperty()
+  achieved!: boolean;
+}
+
+export class CheckInStatusDto {
+  @ApiProperty({ example: "2026-08-24" })
+  today!: string;
+
+  @ApiProperty({ example: "2026-08" })
+  month!: string;
+
+  @ApiProperty()
+  checkedInToday!: boolean;
+
+  @ApiProperty({ type: [String], example: ["2026-08-01", "2026-08-03"] })
+  checkedInDates!: string[];
+
+  @ApiProperty()
+  monthCheckInCount!: number;
+
+  @ApiProperty()
+  dailyCredits!: number;
+
+  @ApiProperty({ type: [CheckInMilestoneDto] })
+  milestones!: CheckInMilestoneDto[];
 }
 
 export class CreditEntryDto {
