@@ -1,13 +1,9 @@
 import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
-import { ApiCreatedResponse, ApiOkResponse, ApiQuery } from "@nestjs/swagger";
+import { ApiOkResponse, ApiQuery } from "@nestjs/swagger";
 import { AuthService } from "../../domain/auth/auth.service";
 import { CreditsService } from "../../domain/credits/credits.service";
 import { parsePageQuery } from "../../domain/database/page";
-import {
-  CreditCheckInDto,
-  CreditEntryPageDto,
-  SpendCreditsDto,
-} from "./credit.dto";
+import { CreditEntryPageDto, SpendCreditsDto } from "./credit.dto";
 
 @Controller("credits")
 export class CreditsController {
@@ -24,14 +20,6 @@ export class CreditsController {
     const userId =
       await this.authService.userIdFromAuthorization(authorization);
     return this.creditsService.spendCredits({ ...body, userId });
-  }
-
-  @Post("check-in")
-  @ApiCreatedResponse({ type: CreditCheckInDto })
-  async checkIn(@Headers("authorization") authorization?: string) {
-    const userId =
-      await this.authService.userIdFromAuthorization(authorization);
-    return this.creditsService.checkIn({ userId });
   }
 
   @Get("balance")

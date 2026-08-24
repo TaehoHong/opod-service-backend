@@ -20,6 +20,7 @@ import {
 import { ReportsController } from "../src/service/reports/reports.controller";
 import { ReportsService } from "../src/domain/reports/reports.service";
 import { CreditsController } from "../src/service/credits/credits.controller";
+import { CheckInController } from "../src/service/credits/check-in.controller";
 import { CreditsService } from "../src/domain/credits/credits.service";
 import { NotificationsController } from "../src/service/notifications/notifications.controller";
 import { NotificationsService } from "../src/domain/notifications/notifications.service";
@@ -112,7 +113,7 @@ class SearchDocModule {}
 class ReportsDocModule {}
 
 @Module({
-  controllers: [CreditsController],
+  controllers: [CreditsController, CheckInController],
   providers: [
     { provide: AuthService, useValue: {} },
     { provide: CreditsService, useValue: {} },
@@ -567,11 +568,13 @@ describe("service swagger", () => {
       .get("/docs-json")
       .expect(200);
     const schema =
-      response.body.paths["/credits/check-in"].post.responses["201"].content[
+      response.body.paths["/check-in"].post.responses["201"].content[
         "application/json"
       ].schema;
 
     expect(schema).toEqual({ $ref: "#/components/schemas/CreditCheckInDto" });
+    expect(response.body.paths["/check-in"].get).toBeDefined();
+    expect(response.body.paths["/credits/check-in"]).toBeUndefined();
 
     await app.close();
   });

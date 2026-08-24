@@ -95,6 +95,7 @@ const tagByPathSegment: Record<string, string> = {
   follows: "팔로우",
   messages: "메시지",
   credits: "크레딧",
+  "check-in": "크레딧",
   payments: "결제",
   purchases: "크레딧 구매",
   notifications: "알림",
