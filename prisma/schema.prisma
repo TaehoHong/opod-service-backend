@@ -1202,6 +1202,7 @@ model CharacterLocation {
   description    String
   visualPrompt   String                       @map("visual_prompt")
   negativePrompt String                       @default("") @map("negative_prompt")
+  referenceNegativePrompt String @default("") @map("reference_negative_prompt")
   createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt      DateTime?                    @map("deleted_at") @db.Timestamptz(6)
