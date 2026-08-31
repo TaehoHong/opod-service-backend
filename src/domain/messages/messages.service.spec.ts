@@ -100,7 +100,9 @@ describe("MessagesService", () => {
   });
 
   it("releases the reservation when the message transaction fails", async () => {
-    const { service, credits } = harness({ transactionError: new Error("db down") });
+    const { service, credits } = harness({
+      transactionError: new Error("db down"),
+    });
     await expect(
       service.sendMessage({
         userId: "human-1",

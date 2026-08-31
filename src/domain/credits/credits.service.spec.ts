@@ -27,7 +27,7 @@ describe("CreditsService", () => {
       client: {
         ...client,
         transaction: jest.fn(async (work: (tx: typeof client) => unknown) =>
-        work(client),
+          work(client),
         ),
       },
     };

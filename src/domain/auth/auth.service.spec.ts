@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  UnauthorizedException,
-} from "@nestjs/common";
+import { BadRequestException, UnauthorizedException } from "@nestjs/common";
 import { queryReturning } from "../../../test/drizzle-mock";
 import { AuthService } from "./auth.service";
 
@@ -60,9 +57,7 @@ describe("AuthService", () => {
   });
 
   it("registers the user and consent evidence in one transaction", async () => {
-    const consents = [
-      { type: "terms_of_service", version: "1", agreed: true },
-    ];
+    const consents = [{ type: "terms_of_service", version: "1", agreed: true }];
     const resolveConsents = jest.fn().mockResolvedValue(consents);
     const { service, transaction, grantSignupBonus, recordConsents } = harness({
       selects: [[]],
@@ -93,7 +88,11 @@ describe("AuthService", () => {
   it("rejects malformed email and weak passwords", async () => {
     const { service } = harness({});
     await expect(
-      service.register({ email: "invalid", password: "password123", displayName: "R" }),
+      service.register({
+        email: "invalid",
+        password: "password123",
+        displayName: "R",
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
       service.register({

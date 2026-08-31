@@ -4,16 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  lt,
-  or,
-} from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, lt, or } from "drizzle-orm";
 import { CharactersService } from "../characters/characters.service";
 import { CreditsService } from "../credits/credits.service";
 import {
@@ -216,7 +207,10 @@ export class MessagesService {
         failureReason: null,
       })
       .where(
-        and(eq(messageReplyJobs.id, job.id), eq(messageReplyJobs.status, "failed")),
+        and(
+          eq(messageReplyJobs.id, job.id),
+          eq(messageReplyJobs.status, "failed"),
+        ),
       )
       .returning({ id: messageReplyJobs.id });
     if (!requeued.length) {
@@ -242,7 +236,10 @@ export class MessagesService {
         .select({ id: messages.id, createdAt: messages.createdAt })
         .from(messages)
         .where(
-          and(eq(messages.id, cursorId), eq(messages.conversationId, conversation.id)),
+          and(
+            eq(messages.id, cursorId),
+            eq(messages.conversationId, conversation.id),
+          ),
         )
         .limit(1);
       if (!cursor) throw new BadRequestException("Invalid cursor");
@@ -257,14 +254,20 @@ export class MessagesService {
           cursor
             ? or(
                 gt(messages.createdAt, cursor.createdAt),
-                and(eq(messages.createdAt, cursor.createdAt), gt(messages.id, cursor.id)),
+                and(
+                  eq(messages.createdAt, cursor.createdAt),
+                  gt(messages.id, cursor.id),
+                ),
               )
             : undefined,
         ),
       )
       .orderBy(asc(messages.createdAt), asc(messages.id))
       .limit(input.limit + 1);
-    return pageFromRows(rows.map((message) => this.toMessage(message)), input.limit);
+    return pageFromRows(
+      rows.map((message) => this.toMessage(message)),
+      input.limit,
+    );
   }
 
   async listConversationsPage(
@@ -279,7 +282,10 @@ export class MessagesService {
           lastMessageAt: messageConversations.lastMessageAt,
         })
         .from(messageConversations)
-        .innerJoin(characters, eq(messageConversations.characterId, characters.id))
+        .innerJoin(
+          characters,
+          eq(messageConversations.characterId, characters.id),
+        )
         .where(
           and(
             eq(messageConversations.id, cursorId),
@@ -304,7 +310,10 @@ export class MessagesService {
         },
       })
       .from(messageConversations)
-      .innerJoin(characters, eq(messageConversations.characterId, characters.id))
+      .innerJoin(
+        characters,
+        eq(messageConversations.characterId, characters.id),
+      )
       .where(
         and(
           eq(messageConversations.userId, input.userId),
@@ -320,7 +329,10 @@ export class MessagesService {
             : undefined,
         ),
       )
-      .orderBy(desc(messageConversations.lastMessageAt), desc(messageConversations.id))
+      .orderBy(
+        desc(messageConversations.lastMessageAt),
+        desc(messageConversations.id),
+      )
       .limit(input.limit + 1);
     const [unreadCounts, lastMessages] = await Promise.all([
       this.unreadCountsFor(conversations),
@@ -329,7 +341,10 @@ export class MessagesService {
           const [message] = await this.database.client
             .select(messageSelection)
             .from(messages)
-            .leftJoin(messageReplyJobs, eq(messages.replyJobId, messageReplyJobs.id))
+            .leftJoin(
+              messageReplyJobs,
+              eq(messages.replyJobId, messageReplyJobs.id),
+            )
             .where(eq(messages.conversationId, conversation.id))
             .orderBy(desc(messages.createdAt), desc(messages.id))
             .limit(1);
@@ -347,19 +362,25 @@ export class MessagesService {
           interests: conversation.character.interests ?? [],
         },
         ...(lastByConversation.get(conversation.id)
-          ? { lastMessage: this.toMessage(lastByConversation.get(conversation.id)!) }
+          ? {
+              lastMessage: this.toMessage(
+                lastByConversation.get(conversation.id)!,
+              ),
+            }
           : {}),
         unreadCount: unreadCounts.get(conversation.id) ?? 0,
       })),
       input.limit,
     );
     return {
-      items: page.items.map(({ conversationId, character, lastMessage, unreadCount }) => ({
-        conversationId,
-        character,
-        ...(lastMessage ? { lastMessage } : {}),
-        unreadCount,
-      })),
+      items: page.items.map(
+        ({ conversationId, character, lastMessage, unreadCount }) => ({
+          conversationId,
+          character,
+          ...(lastMessage ? { lastMessage } : {}),
+          unreadCount,
+        }),
+      ),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   }
@@ -493,7 +514,10 @@ export class MessagesService {
 
   private async findReplyJob(client: MessageClient, id: string) {
     const [job] = await client
-      .select({ turnId: messageReplyJobs.turnId, status: messageReplyJobs.status })
+      .select({
+        turnId: messageReplyJobs.turnId,
+        status: messageReplyJobs.status,
+      })
       .from(messageReplyJobs)
       .where(eq(messageReplyJobs.id, id))
       .limit(1);

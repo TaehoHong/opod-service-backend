@@ -76,7 +76,10 @@ export type CreditReservationRecord = {
 export function activeReservationCondition(now: Date = new Date()) {
   return and(
     eq(creditReservations.status, "reserved"),
-    or(isNull(creditReservations.expiresAt), gt(creditReservations.expiresAt, now)),
+    or(
+      isNull(creditReservations.expiresAt),
+      gt(creditReservations.expiresAt, now),
+    ),
   );
 }
 
@@ -135,7 +138,8 @@ export class CreditsService {
     const result = await this.database.client.transaction((tx) =>
       this.captureReservationInTx(tx, this.requireReference(input.reference)),
     );
-    if (result.expired) throw new ConflictException("Credit reservation expired");
+    if (result.expired)
+      throw new ConflictException("Credit reservation expired");
     return this.toReservation(result.reservation);
   }
 
@@ -147,7 +151,8 @@ export class CreditsService {
       client,
       this.requireReference(input.reference),
     );
-    if (result.expired) throw new ConflictException("Credit reservation expired");
+    if (result.expired)
+      throw new ConflictException("Credit reservation expired");
     return this.toReservation(result.reservation);
   }
 
@@ -159,8 +164,10 @@ export class CreditsService {
     if (!found) throw new BadRequestException("Credit reservation not found");
     await this.lockUserCredits(tx, found.userId);
     const reservation = await this.findReservation(tx, reference);
-    if (!reservation) throw new BadRequestException("Credit reservation not found");
-    if (reservation.status === "captured") return { expired: false, reservation };
+    if (!reservation)
+      throw new BadRequestException("Credit reservation not found");
+    if (reservation.status === "captured")
+      return { expired: false, reservation };
     if (reservation.status === "released") {
       throw new ConflictException("Credit reservation was released");
     }
@@ -227,8 +234,10 @@ export class CreditsService {
     if (!found) throw new BadRequestException("Credit reservation not found");
     await this.lockUserCredits(tx, found.userId);
     const reservation = await this.findReservation(tx, reference);
-    if (!reservation) throw new BadRequestException("Credit reservation not found");
-    if (reservation.status !== "reserved") return this.toReservation(reservation);
+    if (!reservation)
+      throw new BadRequestException("Credit reservation not found");
+    if (reservation.status !== "reserved")
+      return this.toReservation(reservation);
     const [released] = await tx
       .update(creditReservations)
       .set({ status: "released" })
@@ -413,7 +422,10 @@ export class CreditsService {
           code?: string;
           cause?: { code?: string };
         };
-        if (databaseError.code === "23505" || databaseError.cause?.code === "23505") {
+        if (
+          databaseError.code === "23505" ||
+          databaseError.cause?.code === "23505"
+        ) {
           throw new ConflictException("Already checked in today");
         }
         throw error;
@@ -458,7 +470,11 @@ export class CreditsService {
       if (balance.paidBalance < 0 || balance.availableBalance < input.amount) {
         throw new InsufficientCreditsException();
       }
-      const allocations = await this.allocateUsage(tx, input.userId, input.amount);
+      const allocations = await this.allocateUsage(
+        tx,
+        input.userId,
+        input.amount,
+      );
       const [usage] = await tx
         .insert(creditLedger)
         .values({
@@ -514,7 +530,11 @@ export class CreditsService {
   }> {
     const value = await this.balanceBreakdown(this.database.client, userId);
     if (value.paidBalance < 0) {
-      return { userId, balance: value.paidBalance, paidBalance: value.paidBalance };
+      return {
+        userId,
+        balance: value.paidBalance,
+        paidBalance: value.paidBalance,
+      };
     }
     return {
       userId,
@@ -550,7 +570,9 @@ export class CreditsService {
       [cursor] = await this.database.client
         .select({ id: creditLedger.id, createdAt: creditLedger.createdAt })
         .from(creditLedger)
-        .where(and(eq(creditLedger.id, cursorId), eq(creditLedger.userId, userId)))
+        .where(
+          and(eq(creditLedger.id, cursorId), eq(creditLedger.userId, userId)),
+        )
         .limit(1);
       if (!cursor) throw new BadRequestException("Invalid cursor");
     }
@@ -573,7 +595,10 @@ export class CreditsService {
       )
       .orderBy(asc(creditLedger.createdAt), asc(creditLedger.id))
       .limit(input.limit + 1);
-    return pageFromRows(rows.map((row) => this.toRecord(row)), input.limit);
+    return pageFromRows(
+      rows.map((row) => this.toRecord(row)),
+      input.limit,
+    );
   }
 
   async getPurchaseCreditSnapshotWithClient(
@@ -588,15 +613,23 @@ export class CreditsService {
     remainingPaidPromotion: number;
     locked: number;
   }> {
-    const { snapshots: grants } = await this.grantState(client, input.userId, false);
+    const { snapshots: grants } = await this.grantState(
+      client,
+      input.userId,
+      false,
+    );
     const purchaseGrants = grants.filter(
       ({ grant }) => grant.purchaseId === input.purchaseId,
     );
     const originalPaid = purchaseGrants
-      .filter(({ grant }) => grant.creditKind === "paid" && !grant.promotionCode)
+      .filter(
+        ({ grant }) => grant.creditKind === "paid" && !grant.promotionCode,
+      )
       .reduce((total, { grant }) => total + grant.amount, 0);
     const remainingPaid = purchaseGrants
-      .filter(({ grant }) => grant.creditKind === "paid" && !grant.promotionCode)
+      .filter(
+        ({ grant }) => grant.creditKind === "paid" && !grant.promotionCode,
+      )
       .reduce((total, grant) => total + grant.available, 0);
     const remainingPromotion = purchaseGrants
       .filter(({ grant }) => Boolean(grant.promotionCode))
@@ -605,7 +638,8 @@ export class CreditsService {
       .filter(({ grant }) => Boolean(grant.promotionCode))
       .reduce((total, { grant }) => total + grant.amount, 0);
     const paidPromotionGrants = purchaseGrants.filter(
-      ({ grant }) => grant.creditKind === "paid" && Boolean(grant.promotionCode),
+      ({ grant }) =>
+        grant.creditKind === "paid" && Boolean(grant.promotionCode),
     );
     const originalPaidPromotion = paidPromotionGrants.reduce(
       (total, { grant }) => total + grant.amount,
@@ -645,7 +679,8 @@ export class CreditsService {
     amount: number,
   ): Promise<Array<{ grant: LedgerRow; amount: number }>> {
     const { snapshots } = await this.grantState(client, userId);
-    const paidBalance = (await this.balanceBreakdown(client, userId)).paidBalance;
+    const paidBalance = (await this.balanceBreakdown(client, userId))
+      .paidBalance;
     let paidCapacity = Math.max(0, paidBalance);
     let remaining = amount;
     const result: Array<{ grant: LedgerRow; amount: number }> = [];
@@ -675,7 +710,9 @@ export class CreditsService {
       client
         .select()
         .from(creditLedger)
-        .where(and(eq(creditLedger.userId, userId), eq(creditLedger.type, "grant")))
+        .where(
+          and(eq(creditLedger.userId, userId), eq(creditLedger.type, "grant")),
+        )
         .orderBy(
           asc(creditLedger.creditKind),
           asc(creditLedger.expiresAt),
@@ -711,7 +748,10 @@ export class CreditsService {
           amount: sum(creditRefund.lockedAmount).mapWith(Number),
         })
         .from(creditRefund)
-        .innerJoin(creditPurchases, eq(creditRefund.purchaseId, creditPurchases.id))
+        .innerJoin(
+          creditPurchases,
+          eq(creditRefund.purchaseId, creditPurchases.id),
+        )
         .where(
           and(
             eq(creditPurchases.userId, userId),
@@ -724,10 +764,13 @@ export class CreditsService {
         )
         .groupBy(creditRefund.purchaseId),
     ]);
-    const used = new Map(usages.map((row) => [row.grantLedgerId, row.amount ?? 0]));
+    const used = new Map(
+      usages.map((row) => [row.grantLedgerId, row.amount ?? 0]),
+    );
     const purchaseRecoveries = new Map<string, number>();
     for (const row of recoveries) {
-      if (row.purchaseId) purchaseRecoveries.set(row.purchaseId, row.amount ?? 0);
+      if (row.purchaseId)
+        purchaseRecoveries.set(row.purchaseId, row.amount ?? 0);
     }
     const purchaseLocks = new Map(
       refunds.map((row) => [row.purchaseId, row.amount ?? 0]),
@@ -782,7 +825,10 @@ export class CreditsService {
         .select({ amount: sum(creditReservations.amount).mapWith(Number) })
         .from(creditReservations)
         .where(
-          and(eq(creditReservations.userId, userId), activeReservationCondition()),
+          and(
+            eq(creditReservations.userId, userId),
+            activeReservationCondition(),
+          ),
         ),
     ]);
     const sumByKind = (kind: "free" | "paid") =>
@@ -799,7 +845,9 @@ export class CreditsService {
       paidBalance,
       freeBalance,
       availableBalance:
-        paidBalance < 0 ? paidBalance : paidBalance + freeBalance - reservedAmount,
+        paidBalance < 0
+          ? paidBalance
+          : paidBalance + freeBalance - reservedAmount,
     };
   }
 

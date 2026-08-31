@@ -88,7 +88,9 @@ function whereCondition(
     } else if (value && typeof value === "object" && !(value instanceof Date)) {
       if ("in" in value) conditions.push(inArray(column, value.in));
       if ("not" in value) {
-        conditions.push(value.not === null ? isNotNull(column) : ne(column, value.not));
+        conditions.push(
+          value.not === null ? isNotNull(column) : ne(column, value.not),
+        );
       }
       if ("gt" in value) conditions.push(gt(column, value.gt));
       if ("lt" in value) conditions.push(lt(column, value.lt));
@@ -112,7 +114,10 @@ class TestModel {
     ) => Promise<void>,
   ) {}
 
-  async create(input: { data: Record<string, any>; select?: Record<string, boolean> }) {
+  async create(input: {
+    data: Record<string, any>;
+    select?: Record<string, boolean>;
+  }) {
     const nested = Object.fromEntries(
       Object.entries(input.data).filter(([key]) => !this.table[key]),
     );
@@ -120,7 +125,10 @@ class TestModel {
       Object.entries(input.data).filter(([key]) => this.table[key]),
     );
     return this.client.transaction(async (tx) => {
-      const [row] = (await tx.insert(this.table).values(data).returning()) as any[];
+      const [row] = (await tx
+        .insert(this.table)
+        .values(data)
+        .returning()) as any[];
       if (this.nestedCreate) await this.nestedCreate(tx as any, row, nested);
       if (!input.select) return row;
       return Object.fromEntries(
@@ -154,9 +162,11 @@ class TestModel {
   async findFirst(input: any = {}): Promise<any> {
     const fields = projection(this.table, input.select);
     let query: any = fields ? this.client.select(fields) : this.client.select();
-    query = query.from(this.table).where(
-      whereCondition(this.table, input.where, this.client, this.relations),
-    ) as any;
+    query = query
+      .from(this.table)
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      ) as any;
     if (input.orderBy) query = this.applyOrder(query, input.orderBy);
     const [row] = await query.limit(1);
     return row ?? null;
@@ -165,29 +175,41 @@ class TestModel {
   async findMany(input: any = {}): Promise<any[]> {
     const fields = projection(this.table, input.select);
     let query: any = fields ? this.client.select(fields) : this.client.select();
-    query = query.from(this.table).where(
-      whereCondition(this.table, input.where, this.client, this.relations),
-    ) as any;
+    query = query
+      .from(this.table)
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      ) as any;
     if (input.orderBy) query = this.applyOrder(query, input.orderBy);
     if (input.take) query = query.limit(input.take);
     return (await query) as any[];
   }
 
-  async update(input: { where: Record<string, any>; data: Record<string, any> }) {
+  async update(input: {
+    where: Record<string, any>;
+    data: Record<string, any>;
+  }) {
     const [row] = (await this.client
       .update(this.table)
       .set(input.data)
-      .where(whereCondition(this.table, input.where, this.client, this.relations))
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      )
       .returning()) as any[];
     if (!row) throw new Error("Expected row was not found");
     return row;
   }
 
-  async updateMany(input: { where: Record<string, any>; data: Record<string, any> }) {
+  async updateMany(input: {
+    where: Record<string, any>;
+    data: Record<string, any>;
+  }) {
     const rows = (await this.client
       .update(this.table)
       .set(input.data)
-      .where(whereCondition(this.table, input.where, this.client, this.relations))
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      )
       .returning()) as any[];
     return { count: rows.length };
   }
@@ -195,7 +217,9 @@ class TestModel {
   async deleteMany(input: { where?: Record<string, any> } = {}) {
     const rows = (await this.client
       .delete(this.table)
-      .where(whereCondition(this.table, input.where, this.client, this.relations))
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      )
       .returning()) as any[];
     return { count: rows.length };
   }
@@ -204,7 +228,9 @@ class TestModel {
     const [row] = await this.client
       .select({ value: count() })
       .from(this.table)
-      .where(whereCondition(this.table, input.where, this.client, this.relations));
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      );
     return row.value;
   }
 
@@ -213,13 +239,18 @@ class TestModel {
     if (input._count) selection._count = count();
     if (input._sum) {
       selection._sum = Object.fromEntries(
-        Object.keys(input._sum).map((key) => [key, sum(this.table[key]).mapWith(Number)]),
+        Object.keys(input._sum).map((key) => [
+          key,
+          sum(this.table[key]).mapWith(Number),
+        ]),
       );
     }
     const [row] = await this.client
       .select(selection)
       .from(this.table)
-      .where(whereCondition(this.table, input.where, this.client, this.relations));
+      .where(
+        whereCondition(this.table, input.where, this.client, this.relations),
+      );
     return row;
   }
 
@@ -246,7 +277,9 @@ class CreditUsageTestModel extends TestModel {
       })
       .from(creditUsage)
       .innerJoin(creditLedger, eq(creditUsage.grantLedgerId, creditLedger.id))
-      .where(whereCondition(creditUsage, input.where, this.client, this.relations));
+      .where(
+        whereCondition(creditUsage, input.where, this.client, this.relations),
+      );
     return rows.map(({ usage, grantLedger }) => ({ ...usage, grantLedger }));
   }
 }
@@ -328,10 +361,12 @@ export class TestDatabase {
       async (client, row, nested) => {
         const values = nested.messages?.create;
         if (!values) return;
-        const rows = (Array.isArray(values) ? values : [values]).map((value) => ({
-          ...value,
-          conversationId: row.id,
-        }));
+        const rows = (Array.isArray(values) ? values : [values]).map(
+          (value) => ({
+            ...value,
+            conversationId: row.id,
+          }),
+        );
         await client.insert(messages).values(rows);
       },
     );
@@ -343,7 +378,8 @@ export class TestDatabase {
     this.paymentProductMapping = model(paymentProductMappings);
     this.post = model(posts, {}, async (client, row, nested) => {
       const value = nested.hashtags?.create;
-      if (value) await client.insert(postHashtags).values({ postId: row.id, ...value });
+      if (value)
+        await client.insert(postHashtags).values({ postId: row.id, ...value });
     });
     this.postComment = model(postComments);
     this.postReaction = model(postReactions);

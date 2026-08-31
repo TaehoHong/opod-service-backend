@@ -211,7 +211,9 @@ describe("auth", () => {
       .send({ email, password: "password456" })
       .expect(201);
 
-    const events = await new TestDatabase(app.get(DatabaseService)).userEvent.findMany({
+    const events = await new TestDatabase(
+      app.get(DatabaseService),
+    ).userEvent.findMany({
       where: {
         userId: registered.body.user.id,
         eventType: "auth.password_changed",
@@ -321,9 +323,7 @@ describe("auth", () => {
     await expect(
       db.messageConversation.count({ where: { userId } }),
     ).resolves.toBe(0);
-    await expect(
-      db.notification.count({ where: { userId } }),
-    ).resolves.toBe(0);
+    await expect(db.notification.count({ where: { userId } })).resolves.toBe(0);
     await expect(
       db.userRefreshToken.count({ where: { userId } }),
     ).resolves.toBe(0);

@@ -499,10 +499,10 @@ export class AuthService {
           ),
         );
       await tx.insert(userEvents).values({
-          userId,
-          eventType: "auth.password_changed",
-          targetType: "user",
-          targetId: userId,
+        userId,
+        eventType: "auth.password_changed",
+        targetType: "user",
+        targetId: userId,
       });
 
       return this.issueTokens(this.toPublicUser(currentUser), tx);
@@ -548,35 +548,39 @@ export class AuthService {
       }
       await this.lockUser(tx, userId);
 
-      const [paidBalance, activeRefundRows, pendingPurchaseRows] = await Promise.all([
-        this.creditsService.getPaidBalanceWithClient(tx, userId),
-        tx
-          .select({ value: count() })
-          .from(creditRefund)
-          .innerJoin(
-            creditPurchases,
-            eq(creditRefund.purchaseId, creditPurchases.id),
-          )
-          .where(
-            and(
-              eq(creditPurchases.userId, userId),
-              inArray(creditRefund.status, [
-                "reserved",
-                "payment_processing",
-                "payment_succeeded",
-              ]),
+      const [paidBalance, activeRefundRows, pendingPurchaseRows] =
+        await Promise.all([
+          this.creditsService.getPaidBalanceWithClient(tx, userId),
+          tx
+            .select({ value: count() })
+            .from(creditRefund)
+            .innerJoin(
+              creditPurchases,
+              eq(creditRefund.purchaseId, creditPurchases.id),
+            )
+            .where(
+              and(
+                eq(creditPurchases.userId, userId),
+                inArray(creditRefund.status, [
+                  "reserved",
+                  "payment_processing",
+                  "payment_succeeded",
+                ]),
+              ),
             ),
-          ),
-        tx
-          .select({ value: count() })
-          .from(creditPurchases)
-          .where(
-            and(
-              eq(creditPurchases.userId, userId),
-              inArray(creditPurchases.status, ["pending", "payment_processing"]),
+          tx
+            .select({ value: count() })
+            .from(creditPurchases)
+            .where(
+              and(
+                eq(creditPurchases.userId, userId),
+                inArray(creditPurchases.status, [
+                  "pending",
+                  "payment_processing",
+                ]),
+              ),
             ),
-          ),
-      ]);
+        ]);
       const activeRefunds = activeRefundRows[0]?.value ?? 0;
       const pendingPurchases = pendingPurchaseRows[0]?.value ?? 0;
       if (paidBalance > 0 || activeRefunds > 0 || pendingPurchases > 0) {
@@ -591,7 +595,9 @@ export class AuthService {
           .values({ identityHash, paidDebt })
           .onConflictDoUpdate({
             target: unsettledCreditDebts.identityHash,
-            set: { paidDebt: sql`${unsettledCreditDebts.paidDebt} + ${paidDebt}` },
+            set: {
+              paidDebt: sql`${unsettledCreditDebts.paidDebt} + ${paidDebt}`,
+            },
           });
       }
 
@@ -599,26 +605,36 @@ export class AuthService {
       await tx
         .update(users)
         .set({
-            email: null,
-            passwordHash: null,
-            passwordSalt: null,
-            displayName: deletedUserDisplayName,
-            bio: "",
-            profileImageUrl: null,
-            adultVerifiedAt: null,
-            adultIdentityHash: null,
-            debtIdentityHash: null,
-            deletedAt: new Date(),
+          email: null,
+          passwordHash: null,
+          passwordSalt: null,
+          displayName: deletedUserDisplayName,
+          bio: "",
+          profileImageUrl: null,
+          adultVerifiedAt: null,
+          adultIdentityHash: null,
+          debtIdentityHash: null,
+          deletedAt: new Date(),
         })
         .where(eq(users.id, userId));
       await Promise.all([
-        tx.delete(userRefreshTokens).where(eq(userRefreshTokens.userId, userId)),
+        tx
+          .delete(userRefreshTokens)
+          .where(eq(userRefreshTokens.userId, userId)),
         // 메시지는 conversation FK cascade로 함께 삭제된다.
-        tx.delete(messageConversations).where(eq(messageConversations.userId, userId)),
+        tx
+          .delete(messageConversations)
+          .where(eq(messageConversations.userId, userId)),
         tx.delete(notifications).where(eq(notifications.userId, userId)),
-        tx.delete(userCharacterFollows).where(eq(userCharacterFollows.userId, userId)),
-        tx.delete(userHashtagPreferences).where(eq(userHashtagPreferences.userId, userId)),
-        tx.insert(userWithdrawals).values({ userId, reasonCategory, reasonText }),
+        tx
+          .delete(userCharacterFollows)
+          .where(eq(userCharacterFollows.userId, userId)),
+        tx
+          .delete(userHashtagPreferences)
+          .where(eq(userHashtagPreferences.userId, userId)),
+        tx
+          .insert(userWithdrawals)
+          .values({ userId, reasonCategory, reasonText }),
       ]);
     });
 
@@ -687,12 +703,12 @@ export class AuthService {
       const paidDebt = Math.max(0, -currentPaidBalance) + debtApplied;
       if (debtApplied > 0) {
         await tx.insert(creditLedger).values({
-            userId,
-            type: "adjustment",
-            creditKind: "paid",
-            amount: -debtApplied,
-            reason: "unsettled identity debt transfer",
-            externalReference: `identity_debt:${identityHash}`,
+          userId,
+          type: "adjustment",
+          creditKind: "paid",
+          amount: -debtApplied,
+          reason: "unsettled identity debt transfer",
+          externalReference: `identity_debt:${identityHash}`,
         });
         await tx
           .delete(unsettledCreditDebts)
@@ -751,7 +767,9 @@ export class AuthService {
     const refreshToken = randomBytes(32).toString("base64url");
     const tokenHash = this.hashToken(refreshToken);
 
-    await client.insert(userRefreshTokens).values({ userId: user.id, tokenHash });
+    await client
+      .insert(userRefreshTokens)
+      .values({ userId: user.id, tokenHash });
 
     return {
       user,
@@ -974,19 +992,13 @@ export class AuthService {
     return left.length === right.length && timingSafeEqual(left, right);
   }
 
-  private async lockUser(
-    tx: AuthSessionClient,
-    userId: string,
-  ) {
+  private async lockUser(tx: AuthSessionClient, userId: string) {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
     );
   }
 
-  private async lockAdultIdentity(
-    tx: AuthSessionClient,
-    identityHash: string,
-  ) {
+  private async lockAdultIdentity(tx: AuthSessionClient, identityHash: string) {
     const lockKey = `adult_identity:${identityHash}`;
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
