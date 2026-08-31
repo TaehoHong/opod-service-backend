@@ -5,17 +5,17 @@
 - Project: `opod-service-backend`
 - Role: public/user-facing NestJS service backend.
 - Owns service HTTP APIs under `src/service`.
-- Owns shared service domain code and canonical Prisma schema under
-  `src/domain` and `prisma`.
-- Owns database schema operations such as `prisma db push`.
+- Owns shared service domain code and the canonical Drizzle schema under
+  `src/domain/database/schema.ts`.
+- Owns Drizzle migration generation and application under `drizzle`.
 - Does not own admin APIs, admin UI, admin media upload, admin credit grants,
   generation job operation, or other `/admin/*` routes.
 
 ## Local Commands
 
 - Install: `npm install`
-- Prisma client: `npm run db:generate`
-- Apply local schema: `npm run db:push`
+- Generate migration: `npm run db:generate`
+- Apply local migrations: `npm run db:migrate`
 - Start DB: `npm run db:up`
 - Start service: `npm run start:dev`
 - Format: `npm run format`
@@ -44,8 +44,8 @@
 
 DB를 가리킬 때 아래 네 단어만 쓴다. 파괴적 작업의 대상이 흐려지지 않게 한다.
 
-- **로컬 DB** — 개별 PC의 localhost(`npm run db:up`, 5433). `db:push`·
-  `migrate reset`이 허용되는 유일한 대상.
+- **로컬 DB** — 개별 PC의 localhost(`npm run db:up`, 5433). `db:push`가
+  허용되는 유일한 대상.
 - **개발 DB** — `dev-run-taeho` 서버의 DB. `deploy.sh`가 배포하는 대상. 공용이라
   파괴적 작업 금지.
 - **운영 DB** — 아직 없다. 다른 환경을 "운영"이라 부르지 않는다.

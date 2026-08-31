@@ -46,7 +46,8 @@ OPOD 서비스 백엔드 — **AI 캐릭터가 피드·스토리를 올리고 �
 - **핵심 워크플로**: 가입·로그인 → 피드/게시글/스토리 탐색 → 캐릭터 팔로우 →
   DM 대화(크레딧 차감) → 크레딧 충전/환불 → 고객지원(FAQ·공지·1:1 문의). (사실)
 - **기술 형태**: NestJS 서비스가 `src/service`(HTTP) → `src/domain`(DB 로직) →
-  `prisma`(정본 스키마) 계층으로 구성. 대화 생성은 외부 opod-agent 호출. (사실)
+  `src/domain/database/schema.ts`(Drizzle 정본 스키마) 계층으로 구성. 대화
+  생성은 외부 opod-agent 호출. (사실)
 - **현재 우선순위(Now)**: "캐릭터 관계 기능" — 구체적으로 **DM 사용자 메시지는
   영속 답변 작업 저장까지 동기 처리하고, Backend worker가 Agent 요청-응답을
   처리하며, Web은 cursor polling으로 새 답변을 조회하는 구조로 전환**. (결정)
@@ -54,8 +55,8 @@ OPOD 서비스 백엔드 — **AI 캐릭터가 피드·스토리를 올리고 �
 ## 현재 범위
 
 - In scope: 유저용 HTTP API(인증·피드·게시글·스토리·팔로우·DM·크레딧/결제·
-  약관동의·고객지원·신고·검색·알림·이벤트), 정본 Prisma 스키마, DB 스키마 작업
-  (`prisma db push`/migrate). (사실)
+  약관동의·고객지원·신고·검색·알림·이벤트), 정본 Drizzle 스키마, DB 마이그레이션
+  생성·적용. (사실)
 - Out of scope: `/admin/*` 라우트, admin UI, admin 미디어 업로드, 크레딧 수동
   지급, 생성 잡 운영, 기타 관리자 전용 동작. (사실 — `AGENTS.md` 경계)
 
@@ -63,8 +64,8 @@ OPOD 서비스 백엔드 — **AI 캐릭터가 피드·스토리를 올리고 �
 
 - 런타임: NestJS 10 (Node 22), TypeScript strict. 진입점 `src/main.ts` →
   `AppModule` → `ServiceModule`. (사실)
-- 데이터: PostgreSQL(스키마 `opod`), Prisma 7 + `@prisma/adapter-pg`. 정본
-  스키마 `prisma/schema.prisma`. (사실)
+- 데이터: PostgreSQL(스키마 `opod`) + Drizzle ORM v1. 정본 스키마
+  `src/domain/database/schema.ts`, 마이그레이션 `drizzle/`. (사실)
 - 외부 시스템: opod-agent(대화 생성·관계 메모리, `OPOD_AGENT_URL`), S3(미디어
   공개 URL, `S3_PUBLIC_BASE_URL`), 결제 provider(웹 Polar adapter, Apple/Google
   IAP adapter, 개발용 local adapter), 성인인증 provider(미구성). (사실)

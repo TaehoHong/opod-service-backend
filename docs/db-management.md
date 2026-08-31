@@ -1,6 +1,6 @@
 # DB 관리
 
-Status: 운영 중 (마이그레이션 체계 도입 2026-07-19)
+Status: 운영 중 (Drizzle v1 전환 2026-08-31)
 
 이 문서는 opod DB의 스키마 변경·적용 절차와, 차후 pgvector 확장 설계를
 기록한다. 스키마 소유권은 이 리포(opod-service-backend)에 있고 opod-admin은
@@ -19,93 +19,88 @@ Status: 운영 중 (마이그레이션 체계 도입 2026-07-19)
 가능성이 보장되면 모델 교체·장애·마이그레이션이 전부 "백필 재실행"으로
 수렴한다.
 
-## 스키마 변경 절차 — Prisma Migrate (2026-07-19 결정)
+## 스키마 변경 절차 — Drizzle migration (2026-08-31 결정)
 
-`prisma db push` 수동 적용은 배포 DB drift 사고를 냈다 (2026-07-16,
-`character_visual_profile_references.description` 컬럼 누락 500). 변경 이력이
-없고 적용이 사람 기억에 의존하기 때문이다. 이후 절차:
+공유 DB에 `db:push`로 직접 변경하면 적용 이력이 남지 않아 코드와 DB가 어긋난다.
+정본과 적용 책임은 다음처럼 고정한다.
 
-1. **스키마 수정은 이 리포에서**: `prisma/schema.prisma` 수정 →
-   `npm run db:migrate` (prisma migrate dev) → `prisma/migrations/`에 SQL
-   생성·로컬 적용 → 마이그레이션 파일을 git에 커밋.
-2. **admin 미러 갱신**: opod-admin의 schema.prisma를 동일하게 맞추고
-   `node scripts/check-schema-sync.mjs`로 drift 검사. admin은 마이그레이션을
-   갖지 않는다 (적용 주체가 아님).
-3. **배포 적용은 자동**: backend 컨테이너가 시작 전에
-   `prisma migrate deploy`를 실행한다 (docker/Dockerfile CMD). 미적용
-   마이그레이션만 순서대로 적용된다.
-4. **배포 순서**: 스키마 변경이 포함된 릴리스는 **backend 먼저** 배포(=
-   마이그레이션 적용) 후 admin을 배포한다. admin은 스키마를 적용하지 않고
-   전제한다.
-5. `db:push`는 **로컬 DB** 전용으로 강등. 개발 DB에 직접 실행하지 않는다.
-   (DB 용어는 [02-development-rules.md](./02-development-rules.md) "DB 환경 용어"
-   가 정본이다 — 로컬 / 개발 / 운영(아직 없음) / 테스트.)
+1. **backend schema 수정**: `src/domain/database/schema.ts`가 유일한 정본이다.
+2. **SQL 생성·검토**: `npm run db:generate`로 `drizzle/<timestamp>_<name>/`을
+   만들고 `migration.sql`과 `snapshot.json`을 함께 검토·커밋한다. 데이터 백필이나
+   seed가 필요하면 같은 migration SQL에 명시한다.
+3. **로컬 적용·검증**: `npm run db:migrate`로 로컬 DB에 적용하고 unit/E2E/build를
+   통과시킨다. E2E는 매번 빈 PostgreSQL 16에 migration 전체를 적용한다.
+4. **admin 미러 갱신**: opod-admin의 `src/domain/database/schema.ts`를 동일하게
+   맞추고 admin에서 `npm run schema:check`를 실행한다. admin은 migration을
+   생성하거나 적용하지 않는다.
+5. **배포 적용**: backend 컨테이너가 시작 전에 `npm run db:migrate:deploy`를
+   실행한다. production image에는 `drizzle-kit`이 없으므로 이 명령은
+   `drizzle-orm`과 `pg` 기반 실행기를 사용한다.
+6. **배포 순서**: 스키마 변경 릴리스는 backend를 먼저 배포해 migration을 적용한
+   뒤 admin을 배포한다.
 
-### 기존 DB baseline (최초 1회)
+`db:push`는 **로컬 DB 전용**이다. Drizzle `1.0.0-rc.4`의 PostgreSQL introspection은
+기존 `character_status` enum을 다른 이름으로 오인하는 사례가 확인됐으므로 공유
+개발 DB나 운영 DB에는 사용하지 않는다. DB 용어는
+[02-development-rules.md](./02-development-rules.md)가 정본이다.
 
-마이그레이션 도입 전부터 존재하던 DB(운영·로컬)는 `0_init`을 "이미 적용됨"
-으로 표시해야 한다:
+### Prisma에서 전환하는 기존 DB baseline (최초 1회)
 
-```bash
-# 1. drift 확인 — 출력이 비어 있어야 한다. 차이가 있으면 먼저 정합화한다.
-DATABASE_URL=<url> npx prisma migrate diff \
-  --from-config-datasource --to-schema prisma/schema.prisma
-
-# 2. (drift가 있을 때만) 정합화 — 변경 내용 검토 후:
-DATABASE_URL=<url> npx prisma db push
-
-# 3. baseline
-DATABASE_URL=<url> npx prisma migrate resolve --applied 0_init
-
-# 4. 검증 — "No pending migrations to apply" 가 나와야 한다.
-DATABASE_URL=<url> npx prisma migrate deploy
-```
-
-로컬 DB는 2026-07-19에 baseline 완료. 이때 두 번째 drift 사례가 확인됐다:
-`user_withdrawals.email_hash` 컬럼·인덱스가 스키마에선 제거됐는데(커밋
-b73a336) DB에는 남아 있었다 — db push로 정합화했다. **개발 DB에도 같은
-잔존이 있을 가능성이 높으니** 1단계 drift 확인에서 email_hash 제거가 나오면
-예상된 차이다.
-
-**개발 DB baseline도 완료됐다 (2026-08-06 확인).** `opod._prisma_migrations`에
-`0_init`이 적용됨으로 기록돼 있고 17건 전부 `finished_at`이 채워져 있다.
-"다음 배포 전에 1회 실행해야 한다"던 이전 문장은 해소됐다.
-
-### 마이그레이션 상태 확인 방법
-
-**`_prisma_migrations`는 `public`이 아니라 `opod` 스키마에 있다.** multiSchema
-설정 때문이다. `public`에서 찾고 "없다"고 판단하는 실수를 하지 말 것.
+`20260831062118_baseline`은 빈 DB용 전체 DDL이다. 이미 31개 레거시 migration이
+적용된 DB에 이 SQL을 다시 실행하면 안 된다. 첫 Drizzle 배포 전에 다음 명령으로
+baseline만 적용 완료로 등록한다.
 
 ```bash
-# 로컬 DB
-docker exec ai_sns_postgres psql -U ai_sns -d ai_sns \
-  -c "select migration_name, (finished_at is not null) as ok from opod._prisma_migrations order by 1"
+# DATABASE_URL 대상과 백업을 확인한 뒤 1회 실행
+DATABASE_URL=<url> npm run db:baseline
 
-# 개발 DB
-ssh <host> 'cd ~/opod-backend && docker compose exec -T postgres \
-  psql -U ai_sns -d ai_sns -c "select migration_name, (finished_at is not null) as ok from opod._prisma_migrations order by 1"'
+# 등록 직후 pending migration 확인·적용. 현재 baseline만 있으면 no-op
+DATABASE_URL=<url> npm run db:migrate:deploy
 ```
 
-DB 기록과 `prisma/migrations/` 파일 목록이 어긋나면(diverge) `migrate dev`가
-막힌다. **파일이 없는데 DB에만 기록된 마이그레이션**이 특히 위험하다 — 되돌릴
-SQL이 없어 Prisma가 복구 불가로 판단하고 reset을 요구한다. 브랜치를 삭제할 때
-그 브랜치의 마이그레이션을 로컬에 적용한 적이 있으면 이 상태가 된다
-(2026-08-06 로컬 DB 사례: `feat/oauth-social-login` 삭제 후 reset으로 해소).
+서버의 compose 환경에서는 새 backend image를 받은 뒤 API를 재시작하기 전에
+다음처럼 실행한다.
 
-### 배포 전 점검 — 기본값 없는 NOT NULL 컬럼
+```bash
+docker compose run --rm --no-deps api npm run db:baseline
+docker compose up -d --no-build api
+```
 
-배포는 컨테이너 시작 시 `migrate deploy`로 자동 적용된다. 실패하면
-`_prisma_migrations`에 `finished_at = null` 행이 남고 **이후 배포가 전부 이
-실패에 막힌다** — 사람이 `migrate resolve`로 풀기 전까지.
+`db:baseline`은 application DDL을 실행하지 않는다. 다음 조건을 모두 만족할 때만
+`drizzle.__drizzle_migrations`에 승인된 baseline 이름·SHA-256을 기록한다.
 
-가장 흔한 실패 원인은 기본값 없는 `NOT NULL` 컬럼 추가다. Prisma가 마이그레이션
-파일 상단에 `Warnings:` 블록으로 알려주므로, 미적용 마이그레이션에 그 경고가
-있으면 **대상 테이블의 행 수를 배포 전에 확인**한다. 0이면 안전하고, 1건이라도
-있으면 백필을 넣거나 데이터를 정리해야 한다.
+- Drizzle migration 기록이 아직 없음
+- 남아 있는 `_prisma_migrations`에 미완료 행이 없음
+- `opod`의 table·column type/nullability·enum·index·PK/FK/check가 baseline
+  snapshot과 일치
+- baseline의 크레딧 상품 4개와 local development 결제 mapping 4개가 존재
 
-예: `20260804035605_credit_product_catalog`가
-`credit_purchases.credit_product_id`를 기본값 없이 추가한다. 2026-08-06 확인
-시 개발 DB의 `credit_purchases`가 0건이라 안전으로 판정했다.
+하나라도 다르면 등록을 중단한다. 이 경우 `db:push`로 맞추지 말고 차이를 별도
+검토해 명시적인 정합화 migration을 만든다. **이 작업에서는 로컬/개발/운영 DB에
+baseline을 실행하지 않았으므로 각 기존 환경은 최초 Drizzle 배포 전에 따로
+등록해야 한다.**
+
+기존 `opod._prisma_migrations`는 삭제하지 않고 과거 적용 이력으로 읽기 전용
+보존한다. 전환 뒤 현재 상태의 정본은 다음 쿼리다.
+
+```sql
+SELECT name, hash, applied_at
+FROM drizzle.__drizzle_migrations
+ORDER BY id;
+```
+
+### 배포 전 점검과 롤백
+
+기본값 없는 `NOT NULL` 컬럼을 기존 행이 있는 테이블에 바로 추가하면 실패한다.
+생성 SQL을 검토하고, 기존 데이터가 있으면 nullable 추가 → 백필 → NOT NULL 전환을
+같은 migration이나 순차 migration으로 명시한다. destructive DDL, long lock,
+대량 백필은 행 수와 실행 계획을 별도로 검토한다.
+
+Drizzle 실행기는 pending migration과 metadata 기록을 transaction으로 묶는다.
+실패한 migration은 수정해 덮어쓰지 말고 원인을 제거한 새 migration으로 전진한다.
+배포 후 코드 롤백이 필요해도 이미 적용된 schema와 호환되는 버전만 되돌린다.
+데이터 손실 가능성이 있는 schema rollback은 자동화하지 않으며, 새 forward
+migration 또는 검증된 백업 복구로 처리한다.
 
 ## pgvector 확장 설계 (차후 — 트리거 도달 시)
 
@@ -128,20 +123,18 @@ docs/media-generation-pipeline.md "컨텍스트 선별"). 아래 트리거 중 �
 
 ### 스키마 (전환 시 마이그레이션 1건)
 
-```prisma
-datasource db {
-  extensions = [vector]   // generator previewFeatures: postgresqlExtensions
-}
-
-model CharacterMemory {
-  embedding  Unsupported("vector(1536)")?
-  embeddedAt DateTime?    // 어느 시점의 content 기준인지
-}
-model CharacterVisualProfileReference {
-  embedding  Unsupported("vector(1536)")?
-  embeddedAt DateTime?
-}
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+ALTER TABLE opod.character_memories
+  ADD COLUMN embedding vector(1536),
+  ADD COLUMN embedded_at timestamptz(6);
+ALTER TABLE opod.character_visual_profile_references
+  ADD COLUMN embedding vector(1536),
+  ADD COLUMN embedded_at timestamptz(6);
 ```
+
+실제 도입 시 이 SQL과 같은 변경을 Drizzle 정본 schema에도 선언하고 migration으로
+생성·검토한다.
 
 - 별도 임베딩 테이블(polymorphic)이 아니라 **정본 테이블의 컬럼**: 조인
   불필요, cascade 공짜. 다중 임베딩 모델 버전 관리는 이 규모에서

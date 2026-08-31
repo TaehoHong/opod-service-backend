@@ -23,8 +23,10 @@
 - Unit: `*.spec.ts` (jest, `npm run test`). 도메인 서비스 중심
   (예: `credits.service.spec.ts`, `auth.service.spec.ts`, 컨트롤러 spec).
 - Integration/E2E: `test/*.e2e-spec.ts` (`npm run test:e2e`). Testcontainers로
-  실제 Postgres를 띄우고 `prisma db push` 후 supertest로 HTTP를 구동
-  (`test/e2e-global-setup.ts`, `test/e2e-env.ts`). **Docker 필요.**
+  실제 PostgreSQL 16을 띄우고 Drizzle migration 전체를 적용한 뒤 supertest로
+  HTTP를 구동한다. 별도 일회용 DB에서 레거시 31개 migration의 baseline 등록과
+  후속 no-op도 검증한다 (`test/e2e-global-setup.ts`,
+  `test/drizzle-migrations.e2e-spec.ts`). **Docker 필요.**
 - 결제·환불 커버리지: `src/domain/credits/payment-refund-coverage.spec.ts`,
   시나리오 문서 `docs/payment-refund-test-usecases.md`.
 - 아키텍처 규칙 테스트: `src/architecture.spec.ts` (계층·경계·UUIDv7 강제).

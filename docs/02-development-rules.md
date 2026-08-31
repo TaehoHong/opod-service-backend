@@ -6,10 +6,10 @@
 ## Commands (사실 — package.json)
 
 - Setup: `npm install`
-- Prisma client 생성: `npm run db:generate`
+- 마이그레이션 생성: `npm run db:generate` (Drizzle schema → `drizzle/` SQL)
 - 로컬 DB 기동: `npm run db:up` (docker/docker-compose.yml, Postgres 5433)
 - 로컬 스키마 적용: `npm run db:push` (**로컬 DB 전용** — 개발 DB 직접 실행 금지)
-- 마이그레이션 생성: `npm run db:migrate` (prisma migrate dev)
+- 생성된 마이그레이션 적용: `npm run db:migrate`
 - 서비스 실행: `npm run start:dev`
 - Format: `npm run format` (prettier --check)
 - Lint: `npm run lint` (eslint)
@@ -32,10 +32,11 @@
   - `src/domain` 폴더 집합은 DB 그룹과 정렬 (auth, characters, consents,
     credits, database, events, faqs, feed, follows, inquiries, media, messages,
     notices, notifications, posts, reports, stories, users).
-- **UUID 규칙**: UUID PK는 `@default(uuid(7))` (UUIDv7). `@default(uuid())`
-  금지 (architecture.spec.ts로 강제). (사실)
-- **DB 접근**: 모든 접근은 `PrismaService`(`src/domain/database`)를 통한다.
-  `pg`·별도 client·DB-free fallback 금지 (architecture.spec.ts). (사실)
+- **UUID 규칙**: UUID PK 값은 `uuidv7()`로 생성한다. DB schema는 `uuid`
+  컬럼을 선언하고 서비스가 insert 시 UUIDv7을 넣는다. (사실)
+- **DB 접근**: 앱 런타임의 모든 접근은 `DatabaseService`
+  (`src/domain/database`)를 통한다. 마이그레이션 실행기 외에 `pg`·별도 client·
+  DB-free fallback을 만들지 않는다 (architecture.spec.ts). (사실)
 - 컨벤션·정본 예시는 [07-codebase-guide.md](./07-codebase-guide.md)의
   "코드 컨벤션과 정본 예시" 표를 따른다.
 
@@ -58,7 +59,7 @@
   식별자·타입·API 필드는 영어.
 - **신규 도메인 추가 = 2단계 규칙** (결정):
   - 풀스택 도메인(기본): 새 테이블 또는 고유 비즈니스/조회 로직이 있으면
-    `prisma/schema.prisma` + `src/domain/<area>` + `src/service/<area>` +
+    `src/domain/database/schema.ts` + `src/domain/<area>` + `src/service/<area>` +
     `architecture.spec.ts`의 `expectedDomainEntries` 갱신. 절차 상세는
     [07-codebase-guide.md](./07-codebase-guide.md) "신규 도메인 추가" 참조.
   - 서비스-only(예외): 새 테이블 없이 기존 도메인 서비스 조합만 하는 순수 조회·
@@ -74,10 +75,10 @@ DB를 가리킬 때 **아래 네 단어만 쓴다.** 문서·주석·커밋 메�
 
 | 용어 | 실체 | 비고 |
 |---|---|---|
-| **로컬 DB** | 작업 중인 개별 PC의 localhost. `npm run db:up`이 띄우는 Docker Postgres(`docker/docker-compose.yml`, 5433) | 개발자마다 따로 있다. `db:push`·`migrate reset` 허용 대상은 여기뿐 |
+| **로컬 DB** | 작업 중인 개별 PC의 localhost. `npm run db:up`이 띄우는 Docker Postgres(`docker/docker-compose.yml`, 5433) | 개발자마다 따로 있다. `db:push` 허용 대상은 여기뿐 |
 | **개발 DB** | `dev-run-taeho` 서버에 떠 있는 개발서버용 DB. `deploy.sh`의 원격 호스트 | 공용이다. 파괴적 작업 금지 |
 | **운영 DB** | **아직 없다** | 생기기 전까지 "운영"을 다른 환경을 가리키는 데 쓰지 않는다 |
-| **테스트 DB** | Testcontainers가 테스트 실행마다 새로 띄우는 일회용 컨테이너 | 매번 빈 DB에 `prisma migrate deploy` 전체 적용. 상태가 남지 않는다 |
+| **테스트 DB** | Testcontainers가 테스트 실행마다 새로 띄우는 일회용 컨테이너 | 매번 빈 DB에 `npm run db:migrate:deploy` 전체 적용. 상태가 남지 않는다 |
 
 `deploy.sh`가 배포하는 대상은 **개발 DB**다. 배포·마이그레이션 문서에서 이를
 "Production"이라 부르지 않는다.
@@ -88,5 +89,5 @@ DB를 가리킬 때 **아래 네 단어만 쓴다.** 문서·주석·커밋 메�
   커버리지·관습만을 위한 테스트는 추가하지 않는다 (05-quality-rules 참조).
 - 공유 로직(예: `src/domain/database` 헬퍼, `AuthService`, `CreditsService`)
   변경은 더 넓은 회귀 검증을 요구한다.
-- 스키마 변경은 [db-management.md](./db-management.md)의 Prisma Migrate 절차와
+- 스키마 변경은 [db-management.md](./db-management.md)의 Drizzle 절차와
   admin 미러 정합을 따른다.

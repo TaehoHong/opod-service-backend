@@ -6,7 +6,8 @@ Public service backend for OPOD.
 
 - `src/service`: user-facing HTTP controllers and modules
 - `src/domain`: service domain logic and database access
-- `prisma`: canonical PostgreSQL schema
+- `src/domain/database/schema.ts`: canonical Drizzle PostgreSQL schema
+- `drizzle`: reviewed SQL migrations and snapshots
 - `test`: service-only tests
 - `docker`: local PostgreSQL/service container config
 
@@ -14,11 +15,13 @@ Public service backend for OPOD.
 
 ```bash
 npm install
-npm run db:generate
 npm run db:up
-npm run db:push
+npm run db:migrate
 npm run start:dev
 ```
+
+기존 Prisma-era DB를 재사용할 때는 migration DDL을 재실행하지 말고
+[`docs/db-management.md`](./docs/db-management.md)의 1회 baseline 절차를 따른다.
 
 Admin API and admin UI live in `../opod-admin`.
 

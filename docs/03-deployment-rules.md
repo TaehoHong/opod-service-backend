@@ -21,11 +21,12 @@
 - 브랜치 전략: main 중심. (사실 — 현재 리포 상태)
 - 배포: `./deploy.sh` — linux/amd64 이미지 로컬 빌드 → `docker save` → 서버로
   scp → 서버의 `deploy.sh` 실행(`api` 서비스만 재시작). (사실)
-- 스키마 마이그레이션: 컨테이너 시작 시 `prisma migrate deploy` 자동 실행
+- 스키마 마이그레이션: 컨테이너 시작 시 `npm run db:migrate:deploy` 자동 실행
   (`docker/Dockerfile` CMD). 미적용 마이그레이션만 순서대로 적용. (사실)
 - 배포 순서: 스키마 변경 포함 릴리스는 **backend 먼저** 배포(마이그레이션 적용)
   후 opod-admin 배포. (사실 — db-management.md)
-- 기존 DB는 최초 1회 `0_init` baseline 필요 (db-management.md). (사실)
+- 기존 DB는 첫 Drizzle 배포 전에 `20260831062118_baseline`을 최초 1회 등록해야
+  한다 (db-management.md). (사실)
 - Rollback: **미정** — 명시된 롤백 절차 없음. (미해결)
 - Required checks: **미정** — CI 파이프라인 없음(로컬 `build`/`lint`/`test`
   수동). (미해결)

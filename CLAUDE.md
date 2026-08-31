@@ -23,9 +23,10 @@ planning, UI/UX, fullstack, and QA subagent discovery.
 
 ## Repo Facts (quick)
 
-- NestJS 10 + Prisma 7 + PostgreSQL(schema `opod`), TypeScript strict.
-- Layers: `src/service` (HTTP) → `src/domain` (DB logic) → `prisma` (canonical
-  schema). Enforced by `src/architecture.spec.ts`.
+- NestJS 10 + Drizzle ORM v1 + PostgreSQL(schema `opod`), TypeScript strict.
+- Layers: `src/service` (HTTP) → `src/domain` (DB logic) →
+  `src/domain/database/schema.ts` (canonical schema). Enforced by
+  `src/architecture.spec.ts`.
 - This repo owns user-facing APIs + canonical schema. Admin lives in
   `opod-admin`; chat generation + relationship memory in `opod-agent`; frontend
   in `opod-web`. Do not add `src/admin` or import admin here.

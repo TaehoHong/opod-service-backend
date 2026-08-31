@@ -44,7 +44,8 @@
 
 | 능력                   | 정본 파일/심볼                                                             | 사용처                                  | 계약/제약                                                                                                                                                                                                                                                                      | Evidence                                                                                                                                |
 | ---------------------- | -------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| DB 접근                | `PrismaService`                                                            | 모든 도메인 서비스                      | 유일 DB 클라이언트. `pg`·별도 client 금지                                                                                                                                                                                                                                      | `src/domain/database/prisma.service.ts`                                                                                                 |
+| DB 접근                | `DatabaseService`                                                          | 모든 도메인 서비스                      | 앱 런타임의 유일 DB 클라이언트. `pg` 직접 사용은 migration 실행기로 한정                                                                                                                                                                                                        | `src/domain/database/database.service.ts`                                                                                               |
+| DB schema/migration    | `schema.ts` / `db-migrations.mjs`                                          | backend·admin 공유 schema, 배포 시작    | backend schema가 정본. 신규 DB는 migration 전체 적용, 기존 DB는 snapshot 카탈로그 검증 후 baseline 1회 등록                                                                                                                                                                    | `src/domain/database/schema.ts`, `scripts/db-migrations.mjs`, `test/drizzle-migrations.e2e-spec.ts`                                    |
 | 커서 페이지네이션      | `parsePageQuery`/`decodeCursor`/`pageFromRows`                             | 목록 API 전반                           | limit 기본 20·최대 50, `{items,nextCursor?}`                                                                                                                                                                                                                                   | `src/domain/database/page.ts`                                                                                                           |
 | UUID 검증              | `isUuid`                                                                   | 404 정규화(posts, notices, inquiries…)  | 비-uuid는 질의 전에 없음 처리                                                                                                                                                                                                                                                  | `src/domain/database/uuid.ts`                                                                                                           |
 | 인증 추출              | `AuthService.userIdFromAuthorization` 등                                   | 인증 필요한 모든 컨트롤러               | Bearer JWT → userId. 선택 인증은 `optional*`                                                                                                                                                                                                                                   | `src/domain/auth/auth.service.ts`                                                                                                       |
@@ -80,7 +81,7 @@
 
 - 허용 방향: `service` → `domain` → `domain/database`. 역방향·형제 우회 금지.
 - 우회 금지 경계: `service`는 admin을 import하지 않는다. HTTP 컨트롤러는
-  `domain`에 두지 않는다. DB는 `PrismaService`로만 접근.
+  `domain`에 두지 않는다. 앱 DB 접근은 `DatabaseService`로만 한다.
 - 재구현 금지: 위 Shared Capability Catalog의 정본을 재구현하지 않는다.
 - 강제 수단: `src/architecture.spec.ts` (계층·경계·도메인 폴더·UUIDv7·persistence).
 
@@ -90,12 +91,13 @@
 
 **A. 풀스택 도메인** — 새 테이블 또는 고유 비즈니스/조회 로직이 있을 때.
 
-1. 스키마: `prisma/schema.prisma`에 모델 추가 — UUIDv7 PK(`@default(uuid(7))
-@db.Uuid`), 컬럼 snake_case(`@map`), 타임스탬프 `@db.Timestamptz(6)`,
-   `@@map`+`@@schema("opod")`. `npm run db:migrate` + `db:generate` → admin 미러
-   갱신·drift 검사. 새 도메인 폴더면 `architecture.spec.ts`의
+1. 스키마: `src/domain/database/schema.ts`에 `opod.table`과 관계를 추가하고
+   insert 시 UUIDv7을 생성한다. 컬럼은 snake_case, 타임스탬프는
+   `timestamp({ precision: 6, withTimezone: true })`를 사용한다.
+   `npm run db:generate`로 SQL 생성·검토 → `npm run db:migrate`로 로컬 적용 →
+   admin 미러 갱신·`npm run schema:check`. 새 도메인 폴더면 `architecture.spec.ts`의
    `expectedDomainEntries`에 추가.
-2. 도메인 `src/domain/<area>/`: `<area>.service.ts`(`@Injectable`, `PrismaService`
+2. 도메인 `src/domain/<area>/`: `<area>.service.ts`(`@Injectable`, `DatabaseService`
    주입, DB 접근 + 비즈니스 불변식, 도메인 타입 + `to*` 매퍼, `page.ts`/`uuid.ts`
    재사용) · `<area>.module.ts`(providers/exports/imports) · `<area>.service.spec.ts`.
 3. 서비스 `src/service/<area>/`: `<area>.controller.ts`(`@Controller`, 인증 추출 +
@@ -118,7 +120,7 @@
 | 타입/빌드     | `npm run build`                       | —              | tsc strict 통과                    | `tsconfig.json`            |
 | 린트/포맷     | `npm run lint` / `npm run format`     | —              | eslint·prettier 통과               | `eslint.config.mjs`        |
 | 도메인 로직   | `npm run test -- <area>.service.spec` | `npm run test` | 관련 spec 통과                     | `package.json` jest        |
-| HTTP 계약     | `npm run test:e2e` (Docker 필요)      | 동일           | Testcontainers Postgres로 e2e 통과 | `test/jest-e2e.json`       |
+| HTTP/DB 계약  | `npm run test:e2e` (Docker 필요)      | 동일           | Testcontainers PostgreSQL 16에서 baseline·레거시 등록·HTTP e2e 통과 | `test/jest-e2e.json`, `test/drizzle-migrations.e2e-spec.ts` |
 | 아키텍처 규칙 | `npm run test -- architecture`        | —              | 계층·경계 유지                     | `src/architecture.spec.ts` |
 
 ## Excluded Paths
@@ -126,7 +128,7 @@
 | 경로                       | 이유                           | 정본                       |
 | -------------------------- | ------------------------------ | -------------------------- |
 | `node_modules/`, `dist/`   | 의존성·빌드 산출물             | package.json               |
-| `prisma/migrations/**`     | 생성된 SQL(수기 편집 금지)     | `prisma/schema.prisma`     |
+| `drizzle/**`               | 생성·검토한 migration 산출물   | `src/domain/database/schema.ts` |
 | `test/.tmp/`               | e2e 런타임 임시(gitignore)     | `test/e2e-global-setup.ts` |
 | `docker-compose.yml`(루트) | 서버-로컬 운영 파일(gitignore) | 서버 `~/opod-backend`      |
 

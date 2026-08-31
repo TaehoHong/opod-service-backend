@@ -10,8 +10,9 @@
 - 주요 계층:
   - `src/service/<area>`: HTTP 컨트롤러 + DTO + service 모듈(도메인 wiring).
   - `src/domain/<area>`: DB 접근·비즈니스 로직(`*.service.ts`), 도메인 모듈.
-  - `src/domain/database`: 공유 DB 인프라(`PrismaService`, 페이지네이션, uuid).
-  - `prisma/schema.prisma`: 정본 데이터 모델.
+  - `src/domain/database`: 공유 DB 인프라(`DatabaseService`, Drizzle schema,
+    페이지네이션, uuid).
+  - `drizzle/`: 정본 스키마에서 생성하고 검토한 SQL 마이그레이션.
 - 소유권 경계:
   - 이 리포: 유저용 API + 공유 도메인 + **정본 스키마**.
   - opod-admin: 관리자 API·UI, 콘텐츠 작성/발행, 미디어 업로드, 스키마 미러.
@@ -27,7 +28,7 @@
   `payments`가 금전 상태·provider adapter, `credits`가 크레딧 원장을 소유한다.
 - Outputs: JSON 응답(커서 페이지네이션), DB 기록, opod-agent로의 아웃바운드
   호출.
-- Persistence: PostgreSQL(스키마 `opod`), Prisma. UUIDv7 PK. 미디어는 URL/
+- Persistence: PostgreSQL(스키마 `opod`) + Drizzle ORM v1. UUIDv7 PK. 미디어는 URL/
   storageKey로 참조하고 공개 URL은 `S3_PUBLIC_BASE_URL`로 조립
   (`src/domain/media/media-url.ts`).
 
@@ -222,7 +223,8 @@ Kafka) 기반 전달로 교체한다. 이번 구현에서는 브로커 의존성
 
 | 날짜       | 결정                                                                                                                         | 이유                                                                                                    | 대안                                                                 |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 2026-07-19 | 스키마 변경은 Prisma Migrate로 일원화                                                                                        | `db push` 수동 적용이 배포 DB drift 사고를 냄                                                           | db push 유지(기각)                                                   |
+| 2026-07-19 | 스키마 변경은 이력 기반 migration으로 일원화                                                                                | `db push` 수동 적용이 배포 DB drift 사고를 냄                                                           | db push 유지(기각)                                                   |
+| 2026-08-31 | Prisma를 Drizzle ORM v1으로 완전 대체하고 기존 DB는 검증 후 baseline 등록                                                   | 런타임·스키마·마이그레이션 소유자를 하나로 통일하고 기존 DDL 재실행을 방지                              | 두 ORM 병행(기각), 기존 DB에 baseline DDL 재실행(기각)               |
 | (스키마)   | agent 관계 메모리 테이블을 이 리포 스키마에 호스팅(FK 없음, TEXT id)                                                         | 정본 스키마 소유자가 여기이고, 식별자는 X-Opod-* 헤더로 유입                                            | 별도 DB(기각)                                                        |
 | (스키마)   | 임베딩·캡션 등 파생 데이터는 정본 아님, 백필 재생성                                                                          | 모델 교체·장애가 "백필 재실행"으로 수렴                                                                 | 정본 취급(기각)                                                      |
 | 2026-07-29 | 데이터 전면 무기한 보존                                                                                                      | 정리 배치 없이 단순 유지                                                                                | 보존기간 정리(기각)                                                  |
