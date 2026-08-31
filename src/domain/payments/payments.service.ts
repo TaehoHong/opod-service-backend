@@ -8,14 +8,16 @@ import { GooglePlayIapProvider } from "./google-play-iap.provider";
 import { LocalPaymentProvider } from "./local-payment.provider";
 import { PaymentChannel, PaymentProvider } from "./payment-provider";
 import { PolarPaymentProvider } from "./polar-payment.provider";
-import { PrismaService } from "../database/prisma.service";
+import { eq } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { adminSettings } from "../database/schema";
 
 @Injectable()
 export class PaymentsService {
   private readonly providers: PaymentProvider[];
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     polar: PolarPaymentProvider,
     apple: AppleIapProvider,
     google: GooglePlayIapProvider,
@@ -25,10 +27,11 @@ export class PaymentsService {
   }
 
   async webProvider() {
-    const configured = await this.prisma.adminSetting.findUnique({
-      where: { key: "payments.webProvider" },
-      select: { value: true },
-    });
+    const [configured] = await this.database.client
+      .select({ value: adminSettings.value })
+      .from(adminSettings)
+      .where(eq(adminSettings.key, "payments.webProvider"))
+      .limit(1);
     const name =
       configured?.value.trim() ||
       (process.env.NODE_ENV === "production" ? "polar" : "local");

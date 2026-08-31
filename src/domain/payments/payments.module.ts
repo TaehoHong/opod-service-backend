@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { PrismaModule } from "../database/prisma.module";
+import { DatabaseModule } from "../database/database.module";
 import { AppleIapProvider } from "./apple-iap.provider";
 import { GooglePlayIapProvider } from "./google-play-iap.provider";
 import { LocalPaymentProvider } from "./local-payment.provider";
@@ -7,7 +7,7 @@ import { PaymentsService } from "./payments.service";
 import { PolarPaymentProvider } from "./polar-payment.provider";
 
 @Module({
-  imports: [PrismaModule],
+  imports: [DatabaseModule],
   providers: [
     PolarPaymentProvider,
     AppleIapProvider,

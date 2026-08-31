@@ -4,25 +4,66 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
 import { createHash, createHmac } from "node:crypto";
 import {
-  activeReservationFilter,
+  activeReservationCondition,
+  type CreditClient,
   CreditsService,
 } from "../credits/credits.service";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+  sum,
+  type SQL,
+} from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
 import { decodeCursor, PageInput, pageFromRows } from "../database/page";
-import { PrismaService } from "../database/prisma.service";
+import {
+  creditProducts,
+  creditPurchases,
+  creditRefund,
+  creditReservations,
+  paymentLedger,
+  paymentProductMappings,
+  paymentProviderEvents,
+  payments as paymentRows,
+} from "../database/schema";
 import { NOTIFICATION_TYPES } from "../notifications/notification-types";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PaymentEvent } from "../payments/payment-provider";
 import { PaymentsService } from "../payments/payments.service";
 
-type Tx = Prisma.TransactionClient;
+type Tx = CreditClient;
+type PurchaseBase = typeof creditPurchases.$inferSelect;
+type PaymentRow = typeof paymentRows.$inferSelect;
+type PurchaseRow = PurchaseBase & { payment: PaymentRow | null };
+type PaymentWithPurchase = PaymentRow & { purchase: PurchaseBase };
+type RefundRow = typeof creditRefund.$inferSelect;
+type RefundWithPurchase = RefundRow & { purchase: PurchaseRow };
+
+const purchaseWithPayment = {
+  purchase: getTableColumns(creditPurchases),
+  payment: getTableColumns(paymentRows),
+};
+
+const paymentWithPurchase = {
+  payment: getTableColumns(paymentRows),
+  purchase: getTableColumns(creditPurchases),
+};
 
 @Injectable()
 export class PurchasesService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly payments: PaymentsService,
     private readonly credits: CreditsService,
     private readonly notifications: NotificationsService,
@@ -30,29 +71,35 @@ export class PurchasesService {
 
   async listProducts(channel: "web" | "apple" | "google") {
     const provider = await this.payments.providerForChannel(channel);
-    const mappings = await this.prisma.paymentProductMapping.findMany({
-      where: {
-        channel,
-        provider: provider.name,
-        environment: provider.environment,
-        isActive: true,
-        creditProduct: { isActive: true },
-      },
-      include: { creditProduct: true },
-      orderBy: [
-        { creditProduct: { displayOrder: "asc" } },
-        { creditProduct: { code: "asc" } },
-      ],
-    });
+    const mappings = await this.database.client
+      .select({
+        mapping: getTableColumns(paymentProductMappings),
+        creditProduct: getTableColumns(creditProducts),
+      })
+      .from(paymentProductMappings)
+      .innerJoin(
+        creditProducts,
+        eq(paymentProductMappings.creditProductId, creditProducts.id),
+      )
+      .where(
+        and(
+          eq(paymentProductMappings.channel, channel),
+          eq(paymentProductMappings.provider, provider.name),
+          eq(paymentProductMappings.environment, provider.environment),
+          eq(paymentProductMappings.isActive, true),
+          eq(creditProducts.isActive, true),
+        ),
+      )
+      .orderBy(asc(creditProducts.displayOrder), asc(creditProducts.code));
     return mappings.map((mapping) => ({
       id: mapping.creditProduct.code,
       name: mapping.creditProduct.name,
       creditAmount: mapping.creditProduct.creditAmount,
-      providerProductId: mapping.providerProductId,
-      ...(mapping.priceAmount !== null
-        ? { priceAmount: mapping.priceAmount }
+      providerProductId: mapping.mapping.providerProductId,
+      ...(mapping.mapping.priceAmount !== null
+        ? { priceAmount: mapping.mapping.priceAmount }
         : {}),
-      ...(mapping.currency ? { currency: mapping.currency } : {}),
+      ...(mapping.mapping.currency ? { currency: mapping.mapping.currency } : {}),
     }));
   }
 
@@ -86,12 +133,11 @@ export class PurchasesService {
       throw new BadRequestException("Idempotency-Key is required");
     this.assertCheckoutRedirects(input.successUrl, input.returnUrl);
 
-    const existing = await this.prisma.creditPurchase.findUnique({
-      where: {
-        userId_idempotencyKey: { userId: input.userId, idempotencyKey },
-      },
-      include: { payment: true },
-    });
+    const existing = await this.findPurchaseByIdempotency(
+      this.database.client,
+      input.userId,
+      idempotencyKey,
+    );
     if (existing) {
       if (existing.productId !== input.productId) {
         throw new ConflictException("Idempotency key conflict");
@@ -109,43 +155,45 @@ export class PurchasesService {
     const externalProduct = mapping.providerProductId;
     const currency = mapping.currency.trim().toUpperCase();
 
-    const purchase = await this.prisma.$transaction(async (tx) => {
+    const purchase = await this.database.client.transaction(async (tx) => {
       await this.lockPaymentReference(
         tx,
         "checkout",
         `${input.userId}:${idempotencyKey}`,
       );
-      const raced = await tx.creditPurchase.findUnique({
-        where: {
-          userId_idempotencyKey: { userId: input.userId, idempotencyKey },
-        },
-        include: { payment: true },
-      });
+      const raced = await this.findPurchaseByIdempotency(
+        tx,
+        input.userId,
+        idempotencyKey,
+      );
       if (raced) {
         if (raced.productId !== input.productId) {
           throw new ConflictException("Idempotency key conflict");
         }
         return raced;
       }
-      return tx.creditPurchase.create({
-        data: {
+      const [created] = await tx
+        .insert(creditPurchases)
+        .values({
           userId: input.userId,
           creditProductId: product.id,
           productId: input.productId,
           creditAmount: product.creditAmount,
           idempotencyKey,
-          payment: {
-            create: {
-              channel: "web",
-              provider: provider.name,
-              providerProductId: externalProduct,
-              amount: mapping.priceAmount,
-              currency,
-            },
-          },
-        },
-        include: { payment: true },
-      });
+        })
+        .returning();
+      const [payment] = await tx
+        .insert(paymentRows)
+        .values({
+          purchaseId: created.id,
+          channel: "web",
+          provider: provider.name,
+          providerProductId: externalProduct,
+          amount: mapping.priceAmount,
+          currency,
+        })
+        .returning();
+      return { ...created, payment };
     });
     return this.ensureCheckout(purchase, input);
   }
@@ -169,29 +217,28 @@ export class PurchasesService {
     });
     if (verified.revoked) throw new ConflictException("Purchase was revoked");
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockPaymentReference(
         tx,
         verified.provider,
         verified.transactionKey,
       );
-      const existing = await tx.payment.findUnique({
-        where: {
-          provider_providerTransactionKey: {
-            provider: verified.provider,
-            providerTransactionKey: verified.transactionKey,
-          },
-        },
-        include: { purchase: true },
-      });
+      const existing = await this.findPayment(
+        tx,
+        and(
+          eq(paymentRows.provider, verified.provider),
+          eq(paymentRows.providerTransactionKey, verified.transactionKey),
+        ),
+      );
       if (existing) {
         if (existing.purchase.userId !== input.userId) {
           throw new ConflictException("Purchase already claimed");
         }
         return this.toPurchase({ ...existing.purchase, payment: existing });
       }
-      const purchase = await tx.creditPurchase.create({
-        data: {
+      const [purchaseBase] = await tx
+        .insert(creditPurchases)
+        .values({
           userId: input.userId,
           creditProductId: product.id,
           productId: input.productId,
@@ -199,33 +246,34 @@ export class PurchasesService {
           creditAmount: product.creditAmount,
           idempotencyKey: `${verified.provider}:${verified.transactionKey}`,
           fulfilledAt: new Date(),
-          payment: {
-            create: {
-              channel: input.channel,
-              provider: verified.provider,
-              status: "paid",
-              amount: verified.amount,
-              currency: verified.currency,
-              providerTransactionId: verified.transactionId,
-              providerTransactionKey: verified.transactionKey,
-              providerProductId: externalProduct,
-              providerEnvironment: verified.environment,
-              paidAt: verified.occurredAt,
-              ledger: {
-                create: {
-                  type: "capture",
-                  direction: "inflow",
-                  amount: verified.amount,
-                  currency: verified.currency,
-                  providerTransactionId: verified.transactionId,
-                  occurredAt: verified.occurredAt,
-                },
-              },
-            },
-          },
-        },
-        include: { payment: true },
+        })
+        .returning();
+      const [payment] = await tx
+        .insert(paymentRows)
+        .values({
+          purchaseId: purchaseBase.id,
+          channel: input.channel,
+          provider: verified.provider,
+          status: "paid",
+          amount: verified.amount,
+          currency: verified.currency,
+          providerTransactionId: verified.transactionId,
+          providerTransactionKey: verified.transactionKey,
+          providerProductId: externalProduct,
+          providerEnvironment: verified.environment,
+          paidAt: verified.occurredAt,
+        })
+        .returning();
+      await tx.insert(paymentLedger).values({
+        paymentId: payment.id,
+        type: "capture",
+        direction: "inflow",
+        amount: verified.amount,
+        currency: verified.currency,
+        providerTransactionId: verified.transactionId,
+        occurredAt: verified.occurredAt,
       });
+      const purchase: PurchaseRow = { ...purchaseBase, payment };
       await this.credits.grantCreditsWithClient(tx, {
         userId: input.userId,
         amount: product.creditAmount,
@@ -240,21 +288,36 @@ export class PurchasesService {
 
   async list(userId: string, input: PageInput) {
     const cursorId = decodeCursor(input.cursor);
-    if (
-      cursorId &&
-      !(await this.prisma.creditPurchase.findFirst({
-        where: { id: cursorId, userId },
-      }))
-    ) {
-      throw new BadRequestException("Invalid cursor");
+    let cursor: { id: string; createdAt: Date } | undefined;
+    if (cursorId) {
+      [cursor] = await this.database.client
+        .select({ id: creditPurchases.id, createdAt: creditPurchases.createdAt })
+        .from(creditPurchases)
+        .where(and(eq(creditPurchases.id, cursorId), eq(creditPurchases.userId, userId)))
+        .limit(1);
+      if (!cursor) throw new BadRequestException("Invalid cursor");
     }
-    const rows = await this.prisma.creditPurchase.findMany({
-      where: { userId },
-      include: { payment: true },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: input.limit + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-    });
+    const joined = await this.database.client
+      .select(purchaseWithPayment)
+      .from(creditPurchases)
+      .leftJoin(paymentRows, eq(paymentRows.purchaseId, creditPurchases.id))
+      .where(
+        and(
+          eq(creditPurchases.userId, userId),
+          cursor
+            ? or(
+                lt(creditPurchases.createdAt, cursor.createdAt),
+                and(
+                  eq(creditPurchases.createdAt, cursor.createdAt),
+                  lt(creditPurchases.id, cursor.id),
+                ),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(creditPurchases.createdAt), desc(creditPurchases.id))
+      .limit(input.limit + 1);
+    const rows = joined.map(({ purchase, payment }) => ({ ...purchase, payment }));
     return pageFromRows(
       rows.map((row) => this.toPurchase(row)),
       input.limit,
@@ -264,19 +327,26 @@ export class PurchasesService {
   async getByCheckoutId(userId: string, checkoutId: string) {
     const normalized = checkoutId.trim();
     if (!normalized) throw new NotFoundException("Purchase not found");
-    const purchase = await this.prisma.creditPurchase.findFirst({
-      where: {
-        userId,
-        payment: { providerCheckoutId: normalized },
-      },
-      include: { payment: true },
-    });
+    const [joined] = await this.database.client
+      .select(purchaseWithPayment)
+      .from(creditPurchases)
+      .innerJoin(paymentRows, eq(paymentRows.purchaseId, creditPurchases.id))
+      .where(
+        and(
+          eq(creditPurchases.userId, userId),
+          eq(paymentRows.providerCheckoutId, normalized),
+        ),
+      )
+      .limit(1);
+    const purchase = joined
+      ? ({ ...joined.purchase, payment: joined.payment } as PurchaseRow)
+      : null;
     if (!purchase) throw new NotFoundException("Purchase not found");
     return this.toPurchase(purchase);
   }
 
   async refundQuote(userId: string, purchaseId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUser(tx, userId);
       return this.refundQuoteWithClient(tx, userId, purchaseId);
     });
@@ -290,17 +360,15 @@ export class PurchasesService {
     const idempotencyKey = input.idempotencyKey.trim();
     if (!idempotencyKey)
       throw new BadRequestException("Idempotency-Key is required");
-    const prepared = await this.prisma.$transaction(async (tx) => {
+    const prepared = await this.database.client.transaction(async (tx) => {
       await this.lockUser(tx, input.userId);
-      const existing = await tx.creditRefund.findUnique({
-        where: {
-          purchaseId_idempotencyKey: {
-            purchaseId: input.purchaseId,
-            idempotencyKey,
-          },
-        },
-        include: { purchase: { include: { payment: true } } },
-      });
+      const existing = await this.findRefundWithPurchase(
+        tx,
+        and(
+          eq(creditRefund.purchaseId, input.purchaseId),
+          eq(creditRefund.idempotencyKey, idempotencyKey),
+        ),
+      );
       if (existing) return { refund: existing, isNew: false };
       const quote = await this.refundQuoteWithClient(
         tx,
@@ -309,8 +377,9 @@ export class PurchasesService {
       );
       if (!quote.eligible)
         throw new ConflictException("Refund is not eligible");
-      const refund = await tx.creditRefund.create({
-        data: {
+      const [refundBase] = await tx
+        .insert(creditRefund)
+        .values({
           purchaseId: input.purchaseId,
           idempotencyKey,
           status: "payment_processing",
@@ -327,9 +396,10 @@ export class PurchasesService {
           feeAmount: quote.feeAmount,
           refundAmount: quote.refundAmount,
           currency: quote.currency,
-        },
-        include: { purchase: { include: { payment: true } } },
-      });
+        })
+        .returning();
+      const purchase = await this.requirePurchase(tx, input.purchaseId);
+      const refund: RefundWithPurchase = { ...refundBase, purchase };
       return { refund, isNew: true };
     });
     const refund = prepared.refund;
@@ -337,9 +407,7 @@ export class PurchasesService {
       return this.completeRefund(refund.id);
     }
     if (!prepared.isNew || refund.providerRefundId) {
-      return this.prisma.creditRefund.findUniqueOrThrow({
-        where: { id: refund.id },
-      });
+      return this.requireRefund(this.database.client, refund.id);
     }
     const payment = refund.purchase.payment;
     if (!payment?.providerTransactionId)
@@ -356,14 +424,12 @@ export class PurchasesService {
           : result.status === "processing"
             ? "payment_processing"
             : result.status;
-      await this.prisma.creditRefund.update({
-        where: { id: refund.id },
-        data: { providerRefundId: result.providerRefundId, status },
-      });
+      await this.database.client
+        .update(creditRefund)
+        .set({ providerRefundId: result.providerRefundId, status })
+        .where(eq(creditRefund.id, refund.id));
       if (result.status === "succeeded") return this.completeRefund(refund.id);
-      return this.prisma.creditRefund.findUniqueOrThrow({
-        where: { id: refund.id },
-      });
+      return this.requireRefund(this.database.client, refund.id);
     } catch (error) {
       // 결과가 불명확하므로 processing과 lock을 유지한다.
       throw error;
@@ -375,39 +441,46 @@ export class PurchasesService {
     input: { body: Buffer; headers: Record<string, string> },
   ) {
     const event = await this.payments.verifyEvent(providerName, input);
-    return this.prisma.$transaction(async (tx) =>
+    return this.database.client.transaction(async (tx) =>
       this.applyEvent(tx, providerName, event),
     );
   }
 
   private async applyEvent(tx: Tx, provider: string, event: PaymentEvent) {
-    const inbox = await tx.paymentProviderEvent.upsert({
-      where: {
-        provider_externalEventId: { provider, externalEventId: event.eventId },
-      },
-      create: {
+    const [inbox] = await tx
+      .insert(paymentProviderEvents)
+      .values({
         provider,
         externalEventId: event.eventId,
         eventType: event.type,
-      },
-      update: { attempts: { increment: 1 } },
-    });
+      })
+      .onConflictDoUpdate({
+        target: [
+          paymentProviderEvents.provider,
+          paymentProviderEvents.externalEventId,
+        ],
+        set: { attempts: sql`${paymentProviderEvents.attempts} + 1` },
+      })
+      .returning();
     if (inbox.eventType !== event.type) {
       throw new ConflictException("Provider event ID conflict");
     }
     if (inbox.status === "processed") return { processed: true, replay: true };
     if (event.type === "ignored") {
-      await tx.paymentProviderEvent.update({
-        where: { id: inbox.id },
-        data: { status: "processed", processedAt: new Date() },
-      });
+      await tx
+        .update(paymentProviderEvents)
+        .set({ status: "processed", processedAt: new Date() })
+        .where(eq(paymentProviderEvents.id, inbox.id));
       return { processed: true };
     }
     let payment = event.purchaseId
-      ? await tx.payment.findFirst({
-          where: { purchaseId: event.purchaseId, provider },
-          include: { purchase: true },
-        })
+      ? await this.findPayment(
+          tx,
+          and(
+            eq(paymentRows.purchaseId, event.purchaseId),
+            eq(paymentRows.provider, provider),
+          ),
+        )
       : null;
     if (!payment && (event.transactionKey || event.transactionId)) {
       const key =
@@ -415,24 +488,24 @@ export class PurchasesService {
         (provider === "google_play" && event.transactionId
           ? createHash("sha256").update(event.transactionId).digest("hex")
           : undefined);
-      payment = await tx.payment.findFirst({
-        where: key
-          ? { provider, providerTransactionKey: key }
-          : { provider, providerTransactionId: event.transactionId },
-        include: { purchase: true },
-      });
+      payment = await this.findPayment(
+        tx,
+        and(
+          eq(paymentRows.provider, provider),
+          key
+            ? eq(paymentRows.providerTransactionKey, key)
+            : eq(paymentRows.providerTransactionId, event.transactionId!),
+        ),
+      );
     }
     if (!payment) throw new NotFoundException("Payment not found");
     await this.lockUser(tx, payment.purchase.userId);
     await this.lockPaymentReference(tx, provider, payment.id);
-    payment = await tx.payment.findUniqueOrThrow({
-      where: { id: payment.id },
-      include: { purchase: true },
-    });
-    await tx.paymentProviderEvent.update({
-      where: { id: inbox.id },
-      data: { paymentId: payment.id },
-    });
+    payment = await this.requirePayment(tx, payment.id);
+    await tx
+      .update(paymentProviderEvents)
+      .set({ paymentId: payment.id })
+      .where(eq(paymentProviderEvents.id, inbox.id));
     if (event.type === "paid") {
       if (
         event.providerProductId &&
@@ -485,9 +558,9 @@ export class PurchasesService {
           purchaseId: payment.purchaseId,
           externalReference: `credit_purchase:${payment.purchaseId}`,
         });
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: {
+        await tx
+          .update(paymentRows)
+          .set({
             status: "paid",
             providerTransactionId: event.transactionId,
             netAmount: event.netAmount,
@@ -498,23 +571,22 @@ export class PurchasesService {
                 ? createHash("sha256").update(event.transactionId).digest("hex")
                 : undefined),
             paidAt: event.occurredAt,
-            ledger: {
-              create: {
-                type: "capture",
-                direction: "inflow",
-                amount: event.amount ?? payment.amount,
-                currency: event.currency ?? payment.currency,
-                providerTransactionId: event.transactionId,
-                providerEventId: event.eventId,
-                occurredAt: event.occurredAt,
-              },
-            },
-          },
+          })
+          .where(eq(paymentRows.id, payment.id));
+        await tx.insert(paymentLedger).values({
+          paymentId: payment.id,
+          type: "capture",
+          direction: "inflow",
+          amount: event.amount ?? payment.amount,
+          currency: event.currency ?? payment.currency,
+          providerTransactionId: event.transactionId,
+          providerEventId: event.eventId,
+          occurredAt: event.occurredAt,
         });
-        await tx.creditPurchase.update({
-          where: { id: payment.purchaseId },
-          data: { status: "completed", fulfilledAt: new Date() },
-        });
+        await tx
+          .update(creditPurchases)
+          .set({ status: "completed", fulfilledAt: new Date() })
+          .where(eq(creditPurchases.id, payment.purchaseId));
         // 웹훅은 비동기라 유저가 앱을 떠난 뒤 지급될 수 있다 — 알림 가치가
         // 실제로 있는 몇 안 되는 경로다. 트랜잭션 안에서 만들어야 재전송이
         // inbox(`payment_provider_events`)에서 걸러진다. 커밋 후 별도로 만들면
@@ -530,14 +602,14 @@ export class PurchasesService {
       }
     } else if (event.type === "failed") {
       if (["pending", "verified", "processing"].includes(payment.status)) {
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: "failed" },
-        });
-        await tx.creditPurchase.update({
-          where: { id: payment.purchaseId },
-          data: { status: "failed" },
-        });
+        await tx
+          .update(paymentRows)
+          .set({ status: "failed" })
+          .where(eq(paymentRows.id, payment.id));
+        await tx
+          .update(creditPurchases)
+          .set({ status: "failed" })
+          .where(eq(creditPurchases.id, payment.purchaseId));
       }
     } else if (
       event.type === "refunded" &&
@@ -556,13 +628,17 @@ export class PurchasesService {
       );
       if (failed) return failed;
     } else if (event.type === "refunded") {
-      const pendingRefund = await tx.creditRefund.findFirst({
-        where: {
-          purchaseId: payment.purchaseId,
-          status: { in: ["payment_processing", "payment_succeeded"] },
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      });
+      const [pendingRefund] = await tx
+        .select()
+        .from(creditRefund)
+        .where(
+          and(
+            eq(creditRefund.purchaseId, payment.purchaseId),
+            inArray(creditRefund.status, ["payment_processing", "payment_succeeded"]),
+          ),
+        )
+        .orderBy(asc(creditRefund.createdAt), asc(creditRefund.id))
+        .limit(1);
       if (pendingRefund) {
         await this.completeRefundWithClient(tx, pendingRefund.id, event);
       } else {
@@ -571,28 +647,28 @@ export class PurchasesService {
     } else {
       await this.forceReversal(tx, payment, event);
     }
-    await tx.paymentProviderEvent.update({
-      where: { id: inbox.id },
-      data: { status: "processed", processedAt: new Date() },
-    });
+    await tx
+      .update(paymentProviderEvents)
+      .set({ status: "processed", processedAt: new Date() })
+      .where(eq(paymentProviderEvents.id, inbox.id));
     return { processed: true };
   }
 
   private async failProviderEvent(tx: Tx, eventId: string, code: string) {
-    await tx.paymentProviderEvent.update({
-      where: { id: eventId },
-      data: {
+    await tx
+      .update(paymentProviderEvents)
+      .set({
         status: "failed",
         lastErrorCode: code,
         processedAt: new Date(),
-      },
-    });
+      })
+      .where(eq(paymentProviderEvents.id, eventId));
     return { processed: false, error: code };
   }
 
   private async applyCumulativeRefund(
     tx: Tx,
-    initialPayment: Prisma.PaymentGetPayload<{ include: { purchase: true } }>,
+    initialPayment: PaymentWithPurchase,
     event: PaymentEvent & { netAmount: number; refundedAmount: number },
     inboxId: string,
   ) {
@@ -617,25 +693,31 @@ export class PurchasesService {
       return this.failProviderEvent(tx, inboxId, "currency_mismatch");
     }
 
-    const refunded = await tx.paymentLedger.aggregate({
-      where: {
-        paymentId: initialPayment.id,
-        type: { in: ["refund", "chargeback"] },
-      },
-      _sum: { amount: true },
-    });
-    let previousRefundedAmount = refunded._sum.amount ?? 0;
+    const [refunded] = await tx
+      .select({ amount: sum(paymentLedger.amount).mapWith(Number) })
+      .from(paymentLedger)
+      .where(
+        and(
+          eq(paymentLedger.paymentId, initialPayment.id),
+          inArray(paymentLedger.type, ["refund", "chargeback"]),
+        ),
+      );
+    let previousRefundedAmount = refunded.amount ?? 0;
     if (event.refundedAmount < previousRefundedAmount) {
       return this.failProviderEvent(tx, inboxId, "refund_amount_mismatch");
     }
 
-    const pendingRefund = await tx.creditRefund.findFirst({
-      where: {
-        purchaseId: initialPayment.purchaseId,
-        status: { in: ["payment_processing", "payment_succeeded"] },
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
+    const [pendingRefund] = await tx
+      .select()
+      .from(creditRefund)
+      .where(
+        and(
+          eq(creditRefund.purchaseId, initialPayment.purchaseId),
+          inArray(creditRefund.status, ["payment_processing", "payment_succeeded"]),
+        ),
+      )
+      .orderBy(asc(creditRefund.createdAt), asc(creditRefund.id))
+      .limit(1);
     if (pendingRefund) {
       const increase = event.refundedAmount - previousRefundedAmount;
       if (increase < pendingRefund.refundAmount) {
@@ -646,10 +728,7 @@ export class PurchasesService {
     }
     if (event.refundedAmount === previousRefundedAmount) return;
 
-    const payment = await tx.payment.findUniqueOrThrow({
-      where: { id: initialPayment.id },
-      include: { purchase: true },
-    });
+    const payment = await this.requirePayment(tx, initialPayment.id);
     const snapshot = await this.credits.getPurchaseCreditSnapshotWithClient(
       tx,
       {
@@ -657,19 +736,23 @@ export class PurchasesService {
         purchaseId: payment.purchaseId,
       },
     );
-    const recovered = await tx.creditRefund.aggregate({
-      where: { purchaseId: payment.purchaseId, status: "completed" },
-      _sum: {
-        creditAmount: true,
-        promotionAmount: true,
-        freePromotionAmount: true,
-      },
-    });
-    const previousBaseRecovery = Math.max(0, recovered._sum.creditAmount ?? 0);
+    const [recovered] = await tx
+      .select({
+        creditAmount: sum(creditRefund.creditAmount).mapWith(Number),
+        promotionAmount: sum(creditRefund.promotionAmount).mapWith(Number),
+        freePromotionAmount: sum(creditRefund.freePromotionAmount).mapWith(Number),
+      })
+      .from(creditRefund)
+      .where(
+        and(
+          eq(creditRefund.purchaseId, payment.purchaseId),
+          eq(creditRefund.status, "completed"),
+        ),
+      );
+    const previousBaseRecovery = Math.max(0, recovered.creditAmount ?? 0);
     const previousPaidPromotionRecovery = Math.max(
       0,
-      (recovered._sum.promotionAmount ?? 0) -
-        (recovered._sum.freePromotionAmount ?? 0),
+      (recovered.promotionAmount ?? 0) - (recovered.freePromotionAmount ?? 0),
     );
     const originalPaidCredits =
       snapshot.originalPaid + snapshot.originalPaidPromotion;
@@ -695,8 +778,9 @@ export class PurchasesService {
       snapshot.remainingPaid + snapshot.remainingPaidPromotion;
     const debtAmount = Math.max(0, paidRecovery - availablePaidCredits);
     const refundIncrease = event.refundedAmount - previousRefundedAmount;
-    const refund = await tx.creditRefund.create({
-      data: {
+    const [refund] = await tx
+      .insert(creditRefund)
+      .values({
         purchaseId: payment.purchaseId,
         idempotencyKey: `provider:${event.eventId}`,
         status: "completed",
@@ -714,8 +798,8 @@ export class PurchasesService {
         currency: event.currency ?? payment.currency ?? "UNKNOWN",
         providerTransactionId: event.transactionId,
         completedAt: event.occurredAt,
-      },
-    });
+      })
+      .returning();
     if (recoveryAmount > 0) {
       await this.credits.recordRefundRecoveryWithClient(tx, {
         userId: payment.purchase.userId,
@@ -726,9 +810,9 @@ export class PurchasesService {
       });
     }
     const fullyRefunded = event.refundedAmount === event.netAmount;
-    await tx.payment.update({
-      where: { id: payment.id },
-      data: {
+    await tx
+      .update(paymentRows)
+      .set({
         netAmount: event.netAmount,
         taxAmount: event.taxAmount,
         status:
@@ -738,34 +822,33 @@ export class PurchasesService {
               ? "reversed"
               : "partially_refunded",
         ...(fullyRefunded ? { refundedAt: event.occurredAt } : {}),
-        ledger: {
-          create: {
-            type: "refund",
-            direction: "outflow",
-            amount: refundIncrease,
-            currency: event.currency ?? payment.currency,
-            providerTransactionId: event.transactionId,
-            providerEventId: event.eventId,
-            details: {
-              cumulativeRefundedAmount: event.refundedAmount,
-              refundedTaxAmount: event.refundedTaxAmount,
-            },
-            occurredAt: event.occurredAt,
-          },
-        },
+      })
+      .where(eq(paymentRows.id, payment.id));
+    await tx.insert(paymentLedger).values({
+      paymentId: payment.id,
+      type: "refund",
+      direction: "outflow",
+      amount: refundIncrease,
+      currency: event.currency ?? payment.currency,
+      providerTransactionId: event.transactionId,
+      providerEventId: event.eventId,
+      details: {
+        cumulativeRefundedAmount: event.refundedAmount,
+        refundedTaxAmount: event.refundedTaxAmount,
       },
+      occurredAt: event.occurredAt,
     });
     if (payment.purchase.status !== "refunded") {
-      await tx.creditPurchase.update({
-        where: { id: payment.purchaseId },
-        data: { status: fullyRefunded ? "reversed" : "completed" },
-      });
+      await tx
+        .update(creditPurchases)
+        .set({ status: fullyRefunded ? "reversed" : "completed" })
+        .where(eq(creditPurchases.id, payment.purchaseId));
     }
   }
 
   private async forceReversal(
     tx: Tx,
-    payment: Prisma.PaymentGetPayload<{ include: { purchase: true } }>,
+    payment: PaymentWithPurchase,
     event: PaymentEvent,
   ) {
     if (payment.status === "reversed" || payment.status === "refunded") return;
@@ -778,8 +861,9 @@ export class PurchasesService {
     );
     const recovery = snapshot.originalPaid + snapshot.originalPromotion;
     const locked = snapshot.remainingPaid + snapshot.remainingPromotion;
-    const refund = await tx.creditRefund.create({
-      data: {
+    const [refund] = await tx
+      .insert(creditRefund)
+      .values({
         purchaseId: payment.purchaseId,
         idempotencyKey: `provider:${event.eventId}`,
         status: "completed",
@@ -796,8 +880,8 @@ export class PurchasesService {
         currency: event.currency ?? payment.currency ?? "UNKNOWN",
         providerTransactionId: event.transactionId,
         completedAt: new Date(),
-      },
-    });
+      })
+      .returning();
     if (recovery > 0) {
       await this.credits.recordRefundRecoveryWithClient(tx, {
         userId: payment.purchase.userId,
@@ -807,32 +891,31 @@ export class PurchasesService {
         reason: "provider reversal",
       });
     }
-    await tx.payment.update({
-      where: { id: payment.id },
-      data: {
+    await tx
+      .update(paymentRows)
+      .set({
         status: "reversed",
         refundedAt: new Date(),
-        ledger: {
-          create: {
-            type: "chargeback",
-            direction: "outflow",
-            amount: event.amount ?? payment.amount,
-            currency: event.currency ?? payment.currency,
-            providerTransactionId: event.transactionId,
-            providerEventId: event.eventId,
-            occurredAt: event.occurredAt,
-          },
-        },
-      },
+      })
+      .where(eq(paymentRows.id, payment.id));
+    await tx.insert(paymentLedger).values({
+      paymentId: payment.id,
+      type: "chargeback",
+      direction: "outflow",
+      amount: event.amount ?? payment.amount,
+      currency: event.currency ?? payment.currency,
+      providerTransactionId: event.transactionId,
+      providerEventId: event.eventId,
+      occurredAt: event.occurredAt,
     });
-    await tx.creditPurchase.update({
-      where: { id: payment.purchaseId },
-      data: { status: "reversed" },
-    });
+    await tx
+      .update(creditPurchases)
+      .set({ status: "reversed" })
+      .where(eq(creditPurchases.id, payment.purchaseId));
   }
 
   private async completeRefund(refundId: string) {
-    return this.prisma.$transaction((tx) =>
+    return this.database.client.transaction((tx) =>
       this.completeRefundWithClient(tx, refundId),
     );
   }
@@ -842,10 +925,7 @@ export class PurchasesService {
     refundId: string,
     event?: PaymentEvent,
   ) {
-    let refund = await tx.creditRefund.findUniqueOrThrow({
-      where: { id: refundId },
-      include: { purchase: { include: { payment: true } } },
-    });
+    let refund = await this.requireRefundWithPurchase(tx, refundId);
     const initialPayment = refund.purchase.payment;
     if (!initialPayment) throw new ConflictException("Payment not found");
     await this.lockUser(tx, refund.purchase.userId);
@@ -854,10 +934,7 @@ export class PurchasesService {
       initialPayment.provider,
       initialPayment.id,
     );
-    refund = await tx.creditRefund.findUniqueOrThrow({
-      where: { id: refundId },
-      include: { purchase: { include: { payment: true } } },
-    });
+    refund = await this.requireRefundWithPurchase(tx, refundId);
     if (refund.status === "completed") return refund;
     const payment = refund.purchase.payment;
     if (!payment) throw new ConflictException("Payment not found");
@@ -868,8 +945,7 @@ export class PurchasesService {
       refundId: refund.id,
       reason: "user refund",
     });
-    await tx.paymentLedger.create({
-      data: {
+    await tx.insert(paymentLedger).values({
         paymentId: payment.id,
         type: "refund",
         direction: "outflow",
@@ -878,19 +954,18 @@ export class PurchasesService {
         providerTransactionId: refund.providerRefundId,
         providerEventId: event?.eventId,
         occurredAt: event?.occurredAt ?? new Date(),
-      },
     });
-    await tx.payment.update({
-      where: { id: payment.id },
-      data: {
+    await tx
+      .update(paymentRows)
+      .set({
         status: "refunded",
         refundedAt: event?.occurredAt ?? new Date(),
-      },
-    });
-    await tx.creditPurchase.update({
-      where: { id: refund.purchaseId },
-      data: { status: "refunded" },
-    });
+      })
+      .where(eq(paymentRows.id, payment.id));
+    await tx
+      .update(creditPurchases)
+      .set({ status: "refunded" })
+      .where(eq(creditPurchases.id, refund.purchaseId));
     // 위 `refund.status === "completed"` 가드를 통과한 경로만 여기 닿으므로
     // 환불 1건당 알림 1건이다.
     await this.notifications.createNotificationWithClient(tx, {
@@ -901,14 +976,16 @@ export class PurchasesService {
       targetType: "refund",
       targetId: refund.id,
     });
-    return tx.creditRefund.update({
-      where: { id: refund.id },
-      data: {
+    const [completed] = await tx
+      .update(creditRefund)
+      .set({
         status: "completed",
         providerTransactionId: event?.transactionId,
         completedAt: event?.occurredAt ?? new Date(),
-      },
-    });
+      })
+      .where(eq(creditRefund.id, refund.id))
+      .returning();
+    return completed;
   }
 
   private async refundQuoteWithClient(
@@ -916,16 +993,19 @@ export class PurchasesService {
     userId: string,
     purchaseId: string,
   ) {
-    const purchase = await tx.creditPurchase.findFirst({
-      where: { id: purchaseId, userId },
-      include: { payment: true },
-    });
+    const purchase = await this.findPurchase(
+      tx,
+      and(eq(creditPurchases.id, purchaseId), eq(creditPurchases.userId, userId)),
+    );
     if (!purchase) throw new NotFoundException("Purchase not found");
     if (purchase.payment?.channel !== "web")
       throw new ConflictException("Store managed refund");
-    const activeReservations = await tx.creditReservation.count({
-      where: { userId, ...activeReservationFilter() },
-    });
+    const [{ value: activeReservations }] = await tx
+      .select({ value: count() })
+      .from(creditReservations)
+      .where(
+        and(eq(creditReservations.userId, userId), activeReservationCondition()),
+      );
     if (activeReservations > 0)
       throw new ConflictException("Credit usage is in progress");
     const snapshot = await this.credits.getPurchaseCreditSnapshotWithClient(
@@ -983,7 +1063,7 @@ export class PurchasesService {
   }
 
   private toPurchase(
-    row: Prisma.CreditPurchaseGetPayload<{ include: { payment: true } }>,
+    row: PurchaseRow,
   ) {
     return {
       id: row.id,
@@ -1056,15 +1136,19 @@ export class PurchasesService {
   }
 
   private async lockUser(tx: Tx, userId: string) {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`credits:${userId}`}, 0))`;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`credits:${userId}`}, 0))`,
+    );
   }
 
   private async lockPaymentReference(tx: Tx, provider: string, key: string) {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`payment:${provider}:${key}`}, 0))`;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`payment:${provider}:${key}`}, 0))`,
+    );
   }
 
   private async ensureCheckout(
-    purchase: Prisma.CreditPurchaseGetPayload<{ include: { payment: true } }>,
+    purchase: PurchaseRow,
     input: {
       userId: string;
       customerIpAddress?: string;
@@ -1086,14 +1170,17 @@ export class PurchasesService {
       };
     }
 
-    const claimed = await this.prisma.payment.updateMany({
-      where: {
-        id: purchase.payment.id,
-        status: "pending",
-        providerCheckoutId: null,
-      },
-      data: { status: "processing" },
-    });
+    const claimed = await this.database.client
+      .update(paymentRows)
+      .set({ status: "processing" })
+      .where(
+        and(
+          eq(paymentRows.id, purchase.payment.id),
+          eq(paymentRows.status, "pending"),
+          isNull(paymentRows.providerCheckoutId),
+        ),
+      )
+      .returning({ id: paymentRows.id });
     const checkoutInput = {
       purchaseId: purchase.id,
       userId: input.userId,
@@ -1108,10 +1195,11 @@ export class PurchasesService {
       checkoutInput,
     );
     if (!checkout) {
-      if (claimed.count === 0) {
-        const current = await this.prisma.payment.findUniqueOrThrow({
-          where: { id: purchase.payment.id },
-        });
+      if (claimed.length === 0) {
+        const current = await this.requirePaymentBase(
+          this.database.client,
+          purchase.payment.id,
+        );
         if (Date.now() - current.updatedAt.getTime() < 30_000) {
           throw new ConflictException("Checkout is being prepared");
         }
@@ -1121,49 +1209,161 @@ export class PurchasesService {
         checkoutInput,
       );
     }
-    await this.prisma.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: purchase.payment!.id },
-        data: {
+    await this.database.client.transaction(async (tx) => {
+      await tx
+        .update(paymentRows)
+        .set({
           providerCheckoutId: checkout.checkoutId,
           providerCheckoutUrl: checkout.checkoutUrl,
-        },
-      });
-      await tx.payment.updateMany({
-        where: { id: purchase.payment!.id, status: "processing" },
-        data: { status: "pending" },
-      });
+        })
+        .where(eq(paymentRows.id, purchase.payment!.id));
+      await tx
+        .update(paymentRows)
+        .set({ status: "pending" })
+        .where(
+          and(
+            eq(paymentRows.id, purchase.payment!.id),
+            eq(paymentRows.status, "processing"),
+          ),
+        );
     });
-    const current = await this.prisma.creditPurchase.findUniqueOrThrow({
-      where: { id: purchase.id },
-      include: { payment: true },
-    });
+    const current = await this.requirePurchase(this.database.client, purchase.id);
     return {
       ...this.toPurchase(current),
       checkoutUrl: current.payment?.providerCheckoutUrl ?? checkout.checkoutUrl,
     };
   }
 
+  private async findPurchase(
+    client: Tx,
+    condition: SQL | undefined,
+  ): Promise<PurchaseRow | null> {
+    const [row] = await client
+      .select(purchaseWithPayment)
+      .from(creditPurchases)
+      .leftJoin(paymentRows, eq(paymentRows.purchaseId, creditPurchases.id))
+      .where(condition)
+      .limit(1);
+    return row ? { ...row.purchase, payment: row.payment } : null;
+  }
+
+  private findPurchaseByIdempotency(
+    client: Tx,
+    userId: string,
+    idempotencyKey: string,
+  ) {
+    return this.findPurchase(
+      client,
+      and(
+        eq(creditPurchases.userId, userId),
+        eq(creditPurchases.idempotencyKey, idempotencyKey),
+      ),
+    );
+  }
+
+  private async requirePurchase(client: Tx, id: string): Promise<PurchaseRow> {
+    const purchase = await this.findPurchase(client, eq(creditPurchases.id, id));
+    if (!purchase) throw new NotFoundException("Purchase not found");
+    return purchase;
+  }
+
+  private async findPayment(
+    client: Tx,
+    condition: SQL | undefined,
+  ): Promise<PaymentWithPurchase | null> {
+    const [row] = await client
+      .select(paymentWithPurchase)
+      .from(paymentRows)
+      .innerJoin(creditPurchases, eq(paymentRows.purchaseId, creditPurchases.id))
+      .where(condition)
+      .limit(1);
+    return row ? { ...row.payment, purchase: row.purchase } : null;
+  }
+
+  private async requirePayment(client: Tx, id: string) {
+    const payment = await this.findPayment(client, eq(paymentRows.id, id));
+    if (!payment) throw new NotFoundException("Payment not found");
+    return payment;
+  }
+
+  private async requirePaymentBase(client: Tx, id: string) {
+    const [payment] = await client
+      .select()
+      .from(paymentRows)
+      .where(eq(paymentRows.id, id))
+      .limit(1);
+    if (!payment) throw new NotFoundException("Payment not found");
+    return payment;
+  }
+
+  private async findRefundWithPurchase(
+    client: Tx,
+    condition: SQL | undefined,
+  ): Promise<RefundWithPurchase | null> {
+    const [row] = await client
+      .select({
+        refund: getTableColumns(creditRefund),
+        purchase: getTableColumns(creditPurchases),
+        payment: getTableColumns(paymentRows),
+      })
+      .from(creditRefund)
+      .innerJoin(
+        creditPurchases,
+        eq(creditRefund.purchaseId, creditPurchases.id),
+      )
+      .leftJoin(paymentRows, eq(paymentRows.purchaseId, creditPurchases.id))
+      .where(condition)
+      .limit(1);
+    return row
+      ? { ...row.refund, purchase: { ...row.purchase, payment: row.payment } }
+      : null;
+  }
+
+  private async requireRefundWithPurchase(client: Tx, id: string) {
+    const refund = await this.findRefundWithPurchase(
+      client,
+      eq(creditRefund.id, id),
+    );
+    if (!refund) throw new NotFoundException("Refund not found");
+    return refund;
+  }
+
+  private async requireRefund(client: Tx, id: string): Promise<RefundRow> {
+    const [refund] = await client
+      .select()
+      .from(creditRefund)
+      .where(eq(creditRefund.id, id))
+      .limit(1);
+    if (!refund) throw new NotFoundException("Refund not found");
+    return refund;
+  }
+
   private async resolveProduct(
     code: string,
     channel: "web" | "apple" | "google",
   ) {
-    const product = await this.prisma.creditProduct.findUnique({
-      where: { code },
-    });
+    const [product] = await this.database.client
+      .select()
+      .from(creditProducts)
+      .where(eq(creditProducts.code, code))
+      .limit(1);
     if (!product) throw new BadRequestException("Unknown credit product");
     if (!product.isActive)
       throw new ConflictException("Credit product is unavailable");
     const provider = await this.payments.providerForChannel(channel);
-    const mapping = await this.prisma.paymentProductMapping.findFirst({
-      where: {
-        creditProductId: product.id,
-        channel,
-        provider: provider.name,
-        environment: provider.environment,
-        isActive: true,
-      },
-    });
+    const [mapping] = await this.database.client
+      .select()
+      .from(paymentProductMappings)
+      .where(
+        and(
+          eq(paymentProductMappings.creditProductId, product.id),
+          eq(paymentProductMappings.channel, channel),
+          eq(paymentProductMappings.provider, provider.name),
+          eq(paymentProductMappings.environment, provider.environment),
+          eq(paymentProductMappings.isActive, true),
+        ),
+      )
+      .limit(1);
     if (!mapping) throw new ConflictException("Credit product is unavailable");
     return { product, mapping, provider };
   }
