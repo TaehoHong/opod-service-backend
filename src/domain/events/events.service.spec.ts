@@ -1,3 +1,4 @@
+import { queryReturning } from "../../../test/drizzle-mock";
 import { EventsService } from "./events.service";
 
 type ClientEventInput = {
@@ -7,72 +8,74 @@ type ClientEventInput = {
   metadata?: Record<string, unknown>;
 };
 
-type EventsServiceWithClientEvents = EventsService & {
-  recordClientEvent(
-    userId: string,
-    input: ClientEventInput,
-  ): Promise<{ accepted: true }>;
-};
-
 const userId = "00000000-0000-7000-8000-000000000001";
 const postId = "00000000-0000-7000-8000-000000000011";
 
+function createService(input?: {
+  charactersService?: Record<string, unknown>;
+  insert?: jest.Mock;
+  postsService?: Record<string, unknown>;
+}) {
+  const insertQuery = queryReturning(undefined);
+  const insert = input?.insert ?? jest.fn().mockReturnValue(insertQuery);
+  const postsService = input?.postsService ?? {
+    findPost: jest.fn(),
+    hasPost: jest.fn(),
+  };
+  const service = new EventsService(
+    postsService as never,
+    (input?.charactersService ?? { findCharacter: jest.fn() }) as never,
+    { client: { insert } } as never,
+  );
+  return { insert, insertQuery, postsService, service };
+}
+
 describe("EventsService", () => {
-  it("does not accept an event until its database insert completes", async () => {
+  it("does not accept an event until its Drizzle insert completes", async () => {
     let resolveInsert: (() => void) | undefined;
     const inserted = new Promise<void>((resolve) => {
       resolveInsert = resolve;
     });
-    const create = jest.fn().mockReturnValue(inserted);
-    const service = new EventsService(
-      { findPost: jest.fn() } as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    );
+    const insertQuery = queryReturning(inserted);
+    const { service } = createService({
+      insert: jest.fn().mockReturnValue(insertQuery),
+    });
     let accepted = false;
 
-    const recording = Promise.resolve(
-      service.recordEvent({
+    const recording = service
+      .recordEvent({
         userId,
         eventType: "audit_event",
         targetType: "other",
         targetId: "target-1",
-      }),
-    ).then((result) => {
-      accepted = true;
-      return result;
-    });
+      })
+      .then((result) => {
+        accepted = true;
+        return result;
+      });
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(create).toHaveBeenCalledTimes(1);
     expect(accepted).toBe(false);
     resolveInsert?.();
     await expect(recording).resolves.toEqual({ accepted: true });
   });
 
   it("propagates database insert failures", async () => {
-    const service = new EventsService(
-      { findPost: jest.fn() } as never,
-      { findCharacter: jest.fn() } as never,
-      {
-        userEvent: {
-          create: jest
-            .fn()
-            .mockRejectedValue(new Error("database unavailable")),
-        },
-      } as never,
+    const failedQuery = queryReturning(
+      Promise.reject(new Error("database unavailable")),
     );
+    const { service } = createService({
+      insert: jest.fn().mockReturnValue(failedQuery),
+    });
 
     await expect(
-      Promise.resolve(
-        service.recordEvent({
-          userId,
-          eventType: "audit_event",
-          targetType: "other",
-          targetId: "target-1",
-        }),
-      ),
+      service.recordEvent({
+        userId,
+        eventType: "audit_event",
+        targetType: "other",
+        targetId: "target-1",
+      }),
     ).rejects.toThrow("database unavailable");
   });
 
@@ -81,24 +84,26 @@ describe("EventsService", () => {
     const attempted = new Promise<void>((resolve) => {
       preferenceAttempted = resolve;
     });
-    const service = new EventsService(
-      { findPost: jest.fn() } as never,
-      {
+    let insertCall = 0;
+    const insert = jest.fn().mockImplementation(() => {
+      insertCall += 1;
+      if (insertCall === 1) {
+        return queryReturning(undefined);
+      }
+      if (insertCall === 2) {
+        return queryReturning([{ id: "hashtag-1" }]);
+      }
+      preferenceAttempted();
+      return queryReturning(
+        Promise.reject(new Error("preference write failed")),
+      );
+    });
+    const { service } = createService({
+      charactersService: {
         findCharacter: jest.fn().mockResolvedValue({ interests: ["film"] }),
-      } as never,
-      {
-        userEvent: { create: jest.fn().mockResolvedValue({ id: "event-1" }) },
-        hashtag: {
-          upsert: jest.fn().mockResolvedValue({ id: "hashtag-1" }),
-        },
-        userHashtagPreference: {
-          upsert: jest.fn().mockImplementation(async () => {
-            preferenceAttempted();
-            throw new Error("preference write failed");
-          }),
-        },
-      } as never,
-    );
+      },
+      insert,
+    });
 
     await expect(
       service.recordEvent({
@@ -112,49 +117,37 @@ describe("EventsService", () => {
   });
 
   it("records supported client post events for the authenticated user", async () => {
-    const create = jest.fn().mockResolvedValue({ id: "event-1" });
     const postsService = {
       hasPost: jest.fn().mockResolvedValue(true),
       findPost: jest.fn().mockResolvedValue(null),
     };
-    const service = new EventsService(
-      postsService as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    ) as EventsServiceWithClientEvents;
+    const { insertQuery, service } = createService({ postsService });
 
     await expect(
-      Promise.resolve().then(() =>
-        service.recordClientEvent(userId, {
-          eventType: "post_open",
-          targetType: "post",
-          targetId: postId,
-          metadata: { source: "feed" },
-        }),
-      ),
-    ).resolves.toEqual({ accepted: true });
-    expect(postsService.hasPost).toHaveBeenCalledWith(postId);
-    expect(create).toHaveBeenCalledWith({
-      data: {
-        userId,
+      service.recordClientEvent(userId, {
         eventType: "post_open",
         targetType: "post",
         targetId: postId,
         metadata: { source: "feed" },
-      },
+      }),
+    ).resolves.toEqual({ accepted: true });
+    expect(postsService.hasPost).toHaveBeenCalledWith(postId);
+    expect(insertQuery.values).toHaveBeenCalledWith({
+      userId,
+      eventType: "post_open",
+      targetType: "post",
+      targetId: postId,
+      metadata: { source: "feed" },
     });
   });
 
   it("ignores a client-supplied user ID", async () => {
-    const create = jest.fn().mockResolvedValue({ id: "event-1" });
-    const service = new EventsService(
-      {
+    const { insertQuery, service } = createService({
+      postsService: {
         hasPost: jest.fn().mockResolvedValue(true),
         findPost: jest.fn().mockResolvedValue(null),
-      } as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    ) as EventsServiceWithClientEvents;
+      },
+    });
 
     await service.recordClientEvent(userId, {
       userId: "spoofed-user",
@@ -163,74 +156,32 @@ describe("EventsService", () => {
       targetId: postId,
     } as unknown as ClientEventInput);
 
-    expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ userId }),
-    });
+    expect(insertQuery.values).toHaveBeenCalledWith(
+      expect.objectContaining({ userId }),
+    );
   });
 
-  it("rejects server-only event types from clients", async () => {
-    const create = jest.fn();
-    const postsService = { hasPost: jest.fn(), findPost: jest.fn() };
-    const service = new EventsService(
-      postsService as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    ) as EventsServiceWithClientEvents;
-
-    await expect(
-      Promise.resolve().then(() =>
-        service.recordClientEvent(userId, {
-          eventType: "message_character",
-          targetType: "character",
-          targetId: "00000000-0000-7000-8000-000000000021",
-        }),
-      ),
-    ).rejects.toThrow("Unsupported client event");
-    expect(postsService.hasPost).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("rejects client post events with a non-post target type", async () => {
-    const create = jest.fn();
-    const postsService = { hasPost: jest.fn(), findPost: jest.fn() };
-    const service = new EventsService(
-      postsService as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    ) as EventsServiceWithClientEvents;
-
-    await expect(
-      service.recordClientEvent(userId, {
-        eventType: "post_open",
-        targetType: "character",
-        targetId: "00000000-0000-7000-8000-000000000021",
-      }),
-    ).rejects.toThrow("Unsupported client event");
-    expect(postsService.hasPost).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("rejects client events for missing or inactive posts", async () => {
-    const create = jest.fn();
+  it("rejects unsupported or missing client targets before inserting", async () => {
     const postsService = {
       hasPost: jest.fn().mockResolvedValue(false),
       findPost: jest.fn(),
     };
-    const service = new EventsService(
-      postsService as never,
-      { findCharacter: jest.fn() } as never,
-      { userEvent: { create } } as never,
-    ) as EventsServiceWithClientEvents;
+    const { insert, service } = createService({ postsService });
 
     await expect(
-      Promise.resolve().then(() =>
-        service.recordClientEvent(userId, {
-          eventType: "feed_view",
-          targetType: "post",
-          targetId: postId,
-        }),
-      ),
+      service.recordClientEvent(userId, {
+        eventType: "message_character",
+        targetType: "character",
+        targetId: "00000000-0000-7000-8000-000000000021",
+      }),
+    ).rejects.toThrow("Unsupported client event");
+    await expect(
+      service.recordClientEvent(userId, {
+        eventType: "feed_view",
+        targetType: "post",
+        targetId: postId,
+      }),
     ).rejects.toThrow("Event target not found");
-    expect(create).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
   });
 });

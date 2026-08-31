@@ -3,9 +3,10 @@ import {
   ConflictException,
   UnauthorizedException,
 } from "@nestjs/common";
-import { ConsentsService } from "../consents/consents.service";
+import { consentTypes, ConsentsService } from "../consents/consents.service";
 import { CreditsService } from "../credits/credits.service";
 import { PrismaService } from "../database/prisma.service";
+import { queryReturning } from "../../../test/drizzle-mock";
 import { AuthService } from "./auth.service";
 
 type TestUser = {
@@ -450,13 +451,44 @@ function createAuthHarness(
     const debt = creditAccounts.find((account) => account.userId === userId);
     return -(debt?.paidDebt ?? 0);
   });
+  let documentCall = 0;
+  const consentDatabase = {
+    client: {
+      select: jest.fn((fields: Record<string, unknown>) => {
+        const type = consentTypes[documentCall++ % consentTypes.length];
+        const document = termsDocuments
+          .filter(
+            (candidate) =>
+              candidate.type === type && candidate.effectiveAt <= new Date(),
+          )
+          .sort(
+            (left, right) =>
+              right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+          )[0];
+        return queryReturning(
+          document
+            ? [
+                Object.fromEntries(
+                  Object.keys(fields).map((field) => [
+                    field,
+                    document[field as keyof typeof document],
+                  ]),
+                ),
+              ]
+            : [],
+        );
+      }),
+    },
+  };
   const service = new AuthService(
     prisma as unknown as PrismaService,
     {
       grantSignupBonus,
       getPaidBalanceWithClient,
     } as unknown as CreditsService,
-    new ConsentsService(prisma as unknown as PrismaService),
+    new (ConsentsService as new (database: unknown) => ConsentsService)(
+      consentDatabase,
+    ),
     [],
   );
 

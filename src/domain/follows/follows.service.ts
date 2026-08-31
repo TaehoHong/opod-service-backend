@@ -4,9 +4,14 @@ import {
   Injectable,
   Optional,
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { and, asc, eq } from "drizzle-orm";
 import { CharactersService } from "../characters/characters.service";
-import { PrismaService } from "../database/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import {
+  agentRelationshipState,
+  characters,
+  userCharacterFollows,
+} from "../database/schema";
 import { EventsService } from "../events/events.service";
 import { UsersService } from "../users/users.service";
 
@@ -39,15 +44,14 @@ type CharacterRelationship = {
   bondLevel: number;
 };
 
-type PrismaCharacterFollow =
-  Prisma.UserCharacterFollowGetPayload<Prisma.UserCharacterFollowDefaultArgs>;
+type CharacterFollowRow = typeof userCharacterFollows.$inferSelect;
 
 @Injectable()
 export class FollowsService {
   constructor(
     private readonly usersService: UsersService,
     private readonly charactersService: CharactersService,
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     @Optional()
     @Inject(EventsService)
     private readonly eventsService?: EventsService,
@@ -59,16 +63,14 @@ export class FollowsService {
   }): Promise<CharacterFollow> {
     await this.assertUserAndCharacter(input);
 
-    const follow = await this.prisma.userCharacterFollow.upsert({
-      where: {
-        userId_characterId: {
-          userId: input.userId,
-          characterId: input.characterId,
-        },
-      },
-      update: {},
-      create: input,
-    });
+    const [follow] = await this.database.client
+      .insert(userCharacterFollows)
+      .values(input)
+      .onConflictDoUpdate({
+        target: [userCharacterFollows.userId, userCharacterFollows.characterId],
+        set: { characterId: input.characterId },
+      })
+      .returning();
     await this.recordFollowEvent(input).catch(() => undefined);
     return this.toCharacterFollow(follow);
   }
@@ -79,25 +81,55 @@ export class FollowsService {
   }): Promise<CharacterUnfollow> {
     await this.assertUserAndCharacter(input);
 
-    const result = await this.prisma.userCharacterFollow.deleteMany({
-      where: input,
-    });
-    return { ...input, deleted: result.count > 0 };
+    const deleted = await this.database.client
+      .delete(userCharacterFollows)
+      .where(
+        and(
+          eq(userCharacterFollows.userId, input.userId),
+          eq(userCharacterFollows.characterId, input.characterId),
+        ),
+      )
+      .returning({ characterId: userCharacterFollows.characterId });
+    return { ...input, deleted: deleted.length > 0 };
   }
 
   async listFollowedCharacters(userId: string): Promise<CharacterFollow[]> {
-    const follows = await this.prisma.userCharacterFollow.findMany({
-      where: { userId, character: { status: "active" } },
-      orderBy: { createdAt: "asc" },
-    });
+    const follows = await this.database.client
+      .select({
+        userId: userCharacterFollows.userId,
+        characterId: userCharacterFollows.characterId,
+        createdAt: userCharacterFollows.createdAt,
+        notifiedUpToAt: userCharacterFollows.notifiedUpToAt,
+      })
+      .from(userCharacterFollows)
+      .innerJoin(
+        characters,
+        eq(userCharacterFollows.characterId, characters.id),
+      )
+      .where(
+        and(
+          eq(userCharacterFollows.userId, userId),
+          eq(characters.status, "active"),
+        ),
+      )
+      .orderBy(asc(userCharacterFollows.createdAt));
     return follows.map((follow) => this.toCharacterFollow(follow));
   }
 
   async followedCharacterIdsFor(userId: string): Promise<Set<string>> {
-    const follows = await this.prisma.userCharacterFollow.findMany({
-      where: { userId, character: { status: "active" } },
-      select: { characterId: true },
-    });
+    const follows = await this.database.client
+      .select({ characterId: userCharacterFollows.characterId })
+      .from(userCharacterFollows)
+      .innerJoin(
+        characters,
+        eq(userCharacterFollows.characterId, characters.id),
+      )
+      .where(
+        and(
+          eq(userCharacterFollows.userId, userId),
+          eq(characters.status, "active"),
+        ),
+      );
     return new Set(follows.map((follow) => follow.characterId));
   }
 
@@ -113,28 +145,38 @@ export class FollowsService {
     // Agent through X-Opod-* headers — so an absent row simply means "they have
     // never talked", which is level 1.
     const [follow, bond] = await Promise.all([
-      this.prisma.userCharacterFollow.findUnique({
-        where: {
-          userId_characterId: {
-            userId: input.userId,
-            characterId: input.characterId,
-          },
-        },
-      }),
-      this.prisma.agentRelationshipState.findUnique({
-        where: {
-          userId_characterId: {
-            userId: input.userId,
-            characterId: input.characterId,
-          },
-        },
-        select: { bondLevel: true },
-      }),
+      this.database.client
+        .select({
+          userId: userCharacterFollows.userId,
+          characterId: userCharacterFollows.characterId,
+          createdAt: userCharacterFollows.createdAt,
+          notifiedUpToAt: userCharacterFollows.notifiedUpToAt,
+        })
+        .from(userCharacterFollows)
+        .where(
+          and(
+            eq(userCharacterFollows.userId, input.userId),
+            eq(userCharacterFollows.characterId, input.characterId),
+          ),
+        )
+        .limit(1)
+        .then(([row]) => row),
+      this.database.client
+        .select({ bondLevel: agentRelationshipState.bondLevel })
+        .from(agentRelationshipState)
+        .where(
+          and(
+            eq(agentRelationshipState.userId, input.userId),
+            eq(agentRelationshipState.characterId, input.characterId),
+          ),
+        )
+        .limit(1)
+        .then(([row]) => row),
     ]);
 
     return {
       characterId: input.characterId,
-      isFollowing: follow !== null,
+      isFollowing: follow !== undefined,
       ...(follow ? { followedAt: follow.createdAt.toISOString() } : {}),
       bondLevel: bond?.bondLevel ?? 1,
     };
@@ -152,7 +194,7 @@ export class FollowsService {
     }
   }
 
-  private toCharacterFollow(follow: PrismaCharacterFollow): CharacterFollow {
+  private toCharacterFollow(follow: CharacterFollowRow): CharacterFollow {
     return {
       userId: follow.userId,
       characterId: follow.characterId,

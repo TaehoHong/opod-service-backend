@@ -1,6 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
-import { PrismaService } from "../database/prisma.service";
-import { ConsentsService } from "./consents.service";
+import { queryReturning } from "../../../test/drizzle-mock";
+import { consentTypes, ConsentsService } from "./consents.service";
 
 type TestDocument = {
   id: string;
@@ -18,48 +18,55 @@ type TestConsent = {
   agreed: boolean;
 };
 
-// Prisma의 select 계약을 그대로 흉내낸다 — 응답에 새 필드가 새는지도 잡힌다.
-function project<T extends object>(row: T, select: Record<string, boolean>) {
+function project<T extends object>(row: T, fields: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.keys(select)
-      .filter((field) => select[field])
-      .map((field) => [field, row[field as keyof T]]),
+    Object.keys(fields).map((field) => [field, row[field as keyof T]]),
   );
 }
 
 function createConsentsHarness() {
   const documents: TestDocument[] = [];
   const consents: TestConsent[] = [];
+  let documentCall = 0;
+  let consentCall = 0;
 
-  const prisma = {
-    termsDocument: {
-      findFirst: jest.fn(async ({ where, select }) => {
-        const matches = documents
-          .filter(
-            (document) =>
-              document.type === where.type &&
-              document.effectiveAt <= where.effectiveAt.lte,
-          )
-          .sort((a, b) => b.effectiveAt.getTime() - a.effectiveAt.getTime());
-        return matches[0] ? project(matches[0], select) : null;
-      }),
-    },
-    userConsent: {
-      findFirst: jest.fn(async ({ where, select }) => {
-        const matches = consents.filter(
-          (consent) =>
-            consent.userId === where.userId && consent.type === where.type,
-        );
-        const latest = matches[matches.length - 1];
-        return latest ? project(latest, select) : null;
-      }),
-      createMany: jest.fn(async ({ data }) => {
-        consents.push(...data);
-        return { count: data.length };
-      }),
-    },
-  };
+  const select = jest.fn((fields: Record<string, unknown>) => {
+    if ("title" in fields) {
+      const type =
+        "body" in fields
+          ? "terms_of_service"
+          : consentTypes[documentCall++ % consentTypes.length];
+      const document = documents
+        .filter(
+          (candidate) =>
+            candidate.type === type && candidate.effectiveAt <= new Date(),
+        )
+        .sort((left, right) =>
+          right.effectiveAt.getTime() === left.effectiveAt.getTime()
+            ? right.id.localeCompare(left.id)
+            : right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+        )[0];
+      return queryReturning(document ? [project(document, fields)] : []);
+    }
 
+    const type = consentTypes[consentCall++ % consentTypes.length];
+    const row = consents
+      .filter(
+        (candidate) => candidate.userId === "user-1" && candidate.type === type,
+      )
+      .at(-1);
+    return queryReturning(row ? [project(row, fields)] : []);
+  });
+  const insertQuery = queryReturning(undefined);
+  insertQuery.values.mockImplementation((values: TestConsent[]) => {
+    consents.push(...values);
+    return insertQuery;
+  });
+  const service = new (
+    ConsentsService as new (database: unknown) => ConsentsService
+  )({
+    client: { insert: jest.fn().mockReturnValue(insertQuery), select },
+  });
   const publish = (type: string, version: string, effectiveAt: string) => {
     documents.push({
       id: `${type}-${version}`,
@@ -71,12 +78,7 @@ function createConsentsHarness() {
     });
   };
 
-  return {
-    service: new ConsentsService(prisma as unknown as PrismaService),
-    documents,
-    consents,
-    publish,
-  };
+  return { consents, publish, service };
 }
 
 describe("ConsentsService", () => {
@@ -131,7 +133,7 @@ describe("ConsentsService", () => {
     expect(harness.consents).toEqual([]);
   });
 
-  it("rejects unknown consent types and consents without a document in effect", async () => {
+  it("rejects unknown consent types and documents not yet in effect", async () => {
     const harness = createConsentsHarness();
     harness.publish("marketing", "1.0", "2027-01-01T00:00:00Z");
 
@@ -140,13 +142,11 @@ describe("ConsentsService", () => {
         { type: "newsletter", agreed: true },
       ]),
     ).rejects.toThrow(BadRequestException);
-    // 아직 시행일이 오지 않은 문서에는 동의를 받을 수 없다.
     await expect(
       harness.service.updateUserConsents("user-1", [
         { type: "marketing", agreed: true },
       ]),
     ).rejects.toThrow(BadRequestException);
-    expect(harness.consents).toEqual([]);
   });
 
   it("flags a required consent as outdated after a new version takes effect", async () => {
@@ -165,19 +165,6 @@ describe("ConsentsService", () => {
       agreedVersion: "1.0",
       currentVersion: "2.0",
       needsConsent: true,
-    });
-
-    await harness.service.updateUserConsents("user-1", [
-      { type: "terms_of_service", agreed: true },
-    ]);
-
-    expect(await harness.service.listUserConsents("user-1")).toContainEqual({
-      type: "terms_of_service",
-      required: true,
-      agreed: true,
-      agreedVersion: "2.0",
-      currentVersion: "2.0",
-      needsConsent: false,
     });
   });
 

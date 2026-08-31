@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { PrismaService } from "../database/prisma.service";
+import { and, desc, eq, lte } from "drizzle-orm";
+import { DatabaseClient, DatabaseService } from "../database/database.service";
+import { termsDocuments, userConsents } from "../database/schema";
 
 export const consentTypes = [
   "terms_of_service",
@@ -40,18 +42,26 @@ export type ConsentRecord = {
 
 type ConsentInput = { type: ConsentType; agreed: boolean };
 
-type ConsentClient = Pick<PrismaService, "userConsent">;
+type ConsentClient =
+  | Pick<DatabaseClient, "insert">
+  | {
+      userConsent: {
+        createMany(input: {
+          data: Array<ConsentRecord & { userId: string }>;
+        }): Promise<unknown>;
+      };
+    };
 
 const documentSummaryFields = {
-  type: true,
-  version: true,
-  title: true,
-  effectiveAt: true,
-} as const;
+  type: termsDocuments.type,
+  version: termsDocuments.version,
+  title: termsDocuments.title,
+  effectiveAt: termsDocuments.effectiveAt,
+};
 
 @Injectable()
 export class ConsentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async listEffectiveDocuments(): Promise<TermsDocumentSummary[]> {
     const documents = await this.effectiveDocuments();
@@ -64,11 +74,17 @@ export class ConsentsService {
     type: unknown,
   ): Promise<TermsDocumentDetail | null> {
     const consentType = this.requiredConsentType(type);
-    const document = (await this.prisma.termsDocument.findFirst({
-      where: { type: consentType, effectiveAt: { lte: new Date() } },
-      orderBy: [{ effectiveAt: "desc" }, { id: "desc" }],
-      select: { ...documentSummaryFields, body: true },
-    })) as Omit<TermsDocumentDetail, "required"> | null;
+    const [document] = await this.database.client
+      .select({ ...documentSummaryFields, body: termsDocuments.body })
+      .from(termsDocuments)
+      .where(
+        and(
+          eq(termsDocuments.type, consentType),
+          lte(termsDocuments.effectiveAt, new Date()),
+        ),
+      )
+      .orderBy(desc(termsDocuments.effectiveAt), desc(termsDocuments.id))
+      .limit(1);
     return document
       ? { ...document, required: this.isRequired(document.type) }
       : null;
@@ -158,7 +174,7 @@ export class ConsentsService {
       );
     });
     if (changed.length) {
-      await this.recordConsents(this.prisma, userId, changed);
+      await this.recordConsents(this.database.client, userId, changed);
     }
 
     return this.listUserConsents(userId);
@@ -172,9 +188,12 @@ export class ConsentsService {
     if (!records.length) {
       return;
     }
-    await client.userConsent.createMany({
-      data: records.map((record) => ({ userId, ...record })),
-    });
+    const values = records.map((record) => ({ userId, ...record }));
+    if ("insert" in client) {
+      await client.insert(userConsents).values(values);
+      return;
+    }
+    await client.userConsent.createMany({ data: values });
   }
 
   private async effectiveDocuments(): Promise<
@@ -182,14 +201,20 @@ export class ConsentsService {
   > {
     const now = new Date();
     const documents = await Promise.all(
-      consentTypes.map(
-        (type) =>
-          this.prisma.termsDocument.findFirst({
-            where: { type, effectiveAt: { lte: now } },
-            orderBy: [{ effectiveAt: "desc" }, { id: "desc" }],
-            select: documentSummaryFields,
-          }) as Promise<Omit<TermsDocumentSummary, "required"> | null>,
-      ),
+      consentTypes.map(async (type) => {
+        const [document] = await this.database.client
+          .select(documentSummaryFields)
+          .from(termsDocuments)
+          .where(
+            and(
+              eq(termsDocuments.type, type),
+              lte(termsDocuments.effectiveAt, now),
+            ),
+          )
+          .orderBy(desc(termsDocuments.effectiveAt), desc(termsDocuments.id))
+          .limit(1);
+        return document;
+      }),
     );
 
     return new Map(
@@ -206,18 +231,21 @@ export class ConsentsService {
     userId: string,
   ): Promise<Map<ConsentType, { version: string; agreed: boolean }>> {
     const rows = await Promise.all(
-      consentTypes.map(
-        (type) =>
-          this.prisma.userConsent.findFirst({
-            where: { userId, type },
-            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-            select: { type: true, version: true, agreed: true },
-          }) as Promise<{
-            type: ConsentType;
-            version: string;
-            agreed: boolean;
-          } | null>,
-      ),
+      consentTypes.map(async (type) => {
+        const [row] = await this.database.client
+          .select({
+            type: userConsents.type,
+            version: userConsents.version,
+            agreed: userConsents.agreed,
+          })
+          .from(userConsents)
+          .where(
+            and(eq(userConsents.userId, userId), eq(userConsents.type, type)),
+          )
+          .orderBy(desc(userConsents.createdAt), desc(userConsents.id))
+          .limit(1);
+        return row;
+      }),
     );
 
     return new Map(rows.filter((row) => !!row).map((row) => [row.type, row]));

@@ -1,9 +1,62 @@
+import { queryReturning } from "../../../test/drizzle-mock";
+import { NOTIFICATION_TYPES } from "./notification-types";
 import { NotificationsService } from "./notifications.service";
 
+function serviceWith(client: Record<string, unknown>): NotificationsService {
+  return new (
+    NotificationsService as new (database: unknown) => NotificationsService
+  )({ client });
+}
+
 describe("NotificationsService", () => {
+  it("creates notifications with the caller's Drizzle transaction", async () => {
+    const createdAt = new Date("2026-07-02T00:00:00.000Z");
+    const query = queryReturning([
+      {
+        id: "notification-1",
+        userId: "human-1",
+        type: NOTIFICATION_TYPES.characterNewPost,
+        title: "새 게시글",
+        body: null,
+        targetType: "post",
+        targetId: "post-1",
+        readAt: null,
+        createdAt,
+      },
+    ]);
+    const insert = jest.fn().mockReturnValue(query);
+    const service = serviceWith({});
+
+    await expect(
+      service.createNotificationWithClient({ insert } as never, {
+        userId: "human-1",
+        type: NOTIFICATION_TYPES.characterNewPost,
+        title: "새 게시글",
+        targetType: "post",
+        targetId: "post-1",
+      }),
+    ).resolves.toEqual({
+      id: "notification-1",
+      type: NOTIFICATION_TYPES.characterNewPost,
+      title: "새 게시글",
+      body: null,
+      targetType: "post",
+      targetId: "post-1",
+      readAt: null,
+      createdAt: createdAt.toISOString(),
+    });
+    expect(query.values).toHaveBeenCalledWith({
+      userId: "human-1",
+      type: NOTIFICATION_TYPES.characterNewPost,
+      title: "새 게시글",
+      targetType: "post",
+      targetId: "post-1",
+    });
+  });
+
   it("lists unread notifications with cursor pagination", async () => {
     const createdAt = new Date("2026-07-02T00:00:00.000Z");
-    const findMany = jest.fn().mockResolvedValue([
+    const query = queryReturning([
       {
         id: "notification-1",
         userId: "human-1",
@@ -27,9 +80,9 @@ describe("NotificationsService", () => {
         createdAt,
       },
     ]);
-    const service = new NotificationsService({
-      notification: { findFirst: jest.fn(), findMany },
-    } as never);
+    const service = serviceWith({
+      select: jest.fn().mockReturnValue(query),
+    });
 
     await expect(
       service.listNotificationsPage({
@@ -52,29 +105,16 @@ describe("NotificationsService", () => {
       ],
       nextCursor: expect.any(String),
     });
-    expect(findMany).toHaveBeenCalledWith({
-      where: { userId: "human-1", readAt: null },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: 2,
-    });
+    expect(query.limit).toHaveBeenCalledWith(2);
   });
 
   it("marks an owned notification as read", async () => {
     const notificationId = "019f4970-b34a-7035-ad98-dfea56b2974d";
     const readAt = new Date("2026-07-02T01:00:00.000Z");
-    const findFirst = jest.fn().mockResolvedValue({ id: notificationId });
-    const update = jest.fn().mockResolvedValue({
-      id: notificationId,
-      readAt,
+    const query = queryReturning([{ id: notificationId, readAt }]);
+    const service = serviceWith({
+      update: jest.fn().mockReturnValue(query),
     });
-    const service = new NotificationsService({
-      notification: { findFirst, findMany: jest.fn(), update },
-    } as never) as NotificationsService & {
-      markNotificationRead(input: {
-        userId: string;
-        notificationId: string;
-      }): Promise<unknown>;
-    };
 
     await expect(
       service.markNotificationRead({
@@ -85,22 +125,13 @@ describe("NotificationsService", () => {
       id: notificationId,
       readAt: readAt.toISOString(),
     });
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { id: notificationId, userId: "human-1" },
-      select: { id: true },
-    });
-    expect(update).toHaveBeenCalledWith({
-      where: { id: notificationId },
-      data: { readAt: expect.any(Date) },
-      select: { id: true, readAt: true },
-    });
+    expect(query.set).toHaveBeenCalledWith({ readAt: expect.any(Date) });
+    expect(query.returning).toHaveBeenCalledTimes(1);
   });
 
-  it("treats malformed notification IDs as missing without querying Prisma", async () => {
-    const findFirst = jest.fn();
-    const service = new NotificationsService({
-      notification: { findFirst },
-    } as never);
+  it("treats malformed notification IDs as missing without querying Drizzle", async () => {
+    const update = jest.fn();
+    const service = serviceWith({ update });
 
     await expect(
       service.markNotificationRead({
@@ -108,15 +139,12 @@ describe("NotificationsService", () => {
         notificationId: "bad-id",
       }),
     ).resolves.toBeNull();
-    expect(findFirst).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed notification cursors without querying Prisma", async () => {
-    const findFirst = jest.fn();
-    const findMany = jest.fn();
-    const service = new NotificationsService({
-      notification: { findFirst, findMany },
-    } as never);
+  it("rejects malformed notification cursors without querying Drizzle", async () => {
+    const select = jest.fn();
+    const service = serviceWith({ select });
     const cursor = Buffer.from(JSON.stringify({ id: "bad-id" })).toString(
       "base64url",
     );
@@ -128,7 +156,6 @@ describe("NotificationsService", () => {
         cursor,
       }),
     ).rejects.toThrow("Invalid cursor");
-    expect(findFirst).not.toHaveBeenCalled();
-    expect(findMany).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
   });
 });

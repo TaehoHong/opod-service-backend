@@ -6,8 +6,10 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { PrismaService } from "../database/prisma.service";
+import { and, count, desc, eq, gte, lt, or, sql } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
 import { decodeCursor, Page, pageFromRows, PageInput } from "../database/page";
+import { inquiries } from "../database/schema";
 import { isUuid } from "../database/uuid";
 
 export type InquiryListItem = {
@@ -29,17 +31,17 @@ const maxInquiryBodyLength = 2000;
 const dailyInquiryLimit = 10;
 
 const inquiryListFields = {
-  id: true,
-  category: true,
-  body: true,
-  status: true,
-  answeredAt: true,
-  createdAt: true,
-} as const;
+  id: inquiries.id,
+  category: inquiries.category,
+  body: inquiries.body,
+  status: inquiries.status,
+  answeredAt: inquiries.answeredAt,
+  createdAt: inquiries.createdAt,
+};
 
 @Injectable()
 export class InquiriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async createInquiry(input: {
     userId: string;
@@ -50,16 +52,22 @@ export class InquiriesService {
     const body = this.requiredBody(input.body);
     const lockKey = `inquiry_daily:${input.userId}`;
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    return this.database.client.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+      );
       const dayStart = kstDayStart(new Date());
       const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-      const createdToday = await tx.inquiry.count({
-        where: {
-          userId: input.userId,
-          createdAt: { gte: dayStart, lt: dayEnd },
-        },
-      });
+      const [{ value: createdToday }] = await tx
+        .select({ value: count() })
+        .from(inquiries)
+        .where(
+          and(
+            eq(inquiries.userId, input.userId),
+            gte(inquiries.createdAt, dayStart),
+            lt(inquiries.createdAt, dayEnd),
+          ),
+        );
       if (createdToday >= dailyInquiryLimit) {
         throw new HttpException(
           "Too many inquiries today",
@@ -67,10 +75,11 @@ export class InquiriesService {
         );
       }
 
-      return (await tx.inquiry.create({
-        data: { userId: input.userId, category, body },
-        select: inquiryListFields,
-      })) as InquiryListItem;
+      const [inquiry] = await tx
+        .insert(inquiries)
+        .values({ userId: input.userId, category, body })
+        .returning(inquiryListFields);
+      return inquiry;
     });
   }
 
@@ -78,13 +87,36 @@ export class InquiriesService {
     input: PageInput & { userId: string },
   ): Promise<Page<InquiryListItem>> {
     const cursorId = decodeCursor(input.cursor);
-    const rows = (await this.prisma.inquiry.findMany({
-      where: { userId: input.userId },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: input.limit + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-      select: inquiryListFields,
-    })) as InquiryListItem[];
+    const [cursor] = cursorId
+      ? await this.database.client
+          .select({ createdAt: inquiries.createdAt })
+          .from(inquiries)
+          .where(
+            and(eq(inquiries.id, cursorId), eq(inquiries.userId, input.userId)),
+          )
+          .limit(1)
+      : [];
+    const rows = await this.database.client
+      .select(inquiryListFields)
+      .from(inquiries)
+      .where(
+        and(
+          eq(inquiries.userId, input.userId),
+          cursorId
+            ? cursor
+              ? or(
+                  lt(inquiries.createdAt, cursor.createdAt),
+                  and(
+                    eq(inquiries.createdAt, cursor.createdAt),
+                    lt(inquiries.id, cursorId),
+                  ),
+                )
+              : sql`false`
+            : undefined,
+        ),
+      )
+      .orderBy(desc(inquiries.createdAt), desc(inquiries.id))
+      .limit(input.limit + 1);
     return pageFromRows(rows, input.limit);
   }
 
@@ -97,10 +129,17 @@ export class InquiriesService {
       return null;
     }
     // 본인 소유가 아니면 존재 여부를 노출하지 않는다 — 호출부에서 404.
-    return (await this.prisma.inquiry.findFirst({
-      where: { id: input.inquiryId, userId: input.userId },
-      select: { ...inquiryListFields, answerBody: true },
-    })) as InquiryDetail | null;
+    const [inquiry] = await this.database.client
+      .select({ ...inquiryListFields, answerBody: inquiries.answerBody })
+      .from(inquiries)
+      .where(
+        and(
+          eq(inquiries.id, input.inquiryId),
+          eq(inquiries.userId, input.userId),
+        ),
+      )
+      .limit(1);
+    return inquiry ?? null;
   }
 
   async deleteInquiry(input: {
@@ -110,10 +149,16 @@ export class InquiriesService {
     if (!isUuid(input.inquiryId)) {
       throw new NotFoundException("Inquiry not found");
     }
-    const inquiry = await this.prisma.inquiry.findFirst({
-      where: { id: input.inquiryId, userId: input.userId },
-      select: { id: true, status: true },
-    });
+    const [inquiry] = await this.database.client
+      .select({ id: inquiries.id, status: inquiries.status })
+      .from(inquiries)
+      .where(
+        and(
+          eq(inquiries.id, input.inquiryId),
+          eq(inquiries.userId, input.userId),
+        ),
+      )
+      .limit(1);
     if (!inquiry) {
       throw new NotFoundException("Inquiry not found");
     }
@@ -123,14 +168,17 @@ export class InquiriesService {
 
     // status 조건부 삭제 — 판정과 삭제 사이에 답변이 달린 경합에서도
     // 답변된 문의(분쟁처리 기록)는 지워지지 않는다.
-    const result = await this.prisma.inquiry.deleteMany({
-      where: {
-        id: input.inquiryId,
-        userId: input.userId,
-        status: "submitted",
-      },
-    });
-    if (result.count === 0) {
+    const deleted = await this.database.client
+      .delete(inquiries)
+      .where(
+        and(
+          eq(inquiries.id, input.inquiryId),
+          eq(inquiries.userId, input.userId),
+          eq(inquiries.status, "submitted"),
+        ),
+      )
+      .returning({ id: inquiries.id });
+    if (deleted.length === 0) {
       throw new ConflictException("Inquiry already answered");
     }
     return { deleted: true };

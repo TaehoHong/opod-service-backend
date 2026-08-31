@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { CharactersModule } from "../characters/characters.module";
-import { PrismaModule } from "../database/prisma.module";
+import { DatabaseModule } from "../database/database.module";
 import { EventsModule } from "../events/events.module";
 import { UsersModule } from "../users/users.module";
 import { FollowsService } from "./follows.service";
@@ -11,7 +11,7 @@ import { FollowsService } from "./follows.service";
     AuthModule,
     CharactersModule,
     EventsModule,
-    PrismaModule,
+    DatabaseModule,
     UsersModule,
   ],
   providers: [FollowsService],

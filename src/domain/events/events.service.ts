@@ -1,7 +1,12 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { eq, sql } from "drizzle-orm";
 import { CharactersService } from "../characters/characters.service";
-import { PrismaService } from "../database/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import {
+  hashtags as hashtagTable,
+  userEvents,
+  userHashtagPreferences,
+} from "../database/schema";
 import { PostsService } from "../posts/posts.service";
 
 export type UserEventInput = {
@@ -26,7 +31,7 @@ export class EventsService {
   constructor(
     private readonly postsService: PostsService,
     private readonly charactersService: CharactersService,
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
   ) {}
 
   async recordEvent(input: UserEventInput): Promise<{ accepted: true }> {
@@ -56,15 +61,16 @@ export class EventsService {
   }
 
   async hashtagPreferencesFor(userId: string): Promise<Map<string, number>> {
-    const preferences = await this.prisma.userHashtagPreference.findMany({
-      where: { userId },
-      select: { hashtag: { select: { name: true } }, score: true },
-    });
+    const preferences = await this.database.client
+      .select({ name: hashtagTable.name, score: userHashtagPreferences.score })
+      .from(userHashtagPreferences)
+      .innerJoin(
+        hashtagTable,
+        eq(userHashtagPreferences.hashtagId, hashtagTable.id),
+      )
+      .where(eq(userHashtagPreferences.userId, userId));
     return new Map(
-      preferences.map((preference) => [
-        preference.hashtag.name,
-        preference.score,
-      ]),
+      preferences.map((preference) => [preference.name, preference.score]),
     );
   }
 
@@ -121,14 +127,12 @@ export class EventsService {
   }
 
   private async storeEvent(input: UserEventInput) {
-    await this.prisma.userEvent.create({
-      data: {
-        userId: input.userId,
-        eventType: input.eventType,
-        targetType: input.targetType,
-        targetId: input.targetId,
-        metadata: input.metadata as Prisma.InputJsonValue | undefined,
-      },
+    await this.database.client.insert(userEvents).values({
+      userId: input.userId,
+      eventType: input.eventType,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      metadata: input.metadata,
     });
   }
 
@@ -169,32 +173,35 @@ export class EventsService {
   ) {
     const rows = await Promise.all(
       hashtags.map((name) =>
-        this.prisma.hashtag.upsert({
-          where: { name },
-          update: {},
-          create: { name },
-          select: { id: true },
-        }),
+        this.database.client
+          .insert(hashtagTable)
+          .values({ name })
+          .onConflictDoUpdate({
+            target: hashtagTable.name,
+            set: { name },
+          })
+          .returning({ id: hashtagTable.id }),
       ),
     );
     await Promise.all(
-      rows.map((hashtag) =>
-        this.prisma.userHashtagPreference.upsert({
-          where: {
-            userId_hashtagId: {
-              userId,
-              hashtagId: hashtag.id,
-            },
-          },
-          update: {
-            score: { increment: weight },
-          },
-          create: {
+      rows.map(([hashtag]) =>
+        this.database.client
+          .insert(userHashtagPreferences)
+          .values({
             userId,
             hashtagId: hashtag.id,
             score: weight,
-          },
-        }),
+          })
+          .onConflictDoUpdate({
+            target: [
+              userHashtagPreferences.userId,
+              userHashtagPreferences.hashtagId,
+            ],
+            set: {
+              score: sql`${userHashtagPreferences.score} + ${weight}`,
+              updatedAt: new Date(),
+            },
+          }),
       ),
     );
   }

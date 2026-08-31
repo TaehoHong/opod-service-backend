@@ -1,7 +1,25 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+import { DatabaseClient, DatabaseService } from "../database/database.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
-import { PrismaService } from "../database/prisma.service";
+import {
+  characters,
+  notifications,
+  posts,
+  stories,
+  userCharacterFollows,
+} from "../database/schema";
 import { isUuid } from "../database/uuid";
 import {
   FOLLOW_NOTIFICATION_SYNC_LIMIT,
@@ -10,7 +28,22 @@ import {
   NotificationType,
 } from "./notification-types";
 
-type NotificationClient = Prisma.TransactionClient | PrismaService;
+type NotificationInput = {
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body?: string;
+  targetType?: NotificationTargetType;
+  targetId?: string;
+};
+
+type NotificationClient =
+  | Pick<DatabaseClient, "insert">
+  | {
+      notification: {
+        create(input: { data: NotificationInput }): Promise<NotificationRow>;
+      };
+    };
 
 export type FollowNotificationSyncResult = {
   created: number;
@@ -35,12 +68,11 @@ type NotificationReadReceipt = {
   readAt: string;
 };
 
-type PrismaNotification =
-  Prisma.NotificationGetPayload<Prisma.NotificationDefaultArgs>;
+type NotificationRow = typeof notifications.$inferSelect;
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   // 알림 생성 정본. 알림은 그것을 유발한 쓰기와 같은 트랜잭션에서 만들어야
   // 하므로(부분 실패 시 알림만 남는 것을 막는다) 호출자의 client를 받는다.
@@ -48,28 +80,27 @@ export class NotificationsService {
   // 통과하도록 보장한다.
   async createNotificationWithClient(
     client: NotificationClient,
-    input: {
-      userId: string;
-      type: NotificationType;
-      title: string;
-      body?: string;
-      targetType?: NotificationTargetType;
-      targetId?: string;
-    },
+    input: NotificationInput,
   ): Promise<Notification> {
-    const notification = await client.notification.create({
-      data: {
-        userId: input.userId,
-        type: input.type,
-        title: input.title,
-        ...(input.body === undefined ? {} : { body: input.body }),
-        ...(input.targetType === undefined
-          ? {}
-          : { targetType: input.targetType }),
-        ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
-      },
-    });
-    return this.toNotification(notification as PrismaNotification);
+    const data = {
+      userId: input.userId,
+      type: input.type,
+      title: input.title,
+      ...(input.body === undefined ? {} : { body: input.body }),
+      ...(input.targetType === undefined
+        ? {}
+        : { targetType: input.targetType }),
+      ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+    };
+    const notification =
+      "insert" in client
+        ? await client
+            .insert(notifications)
+            .values(data)
+            .returning()
+            .then(([row]) => row)
+        : await client.notification.create({ data });
+    return this.toNotification(notification);
   }
 
   // 팔로우한 캐릭터의 새 게시글·스토리를 알림 행으로 물질화한다.
@@ -86,54 +117,84 @@ export class NotificationsService {
   async syncFollowNotifications(input: {
     userId: string;
   }): Promise<FollowNotificationSyncResult> {
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       // 같은 유저의 동시 sync가 같은 게시글로 알림을 두 번 만들지 않게
       // 직렬화한다. 워터마크 갱신까지 한 트랜잭션 안에서 끝난다.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`notifications:${input.userId}`}, 0))`;
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`notifications:${input.userId}`}, 0))`,
+      );
 
-      const follows = await tx.userCharacterFollow.findMany({
-        where: { userId: input.userId, character: { status: "active" } },
-        select: {
-          characterId: true,
-          notifiedUpToAt: true,
-          character: { select: { displayName: true } },
-        },
-      });
+      const follows = await tx
+        .select({
+          characterId: userCharacterFollows.characterId,
+          notifiedUpToAt: userCharacterFollows.notifiedUpToAt,
+          displayName: characters.displayName,
+        })
+        .from(userCharacterFollows)
+        .innerJoin(
+          characters,
+          eq(userCharacterFollows.characterId, characters.id),
+        )
+        .where(
+          and(
+            eq(userCharacterFollows.userId, input.userId),
+            eq(characters.status, "active"),
+          ),
+        );
       if (follows.length === 0) {
         return { created: 0, truncated: false };
       }
 
       const syncedAt = new Date();
-      const windows = follows.map((follow) => ({
-        characterId: follow.characterId,
-        createdAt: { gt: follow.notifiedUpToAt, lte: syncedAt },
-      }));
+      const windows = or(
+        ...follows.map((follow) =>
+          and(
+            eq(posts.characterId, follow.characterId),
+            gt(posts.createdAt, follow.notifiedUpToAt),
+            lte(posts.createdAt, syncedAt),
+          ),
+        ),
+      );
+      const storyWindows = or(
+        ...follows.map((follow) =>
+          and(
+            eq(stories.characterId, follow.characterId),
+            gt(stories.createdAt, follow.notifiedUpToAt),
+            lte(stories.createdAt, syncedAt),
+          ),
+        ),
+      );
       const displayNames = new Map(
-        follows.map((follow) => [
-          follow.characterId,
-          follow.character.displayName,
-        ]),
+        follows.map((follow) => [follow.characterId, follow.displayName]),
       );
       // 상한 + 1을 읽어 잘린 분량이 있는지 판단한다.
       const take = FOLLOW_NOTIFICATION_SYNC_LIMIT + 1;
-      const [posts, stories] = await Promise.all([
-        tx.post.findMany({
-          where: { OR: windows },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take,
-          select: { id: true, characterId: true, createdAt: true },
-        }),
-        tx.story.findMany({
+      const [postRows, storyRows] = await Promise.all([
+        tx
+          .select({
+            id: posts.id,
+            characterId: posts.characterId,
+            createdAt: posts.createdAt,
+          })
+          .from(posts)
+          .where(windows)
+          .orderBy(desc(posts.createdAt), desc(posts.id))
+          .limit(take),
+        tx
+          .select({
+            id: stories.id,
+            characterId: stories.characterId,
+            createdAt: stories.createdAt,
+          })
+          .from(stories)
           // 만료된 스토리는 열 수 없으므로 알리지 않는다.
-          where: { AND: [{ OR: windows }, { expiresAt: { gt: syncedAt } }] },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take,
-          select: { id: true, characterId: true, createdAt: true },
-        }),
+          .where(and(storyWindows, gt(stories.expiresAt, syncedAt)))
+          .orderBy(desc(stories.createdAt), desc(stories.id))
+          .limit(take),
       ]);
 
       const candidates = [
-        ...posts.map((post) => ({
+        ...postRows.map((post) => ({
           createdAt: post.createdAt,
           userId: input.userId,
           type: NOTIFICATION_TYPES.characterNewPost as string,
@@ -141,7 +202,7 @@ export class NotificationsService {
           targetType: "post",
           targetId: post.id,
         })),
-        ...stories.map((story) => ({
+        ...storyRows.map((story) => ({
           createdAt: story.createdAt,
           userId: input.userId,
           type: NOTIFICATION_TYPES.characterNewStory as string,
@@ -156,26 +217,31 @@ export class NotificationsService {
       const truncated = candidates.length > FOLLOW_NOTIFICATION_SYNC_LIMIT;
       const selected = candidates.slice(0, FOLLOW_NOTIFICATION_SYNC_LIMIT);
       if (selected.length > 0) {
-        await tx.notification.createMany({
+        await tx.insert(notifications).values(
           // createdAt은 정렬용이라 행에 싣지 않는다 — DB 기본값을 쓴다.
-          data: selected.map((candidate) => ({
+          selected.map((candidate) => ({
             userId: candidate.userId,
             type: candidate.type,
             title: candidate.title,
             targetType: candidate.targetType,
             targetId: candidate.targetId,
           })),
-        });
+        );
       }
       // 잘렸어도 워터마크는 전진시킨다. 그러지 않으면 밀린 분량이 매 sync마다
       // 다시 잡혀 같은 자리에서 계속 맴돈다.
-      await tx.userCharacterFollow.updateMany({
-        where: {
-          userId: input.userId,
-          characterId: { in: follows.map((follow) => follow.characterId) },
-        },
-        data: { notifiedUpToAt: syncedAt },
-      });
+      await tx
+        .update(userCharacterFollows)
+        .set({ notifiedUpToAt: syncedAt })
+        .where(
+          and(
+            eq(userCharacterFollows.userId, input.userId),
+            inArray(
+              userCharacterFollows.characterId,
+              follows.map((follow) => follow.characterId),
+            ),
+          ),
+        );
 
       return { created: selected.length, truncated };
     });
@@ -191,31 +257,43 @@ export class NotificationsService {
     if (cursorId && !isUuid(cursorId)) {
       throw new BadRequestException("Invalid cursor");
     }
-    const where = {
-      userId: input.userId,
-      ...(input.unreadOnly ? { readAt: null } : {}),
-    };
+    const baseWhere = and(
+      eq(notifications.userId, input.userId),
+      input.unreadOnly ? isNull(notifications.readAt) : undefined,
+    );
 
-    if (
-      cursorId &&
-      !(await this.prisma.notification.findFirst({
-        where: { id: cursorId, ...where },
-        select: { id: true },
-      }))
-    ) {
+    const [cursor] = cursorId
+      ? await this.database.client
+          .select({ createdAt: notifications.createdAt })
+          .from(notifications)
+          .where(and(eq(notifications.id, cursorId), baseWhere))
+          .limit(1)
+      : [];
+    if (cursorId && !cursor) {
       throw new BadRequestException("Invalid cursor");
     }
 
-    const notifications = await this.prisma.notification.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: input.limit + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-    });
+    const rows = await this.database.client
+      .select()
+      .from(notifications)
+      .where(
+        and(
+          baseWhere,
+          cursor && cursorId
+            ? or(
+                lt(notifications.createdAt, cursor.createdAt),
+                and(
+                  eq(notifications.createdAt, cursor.createdAt),
+                  lt(notifications.id, cursorId),
+                ),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(input.limit + 1);
     return pageFromRows(
-      notifications.map((notification) =>
-        this.toNotification(notification as PrismaNotification),
-      ),
+      rows.map((notification) => this.toNotification(notification)),
       input.limit,
     );
   }
@@ -227,27 +305,26 @@ export class NotificationsService {
     if (!isUuid(input.notificationId)) {
       return null;
     }
-    if (
-      !(await this.prisma.notification.findFirst({
-        where: { id: input.notificationId, userId: input.userId },
-        select: { id: true },
-      }))
-    ) {
+    const [notification] = await this.database.client
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(
+        and(
+          eq(notifications.id, input.notificationId),
+          eq(notifications.userId, input.userId),
+        ),
+      )
+      .returning({ id: notifications.id, readAt: notifications.readAt });
+    if (!notification?.readAt) {
       return null;
     }
-
-    const notification = await this.prisma.notification.update({
-      where: { id: input.notificationId },
-      data: { readAt: new Date() },
-      select: { id: true, readAt: true },
-    });
     return {
       id: notification.id,
-      readAt: notification.readAt!.toISOString(),
+      readAt: notification.readAt.toISOString(),
     };
   }
 
-  private toNotification(notification: PrismaNotification): Notification {
+  private toNotification(notification: NotificationRow): Notification {
     return {
       id: notification.id,
       type: notification.type,

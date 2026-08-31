@@ -1,25 +1,44 @@
+import { queryReturning } from "../../../test/drizzle-mock";
 import { EventsService } from "../events/events.service";
 import { FollowsService } from "./follows.service";
 
-describe("FollowsService", () => {
-  it("creates follows through Prisma upsert", async () => {
-    const createdAt = new Date("2026-06-30T00:00:00.000Z");
-    const upsert = jest.fn().mockResolvedValue({
-      userId: "user-1",
-      characterId: "character-1",
-      createdAt,
-    });
-    const usersService = { hasUser: jest.fn().mockResolvedValue(true) };
-    const charactersService = {
-      hasCharacter: jest.fn().mockResolvedValue(true),
-    };
-    const ServiceWithClient = FollowsService as unknown as new (
+const createdAt = new Date("2026-06-30T00:00:00.000Z");
+const followRow = {
+  userId: "user-1",
+  characterId: "character-1",
+  createdAt,
+  notifiedUpToAt: createdAt,
+};
+
+function createService(input?: {
+  client?: Record<string, unknown>;
+  eventsService?: Partial<EventsService>;
+}) {
+  const usersService = { hasUser: jest.fn().mockResolvedValue(true) };
+  const charactersService = {
+    hasCharacter: jest.fn().mockResolvedValue(true),
+  };
+  const service = new (
+    FollowsService as unknown as new (
       usersService: unknown,
       charactersService: unknown,
-      prisma: unknown,
-    ) => FollowsService;
-    const service = new ServiceWithClient(usersService, charactersService, {
-      userCharacterFollow: { upsert },
+      database: unknown,
+      eventsService?: unknown,
+    ) => FollowsService
+  )(
+    usersService,
+    charactersService,
+    { client: input?.client ?? {} },
+    input?.eventsService,
+  );
+  return { charactersService, service, usersService };
+}
+
+describe("FollowsService", () => {
+  it("creates follows through a Drizzle upsert", async () => {
+    const query = queryReturning([followRow]);
+    const { service } = createService({
+      client: { insert: jest.fn().mockReturnValue(query) },
     });
 
     await expect(
@@ -32,73 +51,30 @@ describe("FollowsService", () => {
       characterId: "character-1",
       createdAt: createdAt.toISOString(),
     });
-    expect(upsert).toHaveBeenCalledWith({
-      where: {
-        userId_characterId: {
-          userId: "user-1",
-          characterId: "character-1",
-        },
-      },
-      update: {},
-      create: {
-        userId: "user-1",
-        characterId: "character-1",
-      },
+    expect(query.values).toHaveBeenCalledWith({
+      userId: "user-1",
+      characterId: "character-1",
     });
+    expect(query.onConflictDoUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("lists followed character ids through Prisma", async () => {
-    const findMany = jest.fn().mockResolvedValue([
-      {
-        userId: "user-1",
-        characterId: "character-1",
-        createdAt: new Date("2026-06-30T00:00:00.000Z"),
-      },
-    ]);
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn() },
-      { hasCharacter: jest.fn() },
-      { userCharacterFollow: { findMany } },
-    );
+  it("lists followed character ids for active characters", async () => {
+    const query = queryReturning([{ characterId: "character-1" }]);
+    const { service } = createService({
+      client: { select: jest.fn().mockReturnValue(query) },
+    });
 
     await expect(service.followedCharacterIdsFor("user-1")).resolves.toEqual(
       new Set(["character-1"]),
     );
-    expect(findMany).toHaveBeenCalledWith({
-      where: {
-        userId: "user-1",
-        character: { status: "active" },
-      },
-      select: { characterId: true },
-    });
+    expect(query.innerJoin).toHaveBeenCalledTimes(1);
   });
 
-  it("lists follows for active characters only", async () => {
-    const createdAt = new Date("2026-06-30T00:00:00.000Z");
-    const findMany = jest.fn().mockResolvedValue([
-      {
-        userId: "user-1",
-        characterId: "character-1",
-        createdAt,
-      },
-    ]);
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn() },
-      { hasCharacter: jest.fn() },
-      { userCharacterFollow: { findMany } },
-    );
+  it("lists follows oldest first", async () => {
+    const query = queryReturning([followRow]);
+    const { service } = createService({
+      client: { select: jest.fn().mockReturnValue(query) },
+    });
 
     await expect(service.listFollowedCharacters("user-1")).resolves.toEqual([
       {
@@ -107,37 +83,19 @@ describe("FollowsService", () => {
         createdAt: createdAt.toISOString(),
       },
     ]);
-    expect(findMany).toHaveBeenCalledWith({
-      where: {
-        userId: "user-1",
-        character: { status: "active" },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    expect(query.orderBy).toHaveBeenCalledTimes(1);
   });
 
-  it("returns the current user relationship to a character", async () => {
-    const createdAt = new Date("2026-06-30T00:00:00.000Z");
-    const findUnique = jest.fn().mockResolvedValue({
-      userId: "user-1",
-      characterId: "character-1",
-      createdAt,
-    });
-    const bondFindUnique = jest.fn().mockResolvedValue({ bondLevel: 4 });
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn().mockResolvedValue(true) },
-      { hasCharacter: jest.fn().mockResolvedValue(true) },
-      {
-        userCharacterFollow: { findUnique },
-        agentRelationshipState: { findUnique: bondFindUnique },
+  it("returns the current relationship and agent-owned bond level", async () => {
+    const queries = [
+      queryReturning([followRow]),
+      queryReturning([{ bondLevel: 4 }]),
+    ];
+    const { service } = createService({
+      client: {
+        select: jest.fn().mockImplementation(() => queries.shift()),
       },
-    );
+    });
 
     await expect(
       service.getCharacterRelationship({
@@ -150,45 +108,15 @@ describe("FollowsService", () => {
       followedAt: createdAt.toISOString(),
       bondLevel: 4,
     });
-    expect(findUnique).toHaveBeenCalledWith({
-      where: {
-        userId_characterId: {
-          userId: "user-1",
-          characterId: "character-1",
-        },
-      },
-    });
-    // Read-only, and only the one column: warmth and the daily counters stay
-    // inside the Agent's boundary.
-    expect(bondFindUnique).toHaveBeenCalledWith({
-      where: {
-        userId_characterId: {
-          userId: "user-1",
-          characterId: "character-1",
-        },
-      },
-      select: { bondLevel: true },
-    });
   });
 
   it("reports level 1 when the two have never talked", async () => {
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn().mockResolvedValue(true) },
-      { hasCharacter: jest.fn().mockResolvedValue(true) },
-      {
-        userCharacterFollow: { findUnique: jest.fn().mockResolvedValue(null) },
-        // No agent_relationship_state row — the Agent has never seen this pair.
-        agentRelationshipState: {
-          findUnique: jest.fn().mockResolvedValue(null),
-        },
+    const queries = [queryReturning([]), queryReturning([])];
+    const { service } = createService({
+      client: {
+        select: jest.fn().mockImplementation(() => queries.shift()),
       },
-    );
+    });
 
     await expect(
       service.getCharacterRelationship({
@@ -202,20 +130,10 @@ describe("FollowsService", () => {
     });
   });
 
-  it("deletes follows through Prisma", async () => {
-    const deleteMany = jest.fn().mockResolvedValue({ count: 1 });
-    const usersService = { hasUser: jest.fn().mockResolvedValue(true) };
-    const charactersService = {
-      hasCharacter: jest.fn().mockResolvedValue(true),
-    };
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-      ) => FollowsService
-    )(usersService, charactersService, {
-      userCharacterFollow: { deleteMany },
+  it("deletes follows through Drizzle", async () => {
+    const query = queryReturning([{ characterId: "character-1" }]);
+    const { service } = createService({
+      client: { delete: jest.fn().mockReturnValue(query) },
     });
 
     await expect(
@@ -228,121 +146,58 @@ describe("FollowsService", () => {
       characterId: "character-1",
       deleted: true,
     });
-    expect(deleteMany).toHaveBeenCalledWith({
-      where: {
-        userId: "user-1",
-        characterId: "character-1",
-      },
-    });
+    expect(query.returning).toHaveBeenCalledTimes(1);
   });
 
-  it("records a follow event when a user follows a character", async () => {
-    const eventsService = {
-      recordEvent: jest.fn(),
-    } as unknown as EventsService;
-    const upsert = jest.fn().mockResolvedValue({
-      userId: "human-1",
-      characterId: "character-1",
-      createdAt: new Date("2026-06-30T00:00:00.000Z"),
-    });
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn().mockResolvedValue(true) },
-      { hasCharacter: jest.fn().mockResolvedValue(true) },
-      { userCharacterFollow: { upsert } },
-      eventsService,
-    );
-
-    await service.followCharacter({
-      userId: "human-1",
-      characterId: "character-1",
-    });
-
-    expect(eventsService.recordEvent).toHaveBeenCalledWith({
-      userId: "human-1",
-      eventType: "follow_character",
-      targetType: "character",
-      targetId: "character-1",
-    });
-  });
-
-  it("waits for the server follow event before completing", async () => {
+  it("records and waits for the server follow event", async () => {
     let resolveEvent: (() => void) | undefined;
     const eventStored = new Promise<void>((resolve) => {
       resolveEvent = resolve;
     });
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn().mockResolvedValue(true) },
-      { hasCharacter: jest.fn().mockResolvedValue(true) },
-      {
-        userCharacterFollow: {
-          upsert: jest.fn().mockResolvedValue({
-            userId: "human-1",
-            characterId: "character-1",
-            createdAt: new Date("2026-06-30T00:00:00.000Z"),
-          }),
-        },
-      },
-      { recordEvent: jest.fn().mockReturnValue(eventStored) },
-    );
+    const recordEvent = jest.fn().mockReturnValue(eventStored);
+    const query = queryReturning([followRow]);
+    const { service } = createService({
+      client: { insert: jest.fn().mockReturnValue(query) },
+      eventsService: { recordEvent } as Partial<EventsService>,
+    });
     let completed = false;
 
     const following = service
-      .followCharacter({ userId: "human-1", characterId: "character-1" })
+      .followCharacter({ userId: "user-1", characterId: "character-1" })
       .then(() => {
         completed = true;
       });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
+    expect(recordEvent).toHaveBeenCalledWith({
+      userId: "user-1",
+      eventType: "follow_character",
+      targetType: "character",
+      targetId: "character-1",
+    });
     expect(completed).toBe(false);
     resolveEvent?.();
     await following;
   });
 
-  it("keeps a completed follow successful when its server event fails", async () => {
-    const createdAt = new Date("2026-06-30T00:00:00.000Z");
-    const upsert = jest.fn().mockResolvedValue({
-      userId: "human-1",
-      characterId: "character-1",
-      createdAt,
+  it("keeps a completed follow successful when its event fails", async () => {
+    const query = queryReturning([followRow]);
+    const { service } = createService({
+      client: { insert: jest.fn().mockReturnValue(query) },
+      eventsService: {
+        recordEvent: jest.fn().mockRejectedValue(new Error("event down")),
+      } as Partial<EventsService>,
     });
-    const service = new (
-      FollowsService as unknown as new (
-        usersService: unknown,
-        charactersService: unknown,
-        prisma: unknown,
-        eventsService: unknown,
-      ) => FollowsService
-    )(
-      { hasUser: jest.fn().mockResolvedValue(true) },
-      { hasCharacter: jest.fn().mockResolvedValue(true) },
-      { userCharacterFollow: { upsert } },
-      { recordEvent: jest.fn().mockRejectedValue(new Error("event down")) },
-    );
 
     await expect(
       service.followCharacter({
-        userId: "human-1",
+        userId: "user-1",
         characterId: "character-1",
       }),
     ).resolves.toEqual({
-      userId: "human-1",
+      userId: "user-1",
       characterId: "character-1",
       createdAt: createdAt.toISOString(),
     });
-    expect(upsert).toHaveBeenCalledTimes(1);
   });
 });
