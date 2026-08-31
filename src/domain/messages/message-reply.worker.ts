@@ -5,8 +5,14 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
+import { and, asc, count, eq, gt, lt, lte, ne, or, sql } from "drizzle-orm";
 import { CreditsService } from "../credits/credits.service";
-import { PrismaService } from "../database/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import {
+  messageConversations,
+  messageReplyJobs,
+  messages,
+} from "../database/schema";
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyError,
@@ -74,7 +80,7 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
   private stopped = false;
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly messagesService: MessagesService,
     private readonly creditsService: CreditsService,
     @Inject(MESSAGE_REPLY_PROVIDER)
@@ -127,18 +133,27 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
     Array<{ id: string; conversationId: string }>
   > {
     const now = new Date();
-    const rows = await this.prisma.messageReplyJob.findMany({
-      where: {
-        OR: [
-          { status: "queued", readyAt: { lte: now } },
+    const rows = await this.database.client
+      .select({
+        id: messageReplyJobs.id,
+        conversationId: messageReplyJobs.conversationId,
+      })
+      .from(messageReplyJobs)
+      .where(
+        or(
+          and(
+            eq(messageReplyJobs.status, "queued"),
+            lte(messageReplyJobs.readyAt, now),
+          ),
           // lease가 끊긴 running = 처리하던 프로세스가 죽었다는 뜻.
-          { status: "running", leaseExpiresAt: { lte: now } },
-        ],
-      },
-      orderBy: [{ readyAt: "asc" }, { id: "asc" }],
-      take: this.options.concurrency * 4,
-      select: { id: true, conversationId: true },
-    });
+          and(
+            eq(messageReplyJobs.status, "running"),
+            lte(messageReplyJobs.leaseExpiresAt, now),
+          ),
+        ),
+      )
+      .orderBy(asc(messageReplyJobs.readyAt), asc(messageReplyJobs.id))
+      .limit(this.options.concurrency * 4);
 
     const firstPerConversation = new Map<
       string,
@@ -163,16 +178,21 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
     jobId: string,
     conversationId: string,
   ): Promise<ClaimedJob | null> {
-    return this.prisma.$transaction(async (tx) => {
-      const [lock] = await tx.$queryRaw<Array<{ locked: boolean }>>`
-        SELECT pg_try_advisory_xact_lock(hashtextextended(${`message_reply:${conversationId}`}, 0)) AS locked
-      `;
+    return this.database.client.transaction(async (tx) => {
+      const result = await tx.execute(
+        sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${`message_reply:${conversationId}`}, 0)) AS locked`,
+      );
+      const [lock] = result.rows as Array<{ locked: boolean }>;
       if (!lock?.locked) {
         return null;
       }
 
       const now = new Date();
-      const job = await tx.messageReplyJob.findUnique({ where: { id: jobId } });
+      const [job] = await tx
+        .select()
+        .from(messageReplyJobs)
+        .where(eq(messageReplyJobs.id, jobId))
+        .limit(1);
       if (!job) {
         return null;
       }
@@ -186,14 +206,17 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
       }
 
       // 같은 대화에서 아직 살아 있는 작업이 있으면 직렬 원칙을 지켜 넘어간다.
-      const running = await tx.messageReplyJob.count({
-        where: {
-          conversationId,
-          status: "running",
-          leaseExpiresAt: { gt: now },
-          id: { not: jobId },
-        },
-      });
+      const [{ value: running }] = await tx
+        .select({ value: count() })
+        .from(messageReplyJobs)
+        .where(
+          and(
+            eq(messageReplyJobs.conversationId, conversationId),
+            eq(messageReplyJobs.status, "running"),
+            gt(messageReplyJobs.leaseExpiresAt, now),
+            ne(messageReplyJobs.id, jobId),
+          ),
+        );
       if (running > 0) {
         return null;
       }
@@ -204,16 +227,17 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
       const deadlineAt =
         job.deadlineAt ?? new Date(now.getTime() + this.options.deadlineMs);
 
-      const claimed = await tx.messageReplyJob.update({
-        where: { id: jobId },
-        data: {
+      const [claimed] = await tx
+        .update(messageReplyJobs)
+        .set({
           status: "running",
-          attemptCount: { increment: 1 },
+          attemptCount: sql`${messageReplyJobs.attemptCount} + 1`,
           leaseExpiresAt: new Date(now.getTime() + this.options.leaseMs),
           startedAt,
           deadlineAt,
-        },
-      });
+        })
+        .where(eq(messageReplyJobs.id, jobId))
+        .returning();
 
       return {
         id: claimed.id,
@@ -246,22 +270,43 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
    * 메시지를 넣으면 아직 답하지 않은 말에 이미 답한 것처럼 보인다.
    */
   private async replyContext(job: ClaimedJob) {
-    const turn = await this.prisma.message.findUniqueOrThrow({
-      where: { id: job.turnId },
-      include: {
-        conversation: { select: { userId: true, characterId: true } },
-      },
-    });
-    const history = await this.prisma.message.findMany({
-      where: {
-        conversationId: job.conversationId,
-        OR: [
-          { createdAt: { lt: turn.createdAt } },
-          { createdAt: turn.createdAt, id: { lte: turn.id } },
-        ],
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
+    const [turn] = await this.database.client
+      .select({
+        id: messages.id,
+        createdAt: messages.createdAt,
+        conversation: {
+          userId: messageConversations.userId,
+          characterId: messageConversations.characterId,
+        },
+      })
+      .from(messages)
+      .innerJoin(
+        messageConversations,
+        eq(messages.conversationId, messageConversations.id),
+      )
+      .where(eq(messages.id, job.turnId))
+      .limit(1);
+    if (!turn) throw new Error("Message turn not found");
+    const history = await this.database.client
+      .select({
+        id: messages.id,
+        senderType: messages.senderType,
+        body: messages.body,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, job.conversationId),
+          or(
+            lt(messages.createdAt, turn.createdAt),
+            and(
+              eq(messages.createdAt, turn.createdAt),
+              lte(messages.id, turn.id),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(messages.createdAt), asc(messages.id));
 
     return {
       userId: turn.conversation.userId,
@@ -283,18 +328,24 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
    * 빠지면 공짜 답변이 되고, 반대면 돈만 받고 답이 없다.
    */
   private async complete(job: ClaimedJob, reply: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+    await this.database.client.transaction(async (tx) => {
       // running일 때만 닫는다. lease를 뺏긴 뒤 뒤늦게 돌아온 시도가 답변을 한 번
       // 더 붙이는 것을 막는다.
-      const closed = await tx.messageReplyJob.updateMany({
-        where: { id: job.id, status: "running" },
-        data: {
+      const closed = await tx
+        .update(messageReplyJobs)
+        .set({
           status: "completed",
           completedAt: new Date(),
           leaseExpiresAt: null,
-        },
-      });
-      if (closed.count === 0) {
+        })
+        .where(
+          and(
+            eq(messageReplyJobs.id, job.id),
+            eq(messageReplyJobs.status, "running"),
+          ),
+        )
+        .returning({ id: messageReplyJobs.id });
+      if (closed.length === 0) {
         return;
       }
 
@@ -334,15 +385,20 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    await this.prisma.messageReplyJob.updateMany({
-      where: { id: job.id, status: "running" },
-      data: {
+    await this.database.client
+      .update(messageReplyJobs)
+      .set({
         status: "queued",
         readyAt: new Date(Date.now() + this.options.retryBackoffMs),
         leaseExpiresAt: null,
         failureReason: reason,
-      },
-    });
+      })
+      .where(
+        and(
+          eq(messageReplyJobs.id, job.id),
+          eq(messageReplyJobs.status, "running"),
+        ),
+      );
   }
 
   /**
@@ -354,17 +410,23 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
     reason: string,
   ): Promise<void> {
     try {
-      await this.prisma.$transaction(async (tx) => {
-        const closed = await tx.messageReplyJob.updateMany({
-          where: { id: job.id, status: "running" },
-          data: {
+      await this.database.client.transaction(async (tx) => {
+        const closed = await tx
+          .update(messageReplyJobs)
+          .set({
             status: "failed",
             failedAt: new Date(),
             failureReason: reason,
             leaseExpiresAt: null,
-          },
-        });
-        if (closed.count === 0) {
+          })
+          .where(
+            and(
+              eq(messageReplyJobs.id, job.id),
+              eq(messageReplyJobs.status, "running"),
+            ),
+          )
+          .returning({ id: messageReplyJobs.id });
+        if (closed.length === 0) {
           return;
         }
         if (job.reservationReference) {

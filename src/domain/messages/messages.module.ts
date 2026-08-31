@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { CharactersModule } from "../characters/characters.module";
 import { CreditsModule } from "../credits/credits.module";
-import { PrismaModule } from "../database/prisma.module";
+import { DatabaseModule } from "../database/database.module";
 import { EventsModule } from "../events/events.module";
 import {
   createMessageReplyProvider,
@@ -15,7 +15,7 @@ import {
 import { MessagesService } from "./messages.service";
 
 @Module({
-  imports: [CharactersModule, CreditsModule, EventsModule, PrismaModule],
+  imports: [CharactersModule, CreditsModule, EventsModule, DatabaseModule],
   providers: [
     MessagesService,
     MessageReplyWorker,
