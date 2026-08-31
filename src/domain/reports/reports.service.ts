@@ -1,6 +1,13 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
-import { PrismaService } from "../database/prisma.service";
+import { and, eq } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import {
+  characters,
+  messageConversations,
+  messages,
+  posts,
+  reports,
+} from "../database/schema";
 import { isUuid } from "../database/uuid";
 
 type ReportTargetType = "character" | "post" | "message";
@@ -11,8 +18,6 @@ type ReportReceipt = {
   status: ReportStatus;
   createdAt: string;
 };
-
-type PrismaReport = Prisma.ReportGetPayload<Prisma.ReportDefaultArgs>;
 
 type ReportDetail = {
   id: string;
@@ -26,11 +31,11 @@ type ReportDetail = {
   updatedAt: string;
 };
 
-type PrismaReportDetail = Prisma.ReportGetPayload<Prisma.ReportDefaultArgs>;
+type ReportRow = typeof reports.$inferSelect;
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async createReport(input: {
     userId: string;
@@ -64,17 +69,18 @@ export class ReportsService {
       throw new BadRequestException("Report target not found");
     }
 
-    const report = await this.prisma.report.create({
-      data: {
+    const [report] = await this.database.client
+      .insert(reports)
+      .values({
         reporterUserId: input.userId,
         targetType,
         targetId,
         reason,
         details,
         status: "submitted",
-      },
-    });
-    return this.toReceipt(report as PrismaReport);
+      })
+      .returning();
+    return this.toReceipt(report);
   }
 
   async findReportForUser(input: {
@@ -84,10 +90,17 @@ export class ReportsService {
     if (!isUuid(input.reportId)) {
       return null;
     }
-    const report = await this.prisma.report.findFirst({
-      where: { id: input.reportId, reporterUserId: input.userId },
-    });
-    return report ? this.toDetail(report as PrismaReportDetail) : null;
+    const [report] = await this.database.client
+      .select()
+      .from(reports)
+      .where(
+        and(
+          eq(reports.id, input.reportId),
+          eq(reports.reporterUserId, input.userId),
+        ),
+      )
+      .limit(1);
+    return report ? this.toDetail(report) : null;
   }
 
   private parseTargetType(targetType: unknown): ReportTargetType {
@@ -110,33 +123,36 @@ export class ReportsService {
       return false;
     }
     if (targetType === "character") {
-      return (
-        (await this.prisma.character.findUnique({
-          where: { id: targetId },
-          select: { id: true },
-        })) !== null
-      );
+      const [target] = await this.database.client
+        .select({ id: characters.id })
+        .from(characters)
+        .where(eq(characters.id, targetId))
+        .limit(1);
+      return target !== undefined;
     }
     if (targetType === "post") {
-      return (
-        (await this.prisma.post.findUnique({
-          where: { id: targetId },
-          select: { id: true },
-        })) !== null
-      );
+      const [target] = await this.database.client
+        .select({ id: posts.id })
+        .from(posts)
+        .where(eq(posts.id, targetId))
+        .limit(1);
+      return target !== undefined;
     }
-    return (
-      (await this.prisma.message.findFirst({
-        where: {
-          id: targetId,
-          conversation: { userId },
-        },
-        select: { id: true },
-      })) !== null
-    );
+    const [target] = await this.database.client
+      .select({ id: messages.id })
+      .from(messages)
+      .innerJoin(
+        messageConversations,
+        eq(messages.conversationId, messageConversations.id),
+      )
+      .where(
+        and(eq(messages.id, targetId), eq(messageConversations.userId, userId)),
+      )
+      .limit(1);
+    return target !== undefined;
   }
 
-  private toReceipt(report: PrismaReport): ReportReceipt {
+  private toReceipt(report: ReportRow): ReportReceipt {
     return {
       id: report.id,
       status: report.status,
@@ -144,7 +160,7 @@ export class ReportsService {
     };
   }
 
-  private toDetail(report: PrismaReportDetail): ReportDetail {
+  private toDetail(report: ReportRow): ReportDetail {
     return {
       id: report.id,
       targetType: report.targetType,

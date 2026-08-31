@@ -1,5 +1,7 @@
 import { Injectable } from "@nestjs/common";
-import { PrismaService } from "../database/prisma.service";
+import { and, asc, desc, eq } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { faqs } from "../database/schema";
 
 export type FaqItem = {
   id: string;
@@ -14,25 +16,29 @@ const maxFaqItems = 200;
 
 @Injectable()
 export class FaqsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async listPublishedFaqs(category?: string): Promise<{ items: FaqItem[] }> {
     const normalizedCategory = category?.trim();
-    const items = await this.prisma.faq.findMany({
-      where: {
-        isPublished: true,
-        ...(normalizedCategory ? { category: normalizedCategory } : {}),
-      },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }],
-      take: maxFaqItems,
-      select: {
-        id: true,
-        category: true,
-        question: true,
-        answer: true,
-        sortOrder: true,
-      },
-    });
+    const items = await this.database.client
+      .select({
+        id: faqs.id,
+        category: faqs.category,
+        question: faqs.question,
+        answer: faqs.answer,
+        sortOrder: faqs.sortOrder,
+      })
+      .from(faqs)
+      .where(
+        and(
+          eq(faqs.isPublished, true),
+          normalizedCategory
+            ? eq(faqs.category, normalizedCategory)
+            : undefined,
+        ),
+      )
+      .orderBy(asc(faqs.sortOrder), desc(faqs.createdAt))
+      .limit(maxFaqItems);
     return { items };
   }
 }

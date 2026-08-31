@@ -97,9 +97,6 @@ describe("source layout", () => {
   it("keeps persistence behind approved database adapters", () => {
     const removedFiles = [
       "database/migrations/001_mvp_schema.sql",
-      "src/domain/database/database.module.ts",
-      "src/domain/database/database.service.spec.ts",
-      "src/domain/database/database.service.ts",
       "src/domain/generation/generation.service.ts",
       "src/domain/media/media.service.ts",
       "src/domain/users/users.controller.ts",

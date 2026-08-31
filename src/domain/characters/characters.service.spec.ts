@@ -1,5 +1,27 @@
 import { CharactersService } from "./characters.service";
 
+function queryReturning<T>(rows: T) {
+  const promise = Promise.resolve(rows);
+  const query = {
+    from: jest.fn(),
+    leftJoin: jest.fn(),
+    limit: jest.fn(),
+    orderBy: jest.fn(),
+    then: promise.then.bind(promise),
+    where: jest.fn(),
+  };
+  for (const method of [
+    query.from,
+    query.leftJoin,
+    query.limit,
+    query.orderBy,
+    query.where,
+  ]) {
+    method.mockReturnValue(query);
+  }
+  return query;
+}
+
 describe("CharactersService", () => {
   const previousS3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL;
 
@@ -15,7 +37,7 @@ describe("CharactersService", () => {
     }
   });
 
-  it("lists and reads active characters through Prisma", async () => {
+  it("lists and reads active characters through Drizzle", async () => {
     const characterId = "00000000-0000-7000-8000-000000000001";
     const characterRow = {
       id: characterId,
@@ -46,69 +68,37 @@ describe("CharactersService", () => {
         crop: { x: 0.25, y: 0.75, zoom: 1.5 },
       },
     };
-    const findMany = jest.fn().mockResolvedValue([characterRow]);
-    const findFirst = jest
-      .fn()
-      .mockResolvedValueOnce({ id: characterId })
-      .mockResolvedValueOnce(characterRow);
-    const findUnique = jest
-      .fn()
-      .mockResolvedValueOnce({ id: characterId })
-      .mockResolvedValueOnce(characterRow);
+    const queries = [
+      queryReturning([{ id: characterId }]),
+      queryReturning([characterRow]),
+      queryReturning([characterRow]),
+    ];
+    const select = jest.fn().mockImplementation(() => queries.shift());
     const service = new (
-      CharactersService as new (client: unknown) => CharactersService
-    )({
-      character: { findFirst, findMany, findUnique },
-    });
+      CharactersService as new (database: unknown) => CharactersService
+    )({ client: { select } });
 
     await expect(service.hasCharacter(characterId)).resolves.toBe(true);
     await expect(service.listCharacters()).resolves.toEqual([character]);
     await expect(service.findCharacter(characterId)).resolves.toEqual(
       character,
     );
-    expect(findFirst).toHaveBeenNthCalledWith(1, {
-      where: { id: characterId, status: "active" },
-      select: { id: true },
-    });
-    expect(findFirst).toHaveBeenNthCalledWith(2, {
-      where: { id: characterId, status: "active" },
-      select: {
-        id: true,
-        publicId: true,
-        displayName: true,
-        bio: true,
-        interests: true,
-        profileImageCropX: true,
-        profileImageCropY: true,
-        profileImageCropZoom: true,
-        profileImage: {
-          select: {
-            url: true,
-            storageKey: true,
-            width: true,
-            height: true,
-          },
-        },
-      },
-    });
+    expect(select).toHaveBeenCalledTimes(3);
+    expect(queries).toHaveLength(0);
   });
 
-  it("treats malformed character IDs as missing without querying Prisma", async () => {
-    const findFirst = jest.fn();
-    const findUnique = jest.fn().mockResolvedValue({ id: "unexpected" });
+  it("treats malformed character IDs as missing without querying Drizzle", async () => {
+    const select = jest.fn();
     const service = new (
-      CharactersService as new (client: unknown) => CharactersService
-    )({
-      character: { findFirst, findUnique },
-    });
+      CharactersService as new (database: unknown) => CharactersService
+    )({ client: { select } });
 
     await expect(service.hasCharacter("not-a-uuid")).resolves.toBe(false);
     await expect(service.findCharacter("not-a-uuid")).resolves.toBeNull();
     const nonStringId = { toString: 1 } as unknown as string;
     await expect(service.hasCharacter(nonStringId)).resolves.toBe(false);
     await expect(service.findCharacter(nonStringId)).resolves.toBeNull();
-    expect(findFirst).not.toHaveBeenCalled();
-    expect(findUnique).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
   });
 
   it("searches active characters by text", async () => {
@@ -123,12 +113,11 @@ describe("CharactersService", () => {
       profileImageCropZoom: 1,
       profileImage: null,
     };
-    const findMany = jest.fn().mockResolvedValue([character]);
+    const query = queryReturning([character]);
+    const select = jest.fn().mockReturnValue(query);
     const service = new (
-      CharactersService as new (client: unknown) => CharactersService
-    )({
-      character: { findMany },
-    });
+      CharactersService as new (database: unknown) => CharactersService
+    )({ client: { select } });
 
     await expect(service.searchCharacters(" film ", 5)).resolves.toEqual([
       {
@@ -139,11 +128,6 @@ describe("CharactersService", () => {
         interests: ["film"],
       },
     ]);
-    expect(findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ status: "active" }),
-        take: 5,
-      }),
-    );
+    expect(query.limit).toHaveBeenCalledWith(5);
   });
 });

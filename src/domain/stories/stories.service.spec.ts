@@ -3,6 +3,28 @@ import { StoriesService } from "./stories.service";
 const s3PublicBaseUrl = "https://media.example.test";
 let previousS3PublicBaseUrl: string | undefined;
 
+function queryReturning<T>(rows: T) {
+  const promise = Promise.resolve(rows);
+  const query = {
+    from: jest.fn(),
+    innerJoin: jest.fn(),
+    limit: jest.fn(),
+    orderBy: jest.fn(),
+    then: promise.then.bind(promise),
+    where: jest.fn(),
+  };
+  for (const method of [
+    query.from,
+    query.innerJoin,
+    query.limit,
+    query.orderBy,
+    query.where,
+  ]) {
+    method.mockReturnValue(query);
+  }
+  return query;
+}
+
 describe("StoriesService", () => {
   beforeEach(() => {
     previousS3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL;
@@ -26,23 +48,18 @@ describe("StoriesService", () => {
       caption: "today",
       createdAt,
       expiresAt,
-      media: {
-        mediaType: "video",
-        url: "pod/stories/character/character-1/story.mp4",
-        storageKey: "pod/stories/character/character-1/story.mp4",
-        width: 720,
-        height: 1280,
-        durationSeconds: 12,
-      },
+      mediaType: "video",
+      url: "pod/stories/character/character-1/story.mp4",
+      storageKey: "pod/stories/character/character-1/story.mp4",
+      width: 720,
+      height: 1280,
+      durationSeconds: 12,
     };
-    const findMany = jest.fn().mockResolvedValue([row, { ...row, id: "more" }]);
+    const query = queryReturning([row, { ...row, id: "more" }]);
+    const select = jest.fn().mockReturnValue(query);
     const service = new (
-      StoriesService as new (prisma: unknown) => StoriesService
-    )({
-      story: {
-        findMany,
-      },
-    });
+      StoriesService as new (database: unknown) => StoriesService
+    )({ client: { select } });
 
     const page = await service.listStoriesPage({ limit: 1 });
 
@@ -63,15 +80,7 @@ describe("StoriesService", () => {
       },
     ]);
     expect(page.nextCursor).toEqual(expect.any(String));
-    expect(findMany).toHaveBeenCalledWith({
-      where: {
-        character: { status: "active" },
-        expiresAt: { gt: expect.any(Date) },
-      },
-      include: { media: true },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: 2,
-    });
+    expect(query.limit).toHaveBeenCalledWith(2);
   });
 
   it("returns active stories for one character", async () => {
@@ -83,22 +92,17 @@ describe("StoriesService", () => {
       caption: "",
       createdAt,
       expiresAt,
-      media: {
-        mediaType: "image",
-        url: "https://cdn.local/story.png",
-        width: null,
-        height: null,
-        durationSeconds: null,
-      },
+      mediaType: "image",
+      url: "https://cdn.local/story.png",
+      storageKey: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
     };
-    const findMany = jest.fn().mockResolvedValue([row]);
+    const query = queryReturning([row]);
     const service = new (
-      StoriesService as new (prisma: unknown) => StoriesService
-    )({
-      story: {
-        findMany,
-      },
-    });
+      StoriesService as new (database: unknown) => StoriesService
+    )({ client: { select: jest.fn().mockReturnValue(query) } });
 
     await expect(
       service.listCharacterStoriesPage("character-1", { limit: 20 }),
@@ -117,15 +121,6 @@ describe("StoriesService", () => {
         },
       ],
     });
-    expect(findMany).toHaveBeenCalledWith({
-      where: {
-        characterId: "character-1",
-        character: { status: "active" },
-        expiresAt: { gt: expect.any(Date) },
-      },
-      include: { media: true },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: 21,
-    });
+    expect(query.limit).toHaveBeenCalledWith(21);
   });
 });

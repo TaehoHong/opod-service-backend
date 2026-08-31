@@ -20,27 +20,25 @@ import { sql } from "drizzle-orm";
 import { v7 as createUuidV7 } from "uuid";
 
 export const opod = pgSchema("opod");
-export const mediaTypeInOpod = opod.enum("media_type", ["image", "video"]);
-export const postContentTypeInOpod = opod.enum("post_content_type", [
-  "feed",
-  "reel",
-]);
-export const messageSenderTypeInOpod = opod.enum("message_sender_type", [
+export const mediaType = opod.enum("media_type", ["image", "video"]);
+export const postContentType = opod.enum("post_content_type", ["feed", "reel"]);
+export const messageSenderType = opod.enum("message_sender_type", [
   "user",
   "character",
 ]);
-export const creditReservationStatusInOpod = opod.enum(
-  "credit_reservation_status",
-  ["reserved", "captured", "released"],
-);
-export const generationJobStatusInOpod = opod.enum("generation_job_status", [
+export const creditReservationStatus = opod.enum("credit_reservation_status", [
+  "reserved",
+  "captured",
+  "released",
+]);
+export const generationJobStatus = opod.enum("generation_job_status", [
   "draft",
   "queued",
   "running",
   "completed",
   "failed",
 ]);
-export const postDraftStatusInOpod = opod.enum("post_draft_status", [
+export const postDraftStatus = opod.enum("post_draft_status", [
   "planned",
   "generating",
   "needs_review",
@@ -50,62 +48,59 @@ export const postDraftStatusInOpod = opod.enum("post_draft_status", [
   "published",
   "failed",
 ]);
-export const postDraftTypeInOpod = opod.enum("post_draft_type", [
-  "post",
-  "story",
-]);
-export const reportTargetTypeInOpod = opod.enum("report_target_type", [
+export const postDraftType = opod.enum("post_draft_type", ["post", "story"]);
+export const reportTargetType = opod.enum("report_target_type", [
   "character",
   "post",
   "message",
 ]);
-export const reportStatusInOpod = opod.enum("report_status", [
+export const reportStatus = opod.enum("report_status", [
   "submitted",
   "reviewing",
   "resolved",
   "rejected",
 ]);
-export const characterStatusInOpod = opod.enum("character_status", [
+export const characterStatus = opod.enum("character_status", [
   "active",
   "inactive",
 ]);
-export const inquiryStatusInOpod = opod.enum("inquiry_status", [
+export const inquiryStatus = opod.enum("inquiry_status", [
   "submitted",
   "answered",
 ]);
-export const agentMemoryKindInOpod = opod.enum("agent_memory_kind", [
+export const agentMemoryKind = opod.enum("agent_memory_kind", [
   "observation",
   "reflection",
 ]);
-export const agentJobStatusInOpod = opod.enum("agent_job_status", [
+export const agentJobStatus = opod.enum("agent_job_status", [
   "queued",
   "running",
   "completed",
   "failed",
 ]);
-export const creditKindInOpod = opod.enum("credit_kind", ["free", "paid"]);
-export const consentTypeInOpod = opod.enum("consent_type", [
+export const creditKind = opod.enum("credit_kind", ["free", "paid"]);
+export const consentType = opod.enum("consent_type", [
   "terms_of_service",
   "privacy",
   "age_14",
   "marketing",
 ]);
-export const llmLogStatusInOpod = opod.enum("llm_log_status", [
+export const llmLogStatus = opod.enum("llm_log_status", [
   "running",
   "succeeded",
   "failed",
 ]);
-export const llmLogMediaRoleInOpod = opod.enum("llm_log_media_role", [
+export const llmLogMediaRole = opod.enum("llm_log_media_role", [
   "input",
   "output",
 ]);
-export const creditLedgerTypeInOpod = opod.enum("credit_ledger_type", [
+export const creditLedgerType = opod.enum("credit_ledger_type", [
   "grant",
   "usage",
   "refund_recovery",
   "adjustment",
 ]);
-export const creditRefundStateInOpod = opod.enum("credit_refund_state", [
+export const creditRefundState = opod.enum("credit_refund_state", [
   "reserved",
   "payment_processing",
   "payment_succeeded",
@@ -113,12 +108,12 @@ export const creditRefundStateInOpod = opod.enum("credit_refund_state", [
   "failed",
   "canceled",
 ]);
-export const paymentChannelInOpod = opod.enum("payment_channel", [
+export const paymentChannel = opod.enum("payment_channel", [
   "web",
   "apple",
   "google",
 ]);
-export const paymentStatusInOpod = opod.enum("payment_status", [
+export const paymentStatus = opod.enum("payment_status", [
   "pending",
   "verified",
   "processing",
@@ -129,21 +124,21 @@ export const paymentStatusInOpod = opod.enum("payment_status", [
   "refunded",
   "reversed",
 ]);
-export const paymentLedgerTypeInOpod = opod.enum("payment_ledger_type", [
+export const paymentLedgerType = opod.enum("payment_ledger_type", [
   "capture",
   "refund",
   "chargeback",
   "adjustment",
 ]);
-export const paymentDirectionInOpod = opod.enum("payment_direction", [
+export const paymentDirection = opod.enum("payment_direction", [
   "inflow",
   "outflow",
 ]);
-export const paymentProviderEventStatusInOpod = opod.enum(
+export const paymentProviderEventStatus = opod.enum(
   "payment_provider_event_status",
   ["processing", "processed", "failed"],
 );
-export const creditPurchaseStatusInOpod = opod.enum("credit_purchase_status", [
+export const creditPurchaseStatus = opod.enum("credit_purchase_status", [
   "pending",
   "payment_processing",
   "completed",
@@ -152,22 +147,25 @@ export const creditPurchaseStatusInOpod = opod.enum("credit_purchase_status", [
   "refunded",
   "reversed",
 ]);
-export const draftEvaluationKindInOpod = opod.enum("draft_evaluation_kind", [
+export const draftEvaluationKind = opod.enum("draft_evaluation_kind", [
   "plan",
   "prompt",
   "image",
   "image_plan",
 ]);
-export const draftEvaluationStatusInOpod = opod.enum(
-  "draft_evaluation_status",
-  ["pending", "completed", "failed"],
-);
-export const messageReplyJobStatusInOpod = opod.enum(
-  "message_reply_job_status",
-  ["queued", "running", "completed", "failed"],
-);
+export const draftEvaluationStatus = opod.enum("draft_evaluation_status", [
+  "pending",
+  "completed",
+  "failed",
+]);
+export const messageReplyJobStatus = opod.enum("message_reply_job_status", [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+]);
 
-export const adminSettingsInOpod = opod.table("admin_settings", {
+export const adminSettings = opod.table("admin_settings", {
   key: text().primaryKey(),
   value: text().notNull(),
   updatedAt: timestamp("updated_at", { precision: 6, withTimezone: true })
@@ -175,7 +173,7 @@ export const adminSettingsInOpod = opod.table("admin_settings", {
     .$onUpdateFn(() => new Date()),
 });
 
-export const adminsInOpod = opod.table(
+export const admins = opod.table(
   "admins",
   {
     id: uuid()
@@ -205,7 +203,7 @@ export const adminsInOpod = opod.table(
   ],
 );
 
-export const agentArchivalMemoriesInOpod = opod.table(
+export const agentArchivalMemories = opod.table(
   "agent_archival_memories",
   {
     id: uuid()
@@ -214,7 +212,7 @@ export const agentArchivalMemoriesInOpod = opod.table(
     userId: text("user_id").notNull(),
     characterId: text("character_id").notNull(),
     content: text().notNull(),
-    kind: agentMemoryKindInOpod().notNull(),
+    kind: agentMemoryKind().notNull(),
     importance: doublePrecision().notNull(),
     embedding: doublePrecision().array(),
     evidence: text()
@@ -262,7 +260,7 @@ export const agentArchivalMemoriesInOpod = opod.table(
   ],
 );
 
-export const agentCoreMemoriesInOpod = opod.table(
+export const agentCoreMemories = opod.table(
   "agent_core_memories",
   {
     userId: text("user_id").notNull(),
@@ -280,7 +278,7 @@ export const agentCoreMemoriesInOpod = opod.table(
   ],
 );
 
-export const agentMemoryJobsInOpod = opod.table(
+export const agentMemoryJobs = opod.table(
   "agent_memory_jobs",
   {
     id: uuid()
@@ -288,7 +286,7 @@ export const agentMemoryJobsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     idempotencyKey: text("idempotency_key").notNull(),
     payloadJson: jsonb("payload_json").notNull(),
-    status: agentJobStatusInOpod().default("queued").notNull(),
+    status: agentJobStatus().default("queued").notNull(),
     attemptCount: integer("attempt_count").default(0).notNull(),
     leaseExpiresAt: timestamp("lease_expires_at", {
       precision: 6,
@@ -323,7 +321,7 @@ export const agentMemoryJobsInOpod = opod.table(
   ],
 );
 
-export const agentMemoryOperationsInOpod = opod.table(
+export const agentMemoryOperations = opod.table(
   "agent_memory_operations",
   {
     id: uuid()
@@ -348,7 +346,7 @@ export const agentMemoryOperationsInOpod = opod.table(
   ],
 );
 
-export const agentRelationshipStateInOpod = opod.table(
+export const agentRelationshipState = opod.table(
   "agent_relationship_state",
   {
     userId: text("user_id").notNull(),
@@ -379,7 +377,7 @@ export const agentRelationshipStateInOpod = opod.table(
   ],
 );
 
-export const agentSummariesInOpod = opod.table(
+export const agentSummaries = opod.table(
   "agent_summaries",
   {
     userId: text("user_id").notNull(),
@@ -400,13 +398,13 @@ export const agentSummariesInOpod = opod.table(
   ],
 );
 
-export const characterActionLogsInOpod = opod.table(
+export const characterActionLogs = opod.table(
   "character_action_logs",
   {
     id: bigserial({ mode: "bigint" }).primaryKey(),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -427,18 +425,18 @@ export const characterActionLogsInOpod = opod.table(
   ],
 );
 
-export const characterLocationReferencesInOpod = opod.table(
+export const characterLocationReferences = opod.table(
   "character_location_references",
   {
     locationId: uuid("location_id")
       .notNull()
-      .references(() => characterLocationsInOpod.id, {
+      .references(() => characterLocations.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -464,13 +462,13 @@ export const characterLocationReferencesInOpod = opod.table(
   ],
 );
 
-export const characterLocationsInOpod = opod.table(
+export const characterLocations = opod.table(
   "character_locations",
   {
     id: uuid()
       .primaryKey()
       .$defaultFn(() => createUuidV7()),
-    characterId: uuid("character_id").references(() => charactersInOpod.id, {
+    characterId: uuid("character_id").references(() => characters.id, {
       onDelete: "cascade",
       onUpdate: "cascade",
     }),
@@ -508,7 +506,7 @@ export const characterLocationsInOpod = opod.table(
   ],
 );
 
-export const characterMemoriesInOpod = opod.table(
+export const characterMemories = opod.table(
   "character_memories",
   {
     id: uuid()
@@ -516,7 +514,7 @@ export const characterMemoriesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -541,7 +539,7 @@ export const characterMemoriesInOpod = opod.table(
   ],
 );
 
-export const characterPersonasInOpod = opod.table(
+export const characterPersonas = opod.table(
   "character_personas",
   {
     id: uuid()
@@ -549,7 +547,7 @@ export const characterPersonasInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -574,7 +572,7 @@ export const characterPersonasInOpod = opod.table(
   ],
 );
 
-export const characterPostingPoliciesInOpod = opod.table(
+export const characterPostingPolicies = opod.table(
   "character_posting_policies",
   {
     id: uuid()
@@ -582,7 +580,7 @@ export const characterPostingPoliciesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -605,18 +603,18 @@ export const characterPostingPoliciesInOpod = opod.table(
   ],
 );
 
-export const characterVisualProfileReferencesInOpod = opod.table(
+export const characterVisualProfileReferences = opod.table(
   "character_visual_profile_references",
   {
     profileId: uuid("profile_id")
       .notNull()
-      .references(() => characterVisualProfilesInOpod.id, {
+      .references(() => characterVisualProfiles.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -632,7 +630,7 @@ export const characterVisualProfileReferencesInOpod = opod.table(
   ],
 );
 
-export const characterVisualProfilesInOpod = opod.table(
+export const characterVisualProfiles = opod.table(
   "character_visual_profiles",
   {
     id: uuid()
@@ -640,7 +638,7 @@ export const characterVisualProfilesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -663,7 +661,7 @@ export const characterVisualProfilesInOpod = opod.table(
   ],
 );
 
-export const charactersInOpod = opod.table(
+export const characters = opod.table(
   "characters",
   {
     id: uuid()
@@ -675,7 +673,7 @@ export const charactersInOpod = opod.table(
     interests: text()
       .array()
       .default(sql`ARRAY[]`),
-    status: characterStatusInOpod().default("active").notNull(),
+    status: characterStatus().default("active").notNull(),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -691,7 +689,7 @@ export const charactersInOpod = opod.table(
     profileImageCropZoom: doublePrecision("profile_image_crop_zoom")
       .default(1)
       .notNull(),
-    profileImageId: uuid("profile_image_id").references(() => mediaInOpod.id, {
+    profileImageId: uuid("profile_image_id").references(() => media.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -709,7 +707,7 @@ export const charactersInOpod = opod.table(
   ],
 );
 
-export const consoleLogsInOpod = opod.table(
+export const consoleLogs = opod.table(
   "console_logs",
   {
     id: bigserial({ mode: "bigint" }).primaryKey(),
@@ -735,7 +733,7 @@ export const consoleLogsInOpod = opod.table(
   ],
 );
 
-export const creditCheckInsInOpod = opod.table(
+export const creditCheckIns = opod.table(
   "credit_check_ins",
   {
     id: uuid()
@@ -743,7 +741,7 @@ export const creditCheckInsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -761,7 +759,7 @@ export const creditCheckInsInOpod = opod.table(
   ],
 );
 
-export const creditLedgerInOpod = opod.table(
+export const creditLedger = opod.table(
   "credit_ledger",
   {
     id: uuid()
@@ -769,13 +767,13 @@ export const creditLedgerInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    type: creditLedgerTypeInOpod().notNull(),
-    creditKind: creditKindInOpod("credit_kind"),
-    purchaseId: uuid("purchase_id").references(() => creditPurchasesInOpod.id, {
+    type: creditLedgerType().notNull(),
+    creditKind: creditKind("credit_kind"),
+    purchaseId: uuid("purchase_id").references(() => creditPurchases.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -812,7 +810,7 @@ export const creditLedgerInOpod = opod.table(
   ],
 );
 
-export const creditProductsInOpod = opod.table(
+export const creditProducts = opod.table(
   "credit_products",
   {
     id: uuid()
@@ -843,7 +841,7 @@ export const creditProductsInOpod = opod.table(
   ],
 );
 
-export const creditPurchasesInOpod = opod.table(
+export const creditPurchases = opod.table(
   "credit_purchases",
   {
     id: uuid()
@@ -851,11 +849,11 @@ export const creditPurchasesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    status: creditPurchaseStatusInOpod().default("pending").notNull(),
+    status: creditPurchaseStatus().default("pending").notNull(),
     creditAmount: integer("credit_amount").notNull(),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
@@ -871,7 +869,7 @@ export const creditPurchasesInOpod = opod.table(
     productId: text("product_id").notNull(),
     creditProductId: uuid("credit_product_id")
       .notNull()
-      .references(() => creditProductsInOpod.id, {
+      .references(() => creditProducts.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -900,7 +898,7 @@ export const creditPurchasesInOpod = opod.table(
   ],
 );
 
-export const creditRefundInOpod = opod.table(
+export const creditRefund = opod.table(
   "credit_refund",
   {
     id: uuid()
@@ -908,11 +906,11 @@ export const creditRefundInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     purchaseId: uuid("purchase_id")
       .notNull()
-      .references(() => creditPurchasesInOpod.id, {
+      .references(() => creditPurchases.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    status: creditRefundStateInOpod().default("reserved").notNull(),
+    status: creditRefundState().default("reserved").notNull(),
     reason: text().default("user_request").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     creditAmount: integer("credit_amount").notNull(),
@@ -963,7 +961,7 @@ export const creditRefundInOpod = opod.table(
   ],
 );
 
-export const creditReservationsInOpod = opod.table(
+export const creditReservations = opod.table(
   "credit_reservations",
   {
     id: uuid()
@@ -971,13 +969,13 @@ export const creditReservationsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
     actionType: text("action_type").notNull(),
     amount: integer().notNull(),
-    status: creditReservationStatusInOpod().default("reserved").notNull(),
+    status: creditReservationStatus().default("reserved").notNull(),
     reference: text().notNull(),
     expiresAt: timestamp("expires_at", { precision: 6, withTimezone: true }),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
@@ -1001,18 +999,18 @@ export const creditReservationsInOpod = opod.table(
   ],
 );
 
-export const creditUsageInOpod = opod.table(
+export const creditUsage = opod.table(
   "credit_usage",
   {
     usageLedgerId: uuid("usage_ledger_id")
       .notNull()
-      .references(() => creditLedgerInOpod.id, {
+      .references(() => creditLedger.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     grantLedgerId: uuid("grant_ledger_id")
       .notNull()
-      .references(() => creditLedgerInOpod.id, {
+      .references(() => creditLedger.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -1030,7 +1028,7 @@ export const creditUsageInOpod = opod.table(
   ],
 );
 
-export const draftEvaluationsInOpod = opod.table(
+export const draftEvaluations = opod.table(
   "draft_evaluations",
   {
     id: uuid()
@@ -1038,13 +1036,13 @@ export const draftEvaluationsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     draftId: uuid("draft_id")
       .notNull()
-      .references(() => postDraftsInOpod.id, {
+      .references(() => postDrafts.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
-    kind: draftEvaluationKindInOpod().notNull(),
+    kind: draftEvaluationKind().notNull(),
     attempt: integer().default(1).notNull(),
-    status: draftEvaluationStatusInOpod().default("pending").notNull(),
+    status: draftEvaluationStatus().default("pending").notNull(),
     leaseExpiresAt: timestamp("lease_expires_at", {
       precision: 6,
       withTimezone: true,
@@ -1085,7 +1083,7 @@ export const draftEvaluationsInOpod = opod.table(
   ],
 );
 
-export const evaluationReportsInOpod = opod.table(
+export const evaluationReports = opod.table(
   "evaluation_reports",
   {
     id: uuid()
@@ -1115,7 +1113,7 @@ export const evaluationReportsInOpod = opod.table(
   ],
 );
 
-export const faqsInOpod = opod.table(
+export const faqs = opod.table(
   "faqs",
   {
     id: uuid()
@@ -1143,7 +1141,7 @@ export const faqsInOpod = opod.table(
   ],
 );
 
-export const generationJobOutputsInOpod = opod.table(
+export const generationJobOutputs = opod.table(
   "generation_job_outputs",
   {
     id: uuid()
@@ -1151,13 +1149,13 @@ export const generationJobOutputsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     jobId: uuid("job_id")
       .notNull()
-      .references(() => generationJobsInOpod.id, {
+      .references(() => generationJobs.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -1185,7 +1183,7 @@ export const generationJobOutputsInOpod = opod.table(
   ],
 );
 
-export const generationJobsInOpod = opod.table(
+export const generationJobs = opod.table(
   "generation_jobs",
   {
     id: uuid()
@@ -1193,16 +1191,16 @@ export const generationJobsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    mediaType: mediaTypeInOpod("media_type").notNull(),
+    mediaType: mediaType("media_type").notNull(),
     prompt: text().notNull(),
     inputPrompt: text("input_prompt"),
     candidateCount: integer("candidate_count"),
-    status: generationJobStatusInOpod().default("queued").notNull(),
-    outputMediaId: uuid("output_media_id").references(() => mediaInOpod.id, {
+    status: generationJobStatus().default("queued").notNull(),
+    outputMediaId: uuid("output_media_id").references(() => media.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -1223,7 +1221,7 @@ export const generationJobsInOpod = opod.table(
     updatedAt: timestamp("updated_at", { precision: 6, withTimezone: true })
       .notNull()
       .$onUpdateFn(() => new Date()),
-    draftId: uuid("draft_id").references(() => postDraftsInOpod.id, {
+    draftId: uuid("draft_id").references(() => postDrafts.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -1254,7 +1252,7 @@ export const generationJobsInOpod = opod.table(
   ],
 );
 
-export const hashtagsInOpod = opod.table(
+export const hashtags = opod.table(
   "hashtags",
   {
     id: uuid()
@@ -1276,7 +1274,7 @@ export const hashtagsInOpod = opod.table(
   ],
 );
 
-export const inquiriesInOpod = opod.table(
+export const inquiries = opod.table(
   "inquiries",
   {
     id: uuid()
@@ -1284,13 +1282,13 @@ export const inquiriesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
     category: text().notNull(),
     body: text().notNull(),
-    status: inquiryStatusInOpod().default("submitted").notNull(),
+    status: inquiryStatus().default("submitted").notNull(),
     answerBody: text("answer_body"),
     answeredAt: timestamp("answered_at", { precision: 6, withTimezone: true }),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
@@ -1314,22 +1312,22 @@ export const inquiriesInOpod = opod.table(
   ],
 );
 
-export const llmLogMediaInOpod = opod.table(
+export const llmLogMedia = opod.table(
   "llm_log_media",
   {
     llmLogId: bigint("llm_log_id", { mode: "bigint" })
       .notNull()
-      .references(() => llmLogsInOpod.id, {
+      .references(() => llmLogs.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    role: llmLogMediaRoleInOpod().notNull(),
+    role: llmLogMediaRole().notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
   },
   (table) => [
@@ -1344,14 +1342,14 @@ export const llmLogMediaInOpod = opod.table(
   ],
 );
 
-export const llmLogsInOpod = opod.table(
+export const llmLogs = opod.table(
   "llm_logs",
   {
     id: bigserial({ mode: "bigint" }).primaryKey(),
     type: text().notNull(),
     provider: text().notNull(),
     model: text().notNull(),
-    status: llmLogStatusInOpod().default("running").notNull(),
+    status: llmLogStatus().default("running").notNull(),
     endpoint: text(),
     isStreaming: boolean("is_streaming").default(false).notNull(),
     requestId: text("request_id"),
@@ -1359,7 +1357,7 @@ export const llmLogsInOpod = opod.table(
     userId: text("user_id"),
     characterId: text("character_id"),
     generationJobId: uuid("generation_job_id").references(
-      () => generationJobsInOpod.id,
+      () => generationJobs.id,
       { onDelete: "set null", onUpdate: "cascade" },
     ),
     systemPromptJson: jsonb("system_prompt_json"),
@@ -1435,13 +1433,13 @@ export const llmLogsInOpod = opod.table(
   ],
 );
 
-export const mediaInOpod = opod.table(
+export const media = opod.table(
   "media",
   {
     id: uuid()
       .primaryKey()
       .$defaultFn(() => createUuidV7()),
-    mediaType: mediaTypeInOpod("media_type").notNull(),
+    mediaType: mediaType("media_type").notNull(),
     url: text().notNull(),
     storageKey: text("storage_key"),
     contentType: text("content_type"),
@@ -1463,7 +1461,7 @@ export const mediaInOpod = opod.table(
   ],
 );
 
-export const messageConversationsInOpod = opod.table(
+export const messageConversations = opod.table(
   "message_conversations",
   {
     id: uuid()
@@ -1471,13 +1469,13 @@ export const messageConversationsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -1501,7 +1499,7 @@ export const messageConversationsInOpod = opod.table(
   ],
 );
 
-export const messageReplyJobsInOpod = opod.table(
+export const messageReplyJobs = opod.table(
   "message_reply_jobs",
   {
     id: uuid()
@@ -1509,12 +1507,12 @@ export const messageReplyJobsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     conversationId: uuid("conversation_id")
       .notNull()
-      .references(() => messageConversationsInOpod.id, {
+      .references(() => messageConversations.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     turnId: uuid("turn_id").notNull(),
-    status: messageReplyJobStatusInOpod().default("queued").notNull(),
+    status: messageReplyJobStatus().default("queued").notNull(),
     reservationReference: text("reservation_reference"),
     readyAt: timestamp("ready_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
@@ -1562,7 +1560,7 @@ export const messageReplyJobsInOpod = opod.table(
   ],
 );
 
-export const messagesInOpod = opod.table(
+export const messages = opod.table(
   "messages",
   {
     id: uuid()
@@ -1570,19 +1568,19 @@ export const messagesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     conversationId: uuid("conversation_id")
       .notNull()
-      .references(() => messageConversationsInOpod.id, {
+      .references(() => messageConversations.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
-    senderType: messageSenderTypeInOpod("sender_type").notNull(),
+    senderType: messageSenderType("sender_type").notNull(),
     body: text().notNull(),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
-    replyJobId: uuid("reply_job_id").references(
-      () => messageReplyJobsInOpod.id,
-      { onDelete: "set null", onUpdate: "cascade" },
-    ),
+    replyJobId: uuid("reply_job_id").references(() => messageReplyJobs.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
   },
   (table) => [
     index("messages_conversation_id_created_at_idx").using(
@@ -1597,7 +1595,7 @@ export const messagesInOpod = opod.table(
   ],
 );
 
-export const noticesInOpod = opod.table(
+export const notices = opod.table(
   "notices",
   {
     id: uuid()
@@ -1626,7 +1624,7 @@ export const noticesInOpod = opod.table(
   ],
 );
 
-export const notificationsInOpod = opod.table(
+export const notifications = opod.table(
   "notifications",
   {
     id: uuid()
@@ -1634,7 +1632,7 @@ export const notificationsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -1663,7 +1661,7 @@ export const notificationsInOpod = opod.table(
   ],
 );
 
-export const paymentLedgerInOpod = opod.table(
+export const paymentLedger = opod.table(
   "payment_ledger",
   {
     id: uuid()
@@ -1671,17 +1669,17 @@ export const paymentLedgerInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     paymentId: uuid("payment_id")
       .notNull()
-      .references(() => paymentsInOpod.id, {
+      .references(() => payments.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    type: paymentLedgerTypeInOpod().notNull(),
-    direction: paymentDirectionInOpod().notNull(),
+    type: paymentLedgerType().notNull(),
+    direction: paymentDirection().notNull(),
     amount: integer(),
     currency: text(),
     providerTransactionId: text("provider_transaction_id"),
     providerEventId: text("provider_event_id"),
-    adminId: uuid("admin_id").references(() => adminsInOpod.id, {
+    adminId: uuid("admin_id").references(() => admins.id, {
       onDelete: "restrict",
       onUpdate: "cascade",
     }),
@@ -1718,7 +1716,7 @@ export const paymentLedgerInOpod = opod.table(
   ],
 );
 
-export const paymentProductMappingsInOpod = opod.table(
+export const paymentProductMappings = opod.table(
   "payment_product_mappings",
   {
     id: uuid()
@@ -1726,11 +1724,11 @@ export const paymentProductMappingsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     creditProductId: uuid("credit_product_id")
       .notNull()
-      .references(() => creditProductsInOpod.id, {
+      .references(() => creditProducts.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    channel: paymentChannelInOpod().notNull(),
+    channel: paymentChannel().notNull(),
     provider: text().notNull(),
     environment: text().notNull(),
     providerProductId: text("provider_product_id").notNull(),
@@ -1774,20 +1772,20 @@ export const paymentProductMappingsInOpod = opod.table(
   ],
 );
 
-export const paymentProviderEventsInOpod = opod.table(
+export const paymentProviderEvents = opod.table(
   "payment_provider_events",
   {
     id: uuid()
       .primaryKey()
       .$defaultFn(() => createUuidV7()),
-    paymentId: uuid("payment_id").references(() => paymentsInOpod.id, {
+    paymentId: uuid("payment_id").references(() => payments.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
     provider: text().notNull(),
     externalEventId: text("external_event_id").notNull(),
     eventType: text("event_type").notNull(),
-    status: paymentProviderEventStatusInOpod().default("processing").notNull(),
+    status: paymentProviderEventStatus().default("processing").notNull(),
     attempts: integer().default(1).notNull(),
     lastErrorCode: text("last_error_code"),
     processedAt: timestamp("processed_at", {
@@ -1815,7 +1813,7 @@ export const paymentProviderEventsInOpod = opod.table(
   ],
 );
 
-export const paymentsInOpod = opod.table(
+export const payments = opod.table(
   "payments",
   {
     id: uuid()
@@ -1823,13 +1821,13 @@ export const paymentsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     purchaseId: uuid("purchase_id")
       .notNull()
-      .references(() => creditPurchasesInOpod.id, {
+      .references(() => creditPurchases.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    channel: paymentChannelInOpod().notNull(),
+    channel: paymentChannel().notNull(),
     provider: text().notNull(),
-    status: paymentStatusInOpod().default("pending").notNull(),
+    status: paymentStatus().default("pending").notNull(),
     amount: integer(),
     currency: text(),
     providerCheckoutId: text("provider_checkout_id"),
@@ -1883,7 +1881,7 @@ export const paymentsInOpod = opod.table(
   ],
 );
 
-export const postCommentsInOpod = opod.table(
+export const postComments = opod.table(
   "post_comments",
   {
     id: uuid()
@@ -1891,15 +1889,15 @@ export const postCommentsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     postId: uuid("post_id")
       .notNull()
-      .references(() => postsInOpod.id, {
+      .references(() => posts.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
-    characterId: uuid("character_id").references(() => charactersInOpod.id, {
+    characterId: uuid("character_id").references(() => characters.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    userId: uuid("user_id").references(() => usersInOpod.id, {
+    userId: uuid("user_id").references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -1927,7 +1925,7 @@ export const postCommentsInOpod = opod.table(
   ],
 );
 
-export const postDraftsInOpod = opod.table(
+export const postDrafts = opod.table(
   "post_drafts",
   {
     id: uuid()
@@ -1935,20 +1933,18 @@ export const postDraftsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    draftType: postDraftTypeInOpod("draft_type").default("post").notNull(),
-    contentType: postContentTypeInOpod("content_type")
-      .default("feed")
-      .notNull(),
+    draftType: postDraftType("draft_type").default("post").notNull(),
+    contentType: postContentType("content_type").default("feed").notNull(),
     caption: text().default("").notNull(),
     hashtags: text()
       .array()
       .default(sql`ARRAY[]`),
     conceptJson: jsonb("concept_json"),
-    status: postDraftStatusInOpod().default("planned").notNull(),
+    status: postDraftStatus().default("planned").notNull(),
     errorMessage: text("error_message"),
     leaseExpiresAt: timestamp("lease_expires_at", {
       precision: 6,
@@ -1959,24 +1955,24 @@ export const postDraftsInOpod = opod.table(
       precision: 6,
       withTimezone: true,
     }),
-    publishedPostId: uuid("published_post_id").references(
-      () => postsInOpod.id,
-      { onDelete: "set null", onUpdate: "cascade" },
-    ),
-    publishedStoryId: uuid("published_story_id").references(
-      () => storiesInOpod.id,
-      { onDelete: "set null", onUpdate: "cascade" },
-    ),
+    publishedPostId: uuid("published_post_id").references(() => posts.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    publishedStoryId: uuid("published_story_id").references(() => stories.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
     updatedAt: timestamp("updated_at", { precision: 6, withTimezone: true })
       .notNull()
       .$onUpdateFn(() => new Date()),
-    locationId: uuid("location_id").references(
-      () => characterLocationsInOpod.id,
-      { onDelete: "restrict", onUpdate: "cascade" },
-    ),
+    locationId: uuid("location_id").references(() => characterLocations.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
   },
   (table) => [
     index("post_drafts_character_id_created_at_idx").using(
@@ -2002,18 +1998,18 @@ export const postDraftsInOpod = opod.table(
   ],
 );
 
-export const postHashtagsInOpod = opod.table(
+export const postHashtags = opod.table(
   "post_hashtags",
   {
     postId: uuid("post_id")
       .notNull()
-      .references(() => postsInOpod.id, {
+      .references(() => posts.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     hashtagId: uuid("hashtag_id")
       .notNull()
-      .references(() => hashtagsInOpod.id, {
+      .references(() => hashtags.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -2030,18 +2026,18 @@ export const postHashtagsInOpod = opod.table(
   ],
 );
 
-export const postMediaInOpod = opod.table(
+export const postMedia = opod.table(
   "post_media",
   {
     postId: uuid("post_id")
       .notNull()
-      .references(() => postsInOpod.id, {
+      .references(() => posts.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -2055,7 +2051,7 @@ export const postMediaInOpod = opod.table(
   ],
 );
 
-export const postReactionsInOpod = opod.table(
+export const postReactions = opod.table(
   "post_reactions",
   {
     id: uuid()
@@ -2063,15 +2059,15 @@ export const postReactionsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     postId: uuid("post_id")
       .notNull()
-      .references(() => postsInOpod.id, {
+      .references(() => posts.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
-    characterId: uuid("character_id").references(() => charactersInOpod.id, {
+    characterId: uuid("character_id").references(() => characters.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    userId: uuid("user_id").references(() => usersInOpod.id, {
+    userId: uuid("user_id").references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
@@ -2105,24 +2101,24 @@ export const postReactionsInOpod = opod.table(
   ],
 );
 
-export const postsInOpod = opod.table("posts", {
+export const posts = opod.table("posts", {
   id: uuid()
     .primaryKey()
     .$defaultFn(() => createUuidV7()),
   characterId: uuid("character_id")
     .notNull()
-    .references(() => charactersInOpod.id, {
+    .references(() => characters.id, {
       onDelete: "restrict",
       onUpdate: "cascade",
     }),
-  contentType: postContentTypeInOpod("content_type").default("feed").notNull(),
+  contentType: postContentType("content_type").default("feed").notNull(),
   content: text().default("").notNull(),
   createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
     .default(sql`CURRENT_TIMESTAMP`)
     .notNull(),
 });
 
-export const reportsInOpod = opod.table(
+export const reports = opod.table(
   "reports",
   {
     id: uuid()
@@ -2130,16 +2126,16 @@ export const reportsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     reporterUserId: uuid("reporter_user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    targetType: reportTargetTypeInOpod("target_type").notNull(),
+    targetType: reportTargetType("target_type").notNull(),
     targetId: uuid("target_id").notNull(),
     reason: text().notNull(),
     details: text(),
     resolution: text(),
-    status: reportStatusInOpod().default("submitted").notNull(),
+    status: reportStatus().default("submitted").notNull(),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -2161,7 +2157,7 @@ export const reportsInOpod = opod.table(
   ],
 );
 
-export const serviceLogsInOpod = opod.table(
+export const serviceLogs = opod.table(
   "service_logs",
   {
     id: bigserial({ mode: "bigint" }).primaryKey(),
@@ -2187,7 +2183,7 @@ export const serviceLogsInOpod = opod.table(
   ],
 );
 
-export const storiesInOpod = opod.table(
+export const stories = opod.table(
   "stories",
   {
     id: uuid()
@@ -2195,13 +2191,13 @@ export const storiesInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
     mediaId: uuid("media_id")
       .notNull()
-      .references(() => mediaInOpod.id, {
+      .references(() => media.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -2229,13 +2225,13 @@ export const storiesInOpod = opod.table(
   ],
 );
 
-export const termsDocumentsInOpod = opod.table(
+export const termsDocuments = opod.table(
   "terms_documents",
   {
     id: uuid()
       .primaryKey()
       .$defaultFn(() => createUuidV7()),
-    type: consentTypeInOpod().notNull(),
+    type: consentType().notNull(),
     version: text().notNull(),
     title: text().notNull(),
     body: text().notNull(),
@@ -2264,7 +2260,7 @@ export const termsDocumentsInOpod = opod.table(
   ],
 );
 
-export const unsettledCreditDebtsInOpod = opod.table(
+export const unsettledCreditDebts = opod.table(
   "unsettled_credit_debts",
   {
     identityHash: text("identity_hash").primaryKey(),
@@ -2279,7 +2275,7 @@ export const unsettledCreditDebtsInOpod = opod.table(
   () => [check("unsettled_credit_debts_paid_debt_check", sql`(paid_debt > 0)`)],
 );
 
-export const userAccountsInOpod = opod.table(
+export const userAccounts = opod.table(
   "user_accounts",
   {
     id: uuid()
@@ -2287,7 +2283,7 @@ export const userAccountsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -2320,18 +2316,18 @@ export const userAccountsInOpod = opod.table(
   ],
 );
 
-export const userCharacterFollowsInOpod = opod.table(
+export const userCharacterFollows = opod.table(
   "user_character_follows",
   {
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
     characterId: uuid("character_id")
       .notNull()
-      .references(() => charactersInOpod.id, {
+      .references(() => characters.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -2353,7 +2349,7 @@ export const userCharacterFollowsInOpod = opod.table(
   ],
 );
 
-export const userConsentsInOpod = opod.table(
+export const userConsents = opod.table(
   "user_consents",
   {
     id: uuid()
@@ -2361,11 +2357,11 @@ export const userConsentsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
-    type: consentTypeInOpod().notNull(),
+    type: consentType().notNull(),
     version: text().notNull(),
     agreed: boolean().notNull(),
     createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
@@ -2382,7 +2378,7 @@ export const userConsentsInOpod = opod.table(
   ],
 );
 
-export const userEventsInOpod = opod.table(
+export const userEvents = opod.table(
   "user_events",
   {
     id: uuid()
@@ -2390,7 +2386,7 @@ export const userEventsInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
@@ -2416,18 +2412,18 @@ export const userEventsInOpod = opod.table(
   ],
 );
 
-export const userHashtagPreferencesInOpod = opod.table(
+export const userHashtagPreferences = opod.table(
   "user_hashtag_preferences",
   {
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "restrict",
         onUpdate: "cascade",
       }),
     hashtagId: uuid("hashtag_id")
       .notNull()
-      .references(() => hashtagsInOpod.id, {
+      .references(() => hashtags.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -2448,7 +2444,7 @@ export const userHashtagPreferencesInOpod = opod.table(
   ],
 );
 
-export const userRefreshTokensInOpod = opod.table(
+export const userRefreshTokens = opod.table(
   "user_refresh_tokens",
   {
     id: uuid()
@@ -2456,7 +2452,7 @@ export const userRefreshTokensInOpod = opod.table(
       .$defaultFn(() => createUuidV7()),
     userId: uuid("user_id")
       .notNull()
-      .references(() => usersInOpod.id, {
+      .references(() => users.id, {
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
@@ -2479,7 +2475,7 @@ export const userRefreshTokensInOpod = opod.table(
   ],
 );
 
-export const userWithdrawalsInOpod = opod.table("user_withdrawals", {
+export const userWithdrawals = opod.table("user_withdrawals", {
   id: uuid()
     .primaryKey()
     .$defaultFn(() => createUuidV7()),
@@ -2491,7 +2487,7 @@ export const userWithdrawalsInOpod = opod.table("user_withdrawals", {
     .notNull(),
 });
 
-export const usersInOpod = opod.table(
+export const users = opod.table(
   "users",
   {
     id: uuid()

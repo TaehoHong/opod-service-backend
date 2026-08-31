@@ -1,5 +1,7 @@
 import { Injectable } from "@nestjs/common";
-import { PrismaService } from "../database/prisma.service";
+import { and, arrayContains, desc, eq, ilike, or } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { characters, media } from "../database/schema";
 import { isUuid } from "../database/uuid";
 import { publicMediaUrl } from "../media/media-url";
 
@@ -21,7 +23,8 @@ export type Character = {
   };
 };
 
-type CharacterRow = Omit<Character, "profileImage"> & {
+type CharacterRow = Omit<Character, "profileImage" | "interests"> & {
+  interests: string[] | null;
   profileImageCropX: number;
   profileImageCropY: number;
   profileImageCropZoom: number;
@@ -35,76 +38,85 @@ type CharacterRow = Omit<Character, "profileImage"> & {
 
 @Injectable()
 export class CharactersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async hasCharacter(characterId: string): Promise<boolean> {
     if (!isUuid(characterId)) {
       return false;
     }
-    const character = await this.prisma.character.findFirst({
-      where: { id: characterId, status: "active" },
-      select: { id: true },
-    });
-    return character !== null;
+    const [character] = await this.database.client
+      .select({ id: characters.id })
+      .from(characters)
+      .where(
+        and(eq(characters.id, characterId), eq(characters.status, "active")),
+      )
+      .limit(1);
+    return character !== undefined;
   }
 
   async listCharacters(): Promise<Character[]> {
-    const characters = await this.prisma.character.findMany({
-      where: { status: "active" },
-      orderBy: { createdAt: "desc" },
-      select: this.characterFields,
-    });
-    return characters.map((character) => this.toCharacter(character));
+    const rows = await this.database.client
+      .select(this.characterFields)
+      .from(characters)
+      .leftJoin(media, eq(characters.profileImageId, media.id))
+      .where(eq(characters.status, "active"))
+      .orderBy(desc(characters.createdAt));
+    return rows.map((character) => this.toCharacter(character));
   }
 
   async searchCharacters(query: string, limit: number): Promise<Character[]> {
     const term = query.trim();
-    const characters = await this.prisma.character.findMany({
-      where: {
-        status: "active",
-        OR: [
-          { publicId: { contains: term, mode: "insensitive" } },
-          { displayName: { contains: term, mode: "insensitive" } },
-          { bio: { contains: term, mode: "insensitive" } },
-          { interests: { has: term } },
-        ],
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-      select: this.characterFields,
-    });
-    return characters.map((character) => this.toCharacter(character));
+    const rows = await this.database.client
+      .select(this.characterFields)
+      .from(characters)
+      .leftJoin(media, eq(characters.profileImageId, media.id))
+      .where(
+        and(
+          eq(characters.status, "active"),
+          or(
+            ilike(characters.publicId, `%${term}%`),
+            ilike(characters.displayName, `%${term}%`),
+            ilike(characters.bio, `%${term}%`),
+            arrayContains(characters.interests, [term]),
+          ),
+        ),
+      )
+      .orderBy(desc(characters.createdAt))
+      .limit(limit);
+    return rows.map((character) => this.toCharacter(character));
   }
 
   async findCharacter(characterId: string): Promise<Character | null> {
     if (!isUuid(characterId)) {
       return null;
     }
-    const character = await this.prisma.character.findFirst({
-      where: { id: characterId, status: "active" },
-      select: this.characterFields,
-    });
+    const [character] = await this.database.client
+      .select(this.characterFields)
+      .from(characters)
+      .leftJoin(media, eq(characters.profileImageId, media.id))
+      .where(
+        and(eq(characters.id, characterId), eq(characters.status, "active")),
+      )
+      .limit(1);
     return character ? this.toCharacter(character) : null;
   }
 
   private readonly characterFields = {
-    id: true,
-    publicId: true,
-    displayName: true,
-    bio: true,
-    interests: true,
-    profileImageCropX: true,
-    profileImageCropY: true,
-    profileImageCropZoom: true,
+    id: characters.id,
+    publicId: characters.publicId,
+    displayName: characters.displayName,
+    bio: characters.bio,
+    interests: characters.interests,
+    profileImageCropX: characters.profileImageCropX,
+    profileImageCropY: characters.profileImageCropY,
+    profileImageCropZoom: characters.profileImageCropZoom,
     profileImage: {
-      select: {
-        url: true,
-        storageKey: true,
-        width: true,
-        height: true,
-      },
+      url: media.url,
+      storageKey: media.storageKey,
+      width: media.width,
+      height: media.height,
     },
-  } as const;
+  };
 
   private toCharacter(character: CharacterRow): Character {
     return {
@@ -112,7 +124,7 @@ export class CharactersService {
       publicId: character.publicId,
       displayName: character.displayName,
       bio: character.bio,
-      interests: character.interests,
+      interests: character.interests ?? [],
       ...(character.profileImage
         ? {
             profileImage: {
