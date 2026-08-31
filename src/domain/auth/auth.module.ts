@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConsentsModule } from "../consents/consents.module";
 import { CreditsModule } from "../credits/credits.module";
-import { PrismaModule } from "../database/prisma.module";
+import { DatabaseModule } from "../database/database.module";
 import { AuthService } from "./auth.service";
 import { GoogleSocialIdentityProvider } from "./google-social-identity.provider";
 import {
@@ -10,7 +10,7 @@ import {
 } from "./social-identity.provider";
 
 @Module({
-  imports: [ConsentsModule, CreditsModule, PrismaModule],
+  imports: [ConsentsModule, CreditsModule, DatabaseModule],
   providers: [
     GoogleSocialIdentityProvider,
     {

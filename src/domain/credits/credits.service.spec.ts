@@ -1,4 +1,5 @@
 import { ConflictException } from "@nestjs/common";
+import { queryReturning } from "../../../test/drizzle-mock";
 import { CreditsService } from "./credits.service";
 
 describe("CreditsService", () => {
@@ -18,21 +19,21 @@ describe("CreditsService", () => {
 
   function harness(existing: typeof row | null = null) {
     const client = {
-      $executeRaw: jest.fn().mockResolvedValue(0),
-      creditLedger: {
-        findUnique: jest.fn().mockResolvedValue(existing),
-        create: jest.fn().mockResolvedValue(row),
-      },
+      execute: jest.fn().mockResolvedValue({ rows: [] }),
+      select: jest.fn(() => queryReturning(existing ? [existing] : [])),
+      insert: jest.fn(() => queryReturning([row])),
     };
-    const prisma = {
-      ...client,
-      $transaction: jest.fn(async (work: (tx: typeof client) => unknown) =>
+    const database = {
+      client: {
+        ...client,
+        transaction: jest.fn(async (work: (tx: typeof client) => unknown) =>
         work(client),
-      ),
+        ),
+      },
     };
     return {
       client,
-      service: new CreditsService(prisma as never),
+      service: new CreditsService(database as never),
     };
   }
 
@@ -60,7 +61,7 @@ describe("CreditsService", () => {
         externalReference: row.externalReference,
       }),
     ).resolves.toMatchObject({ id: row.id, type: "grant", amount: 500 });
-    expect(client.creditLedger.create).not.toHaveBeenCalled();
+    expect(client.insert).not.toHaveBeenCalled();
   });
 
   it("rejects reuse of a grant reference with different facts", async () => {

@@ -14,9 +14,28 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
+import { and, count, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { ConsentsService } from "../consents/consents.service";
 import { CreditsService } from "../credits/credits.service";
-import { PrismaService } from "../database/prisma.service";
+import {
+  DatabaseService,
+  type DatabaseClient,
+} from "../database/database.service";
+import {
+  creditLedger,
+  creditPurchases,
+  creditRefund,
+  messageConversations,
+  notifications,
+  unsettledCreditDebts,
+  userAccounts,
+  userCharacterFollows,
+  userEvents,
+  userHashtagPreferences,
+  userRefreshTokens,
+  users,
+  userWithdrawals,
+} from "../database/schema";
 import {
   SOCIAL_IDENTITY_PROVIDERS,
   SocialIdentityProvider,
@@ -76,13 +95,8 @@ type AuthTokens = {
 };
 
 type AuthSessionClient = Pick<
-  PrismaService,
-  | "user"
-  | "userAccount"
-  | "userRefreshToken"
-  | "userEvent"
-  | "userConsent"
-  | "$executeRaw"
+  DatabaseClient,
+  "select" | "insert" | "update" | "delete" | "execute"
 >;
 
 type JwtPayload = {
@@ -92,27 +106,23 @@ type JwtPayload = {
 };
 
 const authUserFields = {
-  id: true,
-  displayName: true,
-  bio: true,
-  profileImageUrl: true,
-  email: true,
-  passwordHash: true,
-  passwordSalt: true,
-  adultIdentityHash: true,
-  debtIdentityHash: true,
+  id: users.id,
+  displayName: users.displayName,
+  bio: users.bio,
+  profileImageUrl: users.profileImageUrl,
+  email: users.email,
+  passwordHash: users.passwordHash,
+  passwordSalt: users.passwordSalt,
+  adultIdentityHash: users.adultIdentityHash,
+  debtIdentityHash: users.debtIdentityHash,
 } as const;
 
 const publicUserFields = {
-  id: true,
-  displayName: true,
-  bio: true,
-  profileImageUrl: true,
-  email: true,
-  userAccounts: {
-    select: { email: true },
-    orderBy: { createdAt: "asc" as const },
-  },
+  id: users.id,
+  displayName: users.displayName,
+  bio: users.bio,
+  profileImageUrl: users.profileImageUrl,
+  email: users.email,
 } as const;
 
 const withdrawalReasonCategories = [
@@ -130,7 +140,7 @@ const defaultRefreshTokenTtlSeconds = 14 * 24 * 60 * 60;
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly creditsService: CreditsService,
     private readonly consentsService: ConsentsService,
     @Inject(SOCIAL_IDENTITY_PROVIDERS)
@@ -164,7 +174,7 @@ export class AuthService {
     const passwordHash = await this.hashPassword(password, passwordSalt);
 
     // 계정과 동의 증빙은 함께 남아야 한다 — 한쪽만 남는 상태를 만들지 않는다.
-    const user = await this.prisma.$transaction(async (tx) => {
+    const user = await this.database.client.transaction(async (tx) => {
       const created = await this.createAuthUser(
         { email, displayName, passwordHash, passwordSalt },
         tx,
@@ -194,12 +204,13 @@ export class AuthService {
       throw new UnauthorizedException("Invalid email or password");
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserSessions(tx, user.id);
-      const currentUser = (await tx.user.findUnique({
-        where: { id: user.id },
-        select: authUserFields,
-      })) as AuthUser | null;
+      const [currentUser] = await tx
+        .select(authUserFields)
+        .from(users)
+        .where(eq(users.id, user.id))
+        .limit(1);
       if (
         !currentUser?.email ||
         !currentUser.passwordHash ||
@@ -237,7 +248,7 @@ export class AuthService {
 
     const idToken = this.requiredString(input?.idToken, "idToken");
     const identity = await identityProvider.verify(idToken);
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.database.client.transaction(async (tx) => {
       await this.lockSocialIdentity(tx, provider, identity.providerAccountId);
 
       const existing = await this.findSocialAccount(
@@ -255,12 +266,12 @@ export class AuthService {
         const accountEmail =
           identity.email && identity.email !== existing.email
             ? (
-                await tx.userAccount.update({
-                  where: { id: existing.id },
-                  data: { email: identity.email },
-                  select: { email: true },
-                })
-              ).email
+                await tx
+                  .update(userAccounts)
+                  .set({ email: identity.email })
+                  .where(eq(userAccounts.id, existing.id))
+                  .returning({ email: userAccounts.email })
+              )[0].email
             : existing.email;
 
         return {
@@ -283,19 +294,19 @@ export class AuthService {
         clientDisplayName ||
         this.randomSocialDisplayName();
 
-      const user = (await tx.user.create({
-        data: { displayName },
-        select: authUserFields,
-      })) as AuthUser;
-      const account = await tx.userAccount.create({
-        data: {
+      const [user] = await tx
+        .insert(users)
+        .values({ displayName })
+        .returning(authUserFields);
+      const [account] = await tx
+        .insert(userAccounts)
+        .values({
           userId: user.id,
           provider,
           providerAccountId: identity.providerAccountId,
           email: identity.email,
-        },
-        select: { email: true },
-      });
+        })
+        .returning({ email: userAccounts.email });
       await this.consentsService.recordConsents(tx, user.id, consents);
 
       return {
@@ -331,21 +342,24 @@ export class AuthService {
     }
 
     const user = this.toPublicUserFromRefresh(row);
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserSessions(tx, row.userId);
       const cutoff = new Date(
         Date.now() - this.refreshTokenTtlSeconds() * 1000,
       );
-      const result = await tx.userRefreshToken.updateMany({
-        where: {
-          tokenHash: row.tokenHash,
-          userId: row.userId,
-          revokedAt: null,
-          createdAt: { gt: cutoff },
-        },
-        data: { revokedAt: new Date() },
-      });
-      if (result.count !== 1) {
+      const revoked = await tx
+        .update(userRefreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(userRefreshTokens.tokenHash, row.tokenHash),
+            eq(userRefreshTokens.userId, row.userId),
+            isNull(userRefreshTokens.revokedAt),
+            gt(userRefreshTokens.createdAt, cutoff),
+          ),
+        )
+        .returning({ id: userRefreshTokens.id });
+      if (revoked.length !== 1) {
         throw new UnauthorizedException("Refresh token is invalid");
       }
 
@@ -357,12 +371,18 @@ export class AuthService {
     const tokenHash = this.hashToken(
       this.requiredString(refreshToken, "refreshToken"),
     );
-    const result = await this.prisma.userRefreshToken.updateMany({
-      where: { tokenHash, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    const result = await this.database.client
+      .update(userRefreshTokens)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(userRefreshTokens.tokenHash, tokenHash),
+          isNull(userRefreshTokens.revokedAt),
+        ),
+      )
+      .returning({ id: userRefreshTokens.id });
 
-    if (result.count !== 1) {
+    if (result.length !== 1) {
       throw new UnauthorizedException("Refresh token is invalid");
     }
     return { revoked: true };
@@ -412,10 +432,11 @@ export class AuthService {
   ): Promise<AuthTokens> {
     const userId = await this.userIdFromAuthorization(authorization);
 
-    const user = (await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: authUserFields,
-    })) as AuthUser | null;
+    const [user] = await this.database.client
+      .select(authUserFields)
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     if (!user) {
       throw new UnauthorizedException("Access token is invalid");
     }
@@ -442,12 +463,13 @@ export class AuthService {
     const passwordSalt = randomBytes(16).toString("base64url");
     const passwordHash = await this.hashPassword(newPassword, passwordSalt);
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserSessions(tx, userId);
-      const currentUser = (await tx.user.findUnique({
-        where: { id: userId },
-        select: authUserFields,
-      })) as AuthUser | null;
+      const [currentUser] = await tx
+        .select(authUserFields)
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       if (
         !currentUser?.email ||
         !currentUser.passwordHash ||
@@ -463,22 +485,24 @@ export class AuthService {
       ) {
         throw new BadRequestException("Current password is incorrect");
       }
-      await tx.user.update({
-        where: { id: userId },
-        data: { passwordHash, passwordSalt },
-        select: { id: true },
-      });
-      await tx.userRefreshToken.updateMany({
-        where: { userId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-      await tx.userEvent.create({
-        data: {
+      await tx
+        .update(users)
+        .set({ passwordHash, passwordSalt })
+        .where(eq(users.id, userId));
+      await tx
+        .update(userRefreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(userRefreshTokens.userId, userId),
+            isNull(userRefreshTokens.revokedAt),
+          ),
+        );
+      await tx.insert(userEvents).values({
           userId,
           eventType: "auth.password_changed",
           targetType: "user",
           targetId: userId,
-        },
       });
 
       return this.issueTokens(this.toPublicUser(currentUser), tx);
@@ -500,10 +524,11 @@ export class AuthService {
     const reasonCategory = this.optionalWithdrawalReason(input?.reasonCategory);
     const reasonText = this.optionalReasonText(input?.reasonText);
 
-    const user = (await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: authUserFields,
-    })) as AuthUser | null;
+    const [user] = await this.database.client
+      .select(authUserFields)
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     if (!user?.email) {
       throw new UnauthorizedException("Access token is invalid");
     }
@@ -515,7 +540,7 @@ export class AuthService {
       throw new BadRequestException("Password is incorrect");
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    await this.database.client.transaction(async (tx) => {
       const identityHash =
         user.adultIdentityHash ?? user.debtIdentityHash ?? null;
       if (identityHash) {
@@ -523,23 +548,37 @@ export class AuthService {
       }
       await this.lockUser(tx, userId);
 
-      const [paidBalance, activeRefunds, pendingPurchases] = await Promise.all([
+      const [paidBalance, activeRefundRows, pendingPurchaseRows] = await Promise.all([
         this.creditsService.getPaidBalanceWithClient(tx, userId),
-        tx.creditRefund.count({
-          where: {
-            purchase: { userId },
-            status: {
-              in: ["reserved", "payment_processing", "payment_succeeded"],
-            },
-          },
-        }),
-        tx.creditPurchase.count({
-          where: {
-            userId,
-            status: { in: ["pending", "payment_processing"] },
-          },
-        }),
+        tx
+          .select({ value: count() })
+          .from(creditRefund)
+          .innerJoin(
+            creditPurchases,
+            eq(creditRefund.purchaseId, creditPurchases.id),
+          )
+          .where(
+            and(
+              eq(creditPurchases.userId, userId),
+              inArray(creditRefund.status, [
+                "reserved",
+                "payment_processing",
+                "payment_succeeded",
+              ]),
+            ),
+          ),
+        tx
+          .select({ value: count() })
+          .from(creditPurchases)
+          .where(
+            and(
+              eq(creditPurchases.userId, userId),
+              inArray(creditPurchases.status, ["pending", "payment_processing"]),
+            ),
+          ),
       ]);
+      const activeRefunds = activeRefundRows[0]?.value ?? 0;
+      const pendingPurchases = pendingPurchaseRows[0]?.value ?? 0;
       if (paidBalance > 0 || activeRefunds > 0 || pendingPurchases > 0) {
         throw new ConflictException(
           "Paid credits and pending payments must be settled before withdrawal",
@@ -547,18 +586,19 @@ export class AuthService {
       }
       const paidDebt = Math.max(0, -paidBalance);
       if (paidDebt > 0 && identityHash) {
-        await tx.unsettledCreditDebt.upsert({
-          where: { identityHash },
-          create: { identityHash, paidDebt },
-          update: { paidDebt: { increment: paidDebt } },
-        });
+        await tx
+          .insert(unsettledCreditDebts)
+          .values({ identityHash, paidDebt })
+          .onConflictDoUpdate({
+            target: unsettledCreditDebts.identityHash,
+            set: { paidDebt: sql`${unsettledCreditDebts.paidDebt} + ${paidDebt}` },
+          });
       }
 
       // users 행은 결제·분쟁 기록의 익명 FK 대상으로 유지한다.
-      await Promise.all([
-        tx.user.update({
-          where: { id: userId },
-          data: {
+      await tx
+        .update(users)
+        .set({
             email: null,
             passwordHash: null,
             passwordSalt: null,
@@ -569,19 +609,16 @@ export class AuthService {
             adultIdentityHash: null,
             debtIdentityHash: null,
             deletedAt: new Date(),
-          },
-          select: { id: true },
-        }),
-        tx.userRefreshToken.deleteMany({ where: { userId } }),
+        })
+        .where(eq(users.id, userId));
+      await Promise.all([
+        tx.delete(userRefreshTokens).where(eq(userRefreshTokens.userId, userId)),
         // 메시지는 conversation FK cascade로 함께 삭제된다.
-        tx.messageConversation.deleteMany({ where: { userId } }),
-        tx.notification.deleteMany({ where: { userId } }),
-        tx.userCharacterFollow.deleteMany({ where: { userId } }),
-        tx.userHashtagPreference.deleteMany({ where: { userId } }),
-        tx.userWithdrawal.create({
-          data: { userId, reasonCategory, reasonText },
-          select: { id: true },
-        }),
+        tx.delete(messageConversations).where(eq(messageConversations.userId, userId)),
+        tx.delete(notifications).where(eq(notifications.userId, userId)),
+        tx.delete(userCharacterFollows).where(eq(userCharacterFollows.userId, userId)),
+        tx.delete(userHashtagPreferences).where(eq(userHashtagPreferences.userId, userId)),
+        tx.insert(userWithdrawals).values({ userId, reasonCategory, reasonText }),
       ]);
     });
 
@@ -610,56 +647,65 @@ export class AuthService {
     providerIdentityKey: string,
   ): Promise<{ adultVerified: true; debtApplied: number; paidDebt: number }> {
     const identityHash = this.hashAdultIdentity(providerIdentityKey);
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockAdultIdentity(tx, identityHash);
       await this.lockUser(tx, userId);
 
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { id: true, deletedAt: true },
-      });
+      const [user] = await tx
+        .select({ id: users.id, deletedAt: users.deletedAt })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       if (!user || user.deletedAt) {
         throw new UnauthorizedException("Access token is invalid");
       }
-      const linked = await tx.user.findFirst({
-        where: {
-          adultIdentityHash: identityHash,
-          id: { not: userId },
-          deletedAt: null,
-        },
-        select: { id: true },
-      });
+      const [linked] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(
+            eq(users.adultIdentityHash, identityHash),
+            ne(users.id, userId),
+            isNull(users.deletedAt),
+          ),
+        )
+        .limit(1);
       if (linked) {
         throw new ConflictException("Adult identity is already linked");
       }
 
       const [unsettled, currentPaidBalance] = await Promise.all([
-        tx.unsettledCreditDebt.findUnique({ where: { identityHash } }),
+        tx
+          .select()
+          .from(unsettledCreditDebts)
+          .where(eq(unsettledCreditDebts.identityHash, identityHash))
+          .limit(1)
+          .then((rows) => rows[0]),
         this.creditsService.getPaidBalanceWithClient(tx, userId),
       ]);
       const debtApplied = unsettled?.paidDebt ?? 0;
       const paidDebt = Math.max(0, -currentPaidBalance) + debtApplied;
       if (debtApplied > 0) {
-        await tx.creditLedger.create({
-          data: {
+        await tx.insert(creditLedger).values({
             userId,
             type: "adjustment",
             creditKind: "paid",
             amount: -debtApplied,
             reason: "unsettled identity debt transfer",
             externalReference: `identity_debt:${identityHash}`,
-          },
         });
-        await tx.unsettledCreditDebt.delete({ where: { identityHash } });
+        await tx
+          .delete(unsettledCreditDebts)
+          .where(eq(unsettledCreditDebts.identityHash, identityHash));
       }
-      await tx.user.update({
-        where: { id: userId },
-        data: {
+      await tx
+        .update(users)
+        .set({
           adultVerifiedAt: new Date(),
           adultIdentityHash: identityHash,
           debtIdentityHash: paidDebt > 0 ? identityHash : null,
-        },
-      });
+        })
+        .where(eq(users.id, userId));
 
       return { adultVerified: true, debtApplied, paidDebt };
     });
@@ -690,25 +736,22 @@ export class AuthService {
       throw new BadRequestException("profile update is required");
     }
 
-    const user = (await this.prisma.user.update({
-      where: { id: userId },
-      data,
-      select: publicUserFields,
-    })) as PublicAuthUserSource;
-    return this.toPublicUser(user);
+    const [user] = await this.database.client
+      .update(users)
+      .set(data)
+      .where(eq(users.id, userId))
+      .returning(publicUserFields);
+    return this.toPublicUser(await this.withAccountEmails(user));
   }
 
   private async issueTokens(
     user: PublicAuthUser,
-    client: Pick<AuthSessionClient, "userRefreshToken"> = this.prisma,
+    client: AuthSessionClient = this.database.client,
   ): Promise<AuthTokens> {
     const refreshToken = randomBytes(32).toString("base64url");
     const tokenHash = this.hashToken(refreshToken);
 
-    await client.userRefreshToken.create({
-      data: { userId: user.id, tokenHash },
-      select: { tokenHash: true, userId: true, revokedAt: true },
-    });
+    await client.insert(userRefreshTokens).values({ userId: user.id, tokenHash });
 
     return {
       user,
@@ -718,39 +761,50 @@ export class AuthService {
   }
 
   private async lockUserSessions(
-    client: Pick<AuthSessionClient, "$executeRaw">,
+    client: AuthSessionClient,
     userId: string,
   ): Promise<void> {
     const lockKey = `auth_sessions:${userId}`;
-    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    await client.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+    );
   }
 
   private async lockSocialIdentity(
-    client: Pick<AuthSessionClient, "$executeRaw">,
+    client: AuthSessionClient,
     provider: string,
     providerAccountId: string,
   ): Promise<void> {
     const lockKey = `social_identity:${provider}:${providerAccountId}`;
-    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    await client.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+    );
   }
 
   private async findSocialAccount(
-    client: Pick<AuthSessionClient, "userAccount">,
+    client: AuthSessionClient,
     provider: string,
     providerAccountId: string,
   ): Promise<SocialAccountRow | null> {
-    return (await client.userAccount.findUnique({
-      where: {
-        provider_providerAccountId: { provider, providerAccountId },
-      },
-      select: {
-        id: true,
-        email: true,
+    const [row] = await client
+      .select({
+        id: userAccounts.id,
+        email: userAccounts.email,
         user: {
-          select: { ...publicUserFields, deletedAt: true },
+          ...publicUserFields,
+          deletedAt: users.deletedAt,
         },
-      },
-    })) as SocialAccountRow | null;
+      })
+      .from(userAccounts)
+      .innerJoin(users, eq(userAccounts.userId, users.id))
+      .where(
+        and(
+          eq(userAccounts.provider, provider),
+          eq(userAccounts.providerAccountId, providerAccountId),
+        ),
+      )
+      .limit(1);
+    return (row ?? null) as SocialAccountRow | null;
   }
 
   private async createAuthUser(
@@ -760,15 +814,16 @@ export class AuthService {
       passwordHash: string;
       passwordSalt: string;
     },
-    client: Pick<AuthSessionClient, "user"> = this.prisma,
+    client: AuthSessionClient = this.database.client,
   ): Promise<AuthUser> {
     try {
-      return (await client.user.create({
-        data: input,
-        select: authUserFields,
-      })) as AuthUser;
+      const [user] = await client
+        .insert(users)
+        .values(input)
+        .returning(authUserFields);
+      return user;
     } catch (error) {
-      if ((error as { code?: string }).code === "P2002") {
+      if ((error as { code?: string }).code === "23505") {
         throw new ConflictException("Email is already registered");
       }
       throw error;
@@ -776,21 +831,24 @@ export class AuthService {
   }
 
   private async findAuthUserByEmail(email: string): Promise<AuthUser | null> {
-    return (await this.prisma.user.findUnique({
-      where: { email },
-      select: authUserFields,
-    })) as AuthUser | null;
+    const [user] = await this.database.client
+      .select(authUserFields)
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    return user ?? null;
   }
 
   private async findPublicUserById(id: string): Promise<PublicAuthUser | null> {
-    const user = (await this.prisma.user.findUnique({
-      where: { id },
-      select: { ...publicUserFields, deletedAt: true },
-    })) as (PublicAuthUserSource & { deletedAt: Date | null }) | null;
+    const [user] = await this.database.client
+      .select({ ...publicUserFields, deletedAt: users.deletedAt })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
     if (!user || user.deletedAt) {
       return null;
     }
-    return this.toPublicUser(user);
+    return this.toPublicUser(await this.withAccountEmails(user));
   }
 
   private async findRefreshToken(
@@ -798,16 +856,23 @@ export class AuthService {
   ): Promise<RefreshTokenRow | null> {
     const tokenHash = this.hashToken(refreshToken);
 
-    return this.prisma.userRefreshToken.findUnique({
-      where: { tokenHash },
-      select: {
-        tokenHash: true,
-        userId: true,
-        revokedAt: true,
-        createdAt: true,
-        user: { select: publicUserFields },
-      },
-    }) as Promise<RefreshTokenRow | null>;
+    const [row] = await this.database.client
+      .select({
+        tokenHash: userRefreshTokens.tokenHash,
+        userId: userRefreshTokens.userId,
+        revokedAt: userRefreshTokens.revokedAt,
+        createdAt: userRefreshTokens.createdAt,
+        user: publicUserFields,
+      })
+      .from(userRefreshTokens)
+      .innerJoin(users, eq(userRefreshTokens.userId, users.id))
+      .where(eq(userRefreshTokens.tokenHash, tokenHash))
+      .limit(1);
+    if (!row) return null;
+    return {
+      ...row,
+      user: await this.withAccountEmails(row.user),
+    };
   }
 
   private async hashPassword(password: string, salt: string): Promise<string> {
@@ -910,18 +975,22 @@ export class AuthService {
   }
 
   private async lockUser(
-    tx: Pick<PrismaService, "$executeRaw">,
+    tx: AuthSessionClient,
     userId: string,
   ) {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+    );
   }
 
   private async lockAdultIdentity(
-    tx: Pick<PrismaService, "$executeRaw">,
+    tx: AuthSessionClient,
     identityHash: string,
   ) {
     const lockKey = `adult_identity:${identityHash}`;
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+    );
   }
 
   private hashAdultIdentity(providerIdentityKey: string): string {
@@ -1069,6 +1138,17 @@ export class AuthService {
         user.userAccounts?.find((account) => account.email)?.email ??
         null,
     };
+  }
+
+  private async withAccountEmails<T extends PublicAuthUserSource>(
+    user: T,
+  ): Promise<T> {
+    const accounts = await this.database.client
+      .select({ email: userAccounts.email })
+      .from(userAccounts)
+      .where(eq(userAccounts.userId, user.id))
+      .orderBy(userAccounts.createdAt);
+    return { ...user, userAccounts: accounts };
   }
 
   private toPublicUserFromRefresh(row: RefreshTokenRow): PublicAuthUser {

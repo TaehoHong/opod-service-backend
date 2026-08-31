@@ -3,9 +3,33 @@ import {
   ConflictException,
   Injectable,
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import {
+  and,
+  asc,
+  count,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+  sum,
+} from "drizzle-orm";
+import {
+  DatabaseService,
+  type DatabaseClient,
+} from "../database/database.service";
 import { decodeCursor, Page, PageInput, pageFromRows } from "../database/page";
-import { PrismaService } from "../database/prisma.service";
+import {
+  creditCheckIns,
+  creditLedger,
+  creditPurchases,
+  creditRefund,
+  creditReservations,
+  creditUsage,
+} from "../database/schema";
 import {
   checkInMilestoneBonuses,
   creditActionPrices,
@@ -17,10 +41,12 @@ import {
 } from "./credit-pricing";
 import { InsufficientCreditsException } from "./insufficient-credits.exception";
 
-type CreditClient = Prisma.TransactionClient | PrismaService;
-type LedgerRow = Prisma.CreditLedgerGetPayload<Prisma.CreditLedgerDefaultArgs>;
-type ReservationRow =
-  Prisma.CreditReservationGetPayload<Prisma.CreditReservationDefaultArgs>;
+export type CreditClient = Pick<
+  DatabaseClient,
+  "select" | "insert" | "update" | "delete" | "execute"
+>;
+type LedgerRow = typeof creditLedger.$inferSelect;
+type ReservationRow = typeof creditReservations.$inferSelect;
 
 export type CreditRecord = {
   id: string;
@@ -43,55 +69,35 @@ export type CreditReservationRecord = {
   amount: number;
   status: "reserved" | "captured" | "released";
   reference: string;
-  // 소유한 작업이 수명을 관리하는 예약에는 없다.
   expiresAt?: string;
   createdAt: string;
 };
 
-/**
- * 활성 예약 = 아직 `reserved`이고, TTL이 있다면 아직 안 지난 것.
- *
- * `expiresAt`이 null인 예약은 소유한 작업이 직접 capture/release하므로 시간으로
- * 만료되지 않는다. 잔액과 환불 가능 여부를 판단하는 쪽이 각자 다른 조건을 쓰면
- * 진행 중인 DM 답변의 예약이 한쪽에서만 보이게 되므로 조건을 한 곳에 둔다.
- */
-export function activeReservationFilter(now: Date = new Date()) {
-  return {
-    status: "reserved" as const,
-    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-  };
+export function activeReservationCondition(now: Date = new Date()) {
+  return and(
+    eq(creditReservations.status, "reserved"),
+    or(isNull(creditReservations.expiresAt), gt(creditReservations.expiresAt, now)),
+  );
 }
 
-type GrantSnapshot = {
-  grant: LedgerRow;
-  available: number;
-};
-
-type GrantState = {
-  snapshots: GrantSnapshot[];
-  recoveryDebt: number;
-};
+type GrantSnapshot = { grant: LedgerRow; available: number };
+type GrantState = { snapshots: GrantSnapshot[]; recoveryDebt: number };
 
 @Injectable()
 export class CreditsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async reserveCredits(input: {
     userId: string;
     actionType: CreditActionType;
     reference?: string;
-    // null을 명시하면 TTL 없는 job-managed 예약이 된다. 호출한 쪽이 capture나
-    // release를 책임진다.
     expiresAt?: Date | null;
   }): Promise<CreditReservationRecord> {
     const amount = creditActionPrices[input.actionType];
     const reference = input.reference?.trim() || crypto.randomUUID();
-
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserCredits(tx, input.userId);
-      const existing = await tx.creditReservation.findUnique({
-        where: { reference },
-      });
+      const existing = await this.findReservation(tx, reference);
       if (existing) {
         if (
           existing.userId !== input.userId ||
@@ -102,13 +108,13 @@ export class CreditsService {
         }
         return this.toReservation(existing);
       }
-
       const balance = await this.balanceBreakdown(tx, input.userId);
       if (balance.paidBalance < 0 || balance.availableBalance < amount) {
         throw new InsufficientCreditsException();
       }
-      const reservation = await tx.creditReservation.create({
-        data: {
+      const [reservation] = await tx
+        .insert(creditReservations)
+        .values({
           userId: input.userId,
           actionType: input.actionType,
           amount,
@@ -117,8 +123,8 @@ export class CreditsService {
             input.expiresAt === undefined
               ? new Date(Date.now() + reservationTtlMs)
               : input.expiresAt,
-        },
-      });
+        })
+        .returning();
       return this.toReservation(reservation);
     });
   }
@@ -126,149 +132,117 @@ export class CreditsService {
   async captureReservation(input: {
     reference: string;
   }): Promise<CreditReservationRecord> {
-    const reference = this.requireReference(input.reference);
-    const result = await this.prisma.$transaction((tx) =>
-      this.captureReservationInTx(tx, reference),
+    const result = await this.database.client.transaction((tx) =>
+      this.captureReservationInTx(tx, this.requireReference(input.reference)),
     );
-
-    if (result.expired) {
-      throw new ConflictException("Credit reservation expired");
-    }
+    if (result.expired) throw new ConflictException("Credit reservation expired");
     return this.toReservation(result.reservation);
   }
 
-  /**
-   * 캡처를 호출자의 트랜잭션 안에서 수행한다. DM 답변처럼 캐릭터 메시지 저장과
-   * 크레딧 캡처가 하나의 완료 단위여야 할 때 쓴다.
-   *
-   * 공개 메서드와 달리 만료 판정도 그 자리에서 던지므로 호출자의 트랜잭션이
-   * 통째로 롤백된다. job-managed 예약은 `expiresAt`이 null이라 이 경로로 오지
-   * 않는다.
-   */
   async captureReservationWithClient(
-    client: Prisma.TransactionClient,
+    client: CreditClient,
     input: { reference: string },
   ): Promise<CreditReservationRecord> {
     const result = await this.captureReservationInTx(
       client,
       this.requireReference(input.reference),
     );
-    if (result.expired) {
-      throw new ConflictException("Credit reservation expired");
-    }
+    if (result.expired) throw new ConflictException("Credit reservation expired");
     return this.toReservation(result.reservation);
   }
 
   private async captureReservationInTx(
-    tx: Prisma.TransactionClient,
+    tx: CreditClient,
     reference: string,
-  ) {
-    {
-      const found = await tx.creditReservation.findUnique({
-        where: { reference },
-      });
-      if (!found) {
-        throw new BadRequestException("Credit reservation not found");
-      }
-      await this.lockUserCredits(tx, found.userId);
-      const reservation = await tx.creditReservation.findUniqueOrThrow({
-        where: { reference },
-      });
-      if (reservation.status === "captured") {
-        return { expired: false, reservation };
-      }
-      if (reservation.status === "released") {
-        throw new ConflictException("Credit reservation was released");
-      }
-      // expiresAt이 null이면 소유한 작업이 수명을 관리하므로 시간으로 만료되지
-      // 않는다. 그 예약은 작업이 직접 capture하거나 release한다.
-      if (reservation.expiresAt && reservation.expiresAt <= new Date()) {
-        const released = await tx.creditReservation.update({
-          where: { id: reservation.id },
-          data: { status: "released" },
-        });
-        return { expired: true, reservation: released };
-      }
-
-      const allocations = await this.allocateUsage(
-        tx,
-        reservation.userId,
-        reservation.amount,
-      );
-      const usage = await tx.creditLedger.create({
-        data: {
-          userId: reservation.userId,
-          type: "usage",
-          amount: reservation.amount,
-          reason: reservation.actionType,
-          externalReference: `credit_reservation:${reservation.id}`,
-        },
-      });
-      await tx.creditUsage.createMany({
-        data: allocations.map(({ grant, amount }) => ({
+  ): Promise<{ expired: boolean; reservation: ReservationRow }> {
+    const found = await this.findReservation(tx, reference);
+    if (!found) throw new BadRequestException("Credit reservation not found");
+    await this.lockUserCredits(tx, found.userId);
+    const reservation = await this.findReservation(tx, reference);
+    if (!reservation) throw new BadRequestException("Credit reservation not found");
+    if (reservation.status === "captured") return { expired: false, reservation };
+    if (reservation.status === "released") {
+      throw new ConflictException("Credit reservation was released");
+    }
+    if (reservation.expiresAt && reservation.expiresAt <= new Date()) {
+      const [released] = await tx
+        .update(creditReservations)
+        .set({ status: "released" })
+        .where(eq(creditReservations.id, reservation.id))
+        .returning();
+      return { expired: true, reservation: released };
+    }
+    const allocations = await this.allocateUsage(
+      tx,
+      reservation.userId,
+      reservation.amount,
+    );
+    const [usage] = await tx
+      .insert(creditLedger)
+      .values({
+        userId: reservation.userId,
+        type: "usage",
+        amount: reservation.amount,
+        reason: reservation.actionType,
+        externalReference: `credit_reservation:${reservation.id}`,
+      })
+      .returning();
+    if (allocations.length) {
+      await tx.insert(creditUsage).values(
+        allocations.map(({ grant, amount }) => ({
           usageLedgerId: usage.id,
           grantLedgerId: grant.id,
           amount,
         })),
-      });
-      const captured = await tx.creditReservation.update({
-        where: { id: reservation.id },
-        data: { status: "captured" },
-      });
-      return { expired: false, reservation: captured };
+      );
     }
+    const [captured] = await tx
+      .update(creditReservations)
+      .set({ status: "captured" })
+      .where(eq(creditReservations.id, reservation.id))
+      .returning();
+    return { expired: false, reservation: captured };
   }
 
   async releaseReservation(input: {
     reference: string;
   }): Promise<CreditReservationRecord> {
-    return this.prisma.$transaction((tx) =>
+    return this.database.client.transaction((tx) =>
       this.releaseReservationInTx(tx, input.reference),
     );
   }
 
-  /**
-   * 해제를 호출자의 트랜잭션 안에서 수행한다. 작업을 failed로 닫는 것과 예약
-   * 해제가 함께 반영돼야 예약이 영원히 잠기지 않는다.
-   */
   async releaseReservationWithClient(
-    client: Prisma.TransactionClient,
+    client: CreditClient,
     input: { reference: string },
   ): Promise<CreditReservationRecord> {
     return this.releaseReservationInTx(client, input.reference);
   }
 
   private async releaseReservationInTx(
-    tx: Prisma.TransactionClient,
+    tx: CreditClient,
     reference: string,
   ): Promise<CreditReservationRecord> {
-    {
-      const found = await tx.creditReservation.findUnique({
-        where: { reference },
-      });
-      if (!found) {
-        throw new BadRequestException("Credit reservation not found");
-      }
-      await this.lockUserCredits(tx, found.userId);
-      const reservation = await tx.creditReservation.findUniqueOrThrow({
-        where: { reference },
-      });
-      if (reservation.status !== "reserved") {
-        return this.toReservation(reservation);
-      }
-      const released = await tx.creditReservation.updateMany({
-        where: { id: reservation.id, status: "reserved" },
-        data: { status: "released" },
-      });
-      if (released.count === 0) {
-        return this.toReservation(
-          await tx.creditReservation.findUniqueOrThrow({
-            where: { id: reservation.id },
-          }),
-        );
-      }
-      return this.toReservation({ ...reservation, status: "released" });
-    }
+    const found = await this.findReservation(tx, reference);
+    if (!found) throw new BadRequestException("Credit reservation not found");
+    await this.lockUserCredits(tx, found.userId);
+    const reservation = await this.findReservation(tx, reference);
+    if (!reservation) throw new BadRequestException("Credit reservation not found");
+    if (reservation.status !== "reserved") return this.toReservation(reservation);
+    const [released] = await tx
+      .update(creditReservations)
+      .set({ status: "released" })
+      .where(
+        and(
+          eq(creditReservations.id, reservation.id),
+          eq(creditReservations.status, "reserved"),
+        ),
+      )
+      .returning();
+    if (released) return this.toReservation(released);
+    const current = await this.findReservationById(tx, reservation.id);
+    if (!current) throw new BadRequestException("Credit reservation not found");
+    return this.toReservation(current);
   }
 
   private requireReference(reference: string): string {
@@ -289,7 +263,7 @@ export class CreditsService {
     externalReference?: string;
     expiresAt?: Date;
   }): Promise<CreditRecord> {
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserCredits(tx, input.userId);
       return this.grantCreditsWithClient(tx, input);
     });
@@ -321,11 +295,12 @@ export class CreditsService {
         "Purchase-linked promotion requires a purchase ID",
       );
     }
-
     if (input.externalReference) {
-      const existing = await client.creditLedger.findUnique({
-        where: { externalReference: input.externalReference },
-      });
+      const [existing] = await client
+        .select()
+        .from(creditLedger)
+        .where(eq(creditLedger.externalReference, input.externalReference))
+        .limit(1);
       if (existing) {
         if (
           existing.userId !== input.userId ||
@@ -339,9 +314,9 @@ export class CreditsService {
         return this.toRecord(existing);
       }
     }
-
-    const ledger = await client.creditLedger.create({
-      data: {
+    const [ledger] = await client
+      .insert(creditLedger)
+      .values({
         userId: input.userId,
         type: "grant",
         creditKind,
@@ -353,8 +328,8 @@ export class CreditsService {
         expiresAt:
           input.expiresAt ??
           (creditKind === "free" ? this.freeCreditExpiry() : undefined),
-      },
-    });
+      })
+      .returning();
     return this.toRecord(ledger);
   }
 
@@ -378,33 +353,36 @@ export class CreditsService {
     if (month > currentMonth) {
       throw new BadRequestException("Future check-in month is not allowed");
     }
-
     const checkedInDates = (
-      await this.prisma.creditCheckIn.findMany({
-        where: {
-          userId: input.userId,
-          checkInDate: { startsWith: `${month}-` },
-        },
-        select: { checkInDate: true },
-        orderBy: { checkInDate: "asc" },
-      })
+      await this.database.client
+        .select({ checkInDate: creditCheckIns.checkInDate })
+        .from(creditCheckIns)
+        .where(
+          and(
+            eq(creditCheckIns.userId, input.userId),
+            like(creditCheckIns.checkInDate, `${month}-%`),
+          ),
+        )
+        .orderBy(asc(creditCheckIns.checkInDate))
     ).map(({ checkInDate }) => checkInDate);
     const checkedInToday =
       month === currentMonth
         ? checkedInDates.includes(today)
         : Boolean(
-            await this.prisma.creditCheckIn.findUnique({
-              where: {
-                userId_checkInDate: {
-                  userId: input.userId,
-                  checkInDate: today,
-                },
-              },
-              select: { id: true },
-            }),
+            (
+              await this.database.client
+                .select({ id: creditCheckIns.id })
+                .from(creditCheckIns)
+                .where(
+                  and(
+                    eq(creditCheckIns.userId, input.userId),
+                    eq(creditCheckIns.checkInDate, today),
+                  ),
+                )
+                .limit(1)
+            )[0],
           );
     const monthCheckInCount = checkedInDates.length;
-
     return {
       today,
       month,
@@ -413,10 +391,10 @@ export class CreditsService {
       monthCheckInCount,
       dailyCredits: dailyCheckInCredits,
       milestones: Object.entries(checkInMilestoneBonuses).map(
-        ([count, bonusCredits]) => ({
-          count: Number(count),
+        ([value, bonusCredits]) => ({
+          count: Number(value),
           bonusCredits,
-          achieved: monthCheckInCount >= Number(count),
+          achieved: monthCheckInCount >= Number(value),
         }),
       ),
     };
@@ -424,23 +402,31 @@ export class CreditsService {
 
   async checkIn(input: { userId: string }) {
     const checkInDate = this.kstDateString(new Date());
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       try {
-        await tx.creditCheckIn.create({
-          data: { userId: input.userId, checkInDate },
+        await tx.insert(creditCheckIns).values({
+          userId: input.userId,
+          checkInDate,
         });
       } catch (error) {
-        if ((error as { code?: string }).code === "P2002") {
+        const databaseError = error as {
+          code?: string;
+          cause?: { code?: string };
+        };
+        if (databaseError.code === "23505" || databaseError.cause?.code === "23505") {
           throw new ConflictException("Already checked in today");
         }
         throw error;
       }
-      const monthCheckInCount = await tx.creditCheckIn.count({
-        where: {
-          userId: input.userId,
-          checkInDate: { startsWith: `${checkInDate.slice(0, 7)}-` },
-        },
-      });
+      const [{ value: monthCheckInCount }] = await tx
+        .select({ value: count() })
+        .from(creditCheckIns)
+        .where(
+          and(
+            eq(creditCheckIns.userId, input.userId),
+            like(creditCheckIns.checkInDate, `${checkInDate.slice(0, 7)}-%`),
+          ),
+        );
       const milestoneBonus = checkInMilestoneBonuses[monthCheckInCount] ?? 0;
       const creditsGranted = dailyCheckInCredits + milestoneBonus;
       await this.grantCreditsWithClient(tx, {
@@ -466,32 +452,31 @@ export class CreditsService {
     ) {
       throw new BadRequestException("Credit amount and reason are required");
     }
-    return this.prisma.$transaction(async (tx) => {
+    return this.database.client.transaction(async (tx) => {
       await this.lockUserCredits(tx, input.userId);
       const balance = await this.balanceBreakdown(tx, input.userId);
       if (balance.paidBalance < 0 || balance.availableBalance < input.amount) {
         throw new InsufficientCreditsException();
       }
-      const allocations = await this.allocateUsage(
-        tx,
-        input.userId,
-        input.amount,
-      );
-      const usage = await tx.creditLedger.create({
-        data: {
+      const allocations = await this.allocateUsage(tx, input.userId, input.amount);
+      const [usage] = await tx
+        .insert(creditLedger)
+        .values({
           userId: input.userId,
           type: "usage",
           amount: input.amount,
           reason: input.reason.trim(),
-        },
-      });
-      await tx.creditUsage.createMany({
-        data: allocations.map(({ grant, amount }) => ({
-          usageLedgerId: usage.id,
-          grantLedgerId: grant.id,
-          amount,
-        })),
-      });
+        })
+        .returning();
+      if (allocations.length) {
+        await tx.insert(creditUsage).values(
+          allocations.map(({ grant, amount }) => ({
+            usageLedgerId: usage.id,
+            grantLedgerId: grant.id,
+            amount,
+          })),
+        );
+      }
       return this.toRecord(usage);
     });
   }
@@ -506,8 +491,9 @@ export class CreditsService {
       reason: string;
     },
   ): Promise<CreditRecord> {
-    const ledger = await client.creditLedger.create({
-      data: {
+    const [ledger] = await client
+      .insert(creditLedger)
+      .values({
         userId: input.userId,
         purchaseId: input.purchaseId,
         type: "refund_recovery",
@@ -515,8 +501,8 @@ export class CreditsService {
         amount: input.amount,
         reason: input.reason,
         externalReference: `credit_refund:${input.refundId}`,
-      },
-    });
+      })
+      .returning();
     return this.toRecord(ledger);
   }
 
@@ -526,13 +512,9 @@ export class CreditsService {
     paidBalance: number;
     freeBalance?: number;
   }> {
-    const value = await this.balanceBreakdown(this.prisma, userId);
+    const value = await this.balanceBreakdown(this.database.client, userId);
     if (value.paidBalance < 0) {
-      return {
-        userId,
-        balance: value.paidBalance,
-        paidBalance: value.paidBalance,
-      };
+      return { userId, balance: value.paidBalance, paidBalance: value.paidBalance };
     }
     return {
       userId,
@@ -550,10 +532,11 @@ export class CreditsService {
   }
 
   async listEntries(userId: string): Promise<CreditRecord[]> {
-    const rows = await this.prisma.creditLedger.findMany({
-      where: { userId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
+    const rows = await this.database.client
+      .select()
+      .from(creditLedger)
+      .where(eq(creditLedger.userId, userId))
+      .orderBy(asc(creditLedger.createdAt), asc(creditLedger.id));
     return rows.map((row) => this.toRecord(row));
   }
 
@@ -562,25 +545,35 @@ export class CreditsService {
     input: PageInput,
   ): Promise<Page<CreditRecord>> {
     const cursorId = decodeCursor(input.cursor);
-    if (
-      cursorId &&
-      !(await this.prisma.creditLedger.findFirst({
-        where: { id: cursorId, userId },
-        select: { id: true },
-      }))
-    ) {
-      throw new BadRequestException("Invalid cursor");
+    let cursor: Pick<LedgerRow, "id" | "createdAt"> | undefined;
+    if (cursorId) {
+      [cursor] = await this.database.client
+        .select({ id: creditLedger.id, createdAt: creditLedger.createdAt })
+        .from(creditLedger)
+        .where(and(eq(creditLedger.id, cursorId), eq(creditLedger.userId, userId)))
+        .limit(1);
+      if (!cursor) throw new BadRequestException("Invalid cursor");
     }
-    const rows = await this.prisma.creditLedger.findMany({
-      where: { userId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: input.limit + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-    });
-    return pageFromRows(
-      rows.map((row) => this.toRecord(row)),
-      input.limit,
-    );
+    const rows = await this.database.client
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.userId, userId),
+          cursor
+            ? or(
+                gt(creditLedger.createdAt, cursor.createdAt),
+                and(
+                  eq(creditLedger.createdAt, cursor.createdAt),
+                  gt(creditLedger.id, cursor.id),
+                ),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(asc(creditLedger.createdAt), asc(creditLedger.id))
+      .limit(input.limit + 1);
+    return pageFromRows(rows.map((row) => this.toRecord(row)), input.limit);
   }
 
   async getPurchaseCreditSnapshotWithClient(
@@ -595,49 +588,46 @@ export class CreditsService {
     remainingPaidPromotion: number;
     locked: number;
   }> {
-    const { snapshots: grants } = await this.grantState(
-      client,
-      input.userId,
-      false,
-    );
+    const { snapshots: grants } = await this.grantState(client, input.userId, false);
     const purchaseGrants = grants.filter(
       ({ grant }) => grant.purchaseId === input.purchaseId,
     );
     const originalPaid = purchaseGrants
-      .filter(
-        ({ grant }) => grant.creditKind === "paid" && !grant.promotionCode,
-      )
-      .reduce((sum, { grant }) => sum + grant.amount, 0);
+      .filter(({ grant }) => grant.creditKind === "paid" && !grant.promotionCode)
+      .reduce((total, { grant }) => total + grant.amount, 0);
     const remainingPaid = purchaseGrants
-      .filter(
-        ({ grant }) => grant.creditKind === "paid" && !grant.promotionCode,
-      )
-      .reduce((sum, grant) => sum + grant.available, 0);
+      .filter(({ grant }) => grant.creditKind === "paid" && !grant.promotionCode)
+      .reduce((total, grant) => total + grant.available, 0);
     const remainingPromotion = purchaseGrants
       .filter(({ grant }) => Boolean(grant.promotionCode))
-      .reduce((sum, grant) => sum + grant.available, 0);
+      .reduce((total, grant) => total + grant.available, 0);
     const originalPromotion = purchaseGrants
       .filter(({ grant }) => Boolean(grant.promotionCode))
-      .reduce((sum, { grant }) => sum + grant.amount, 0);
+      .reduce((total, { grant }) => total + grant.amount, 0);
     const paidPromotionGrants = purchaseGrants.filter(
-      ({ grant }) =>
-        grant.creditKind === "paid" && Boolean(grant.promotionCode),
+      ({ grant }) => grant.creditKind === "paid" && Boolean(grant.promotionCode),
     );
     const originalPaidPromotion = paidPromotionGrants.reduce(
-      (sum, { grant }) => sum + grant.amount,
+      (total, { grant }) => total + grant.amount,
       0,
     );
     const remainingPaidPromotion = paidPromotionGrants.reduce(
-      (sum, grant) => sum + grant.available,
+      (total, grant) => total + grant.available,
       0,
     );
-    const active = await client.creditRefund.aggregate({
-      _sum: { lockedAmount: true },
-      where: {
-        purchaseId: input.purchaseId,
-        status: { in: ["reserved", "payment_processing", "payment_succeeded"] },
-      },
-    });
+    const [{ locked }] = await client
+      .select({ locked: sum(creditRefund.lockedAmount).mapWith(Number) })
+      .from(creditRefund)
+      .where(
+        and(
+          eq(creditRefund.purchaseId, input.purchaseId),
+          inArray(creditRefund.status, [
+            "reserved",
+            "payment_processing",
+            "payment_succeeded",
+          ]),
+        ),
+      );
     return {
       originalPaid,
       originalPromotion,
@@ -645,7 +635,7 @@ export class CreditsService {
       remainingPaid,
       remainingPromotion,
       remainingPaidPromotion,
-      locked: active._sum.lockedAmount ?? 0,
+      locked: locked ?? 0,
     };
   }
 
@@ -655,8 +645,7 @@ export class CreditsService {
     amount: number,
   ): Promise<Array<{ grant: LedgerRow; amount: number }>> {
     const { snapshots } = await this.grantState(client, userId);
-    const paidBalance = (await this.balanceBreakdown(client, userId))
-      .paidBalance;
+    const paidBalance = (await this.balanceBreakdown(client, userId)).paidBalance;
     let paidCapacity = Math.max(0, paidBalance);
     let remaining = amount;
     const result: Array<{ grant: LedgerRow; amount: number }> = [];
@@ -683,59 +672,66 @@ export class CreditsService {
   ): Promise<GrantState> {
     const now = new Date();
     const [grants, usages, recoveries, refunds] = await Promise.all([
-      client.creditLedger.findMany({
-        where: {
-          userId,
-          type: "grant",
-        },
-        orderBy: [
-          { creditKind: "asc" },
-          { expiresAt: "asc" },
-          { createdAt: "asc" },
-          { id: "asc" },
-        ],
-      }),
-      client.creditUsage.groupBy({
-        by: ["grantLedgerId"],
-        _sum: { amount: true },
-        where: { grantLedger: { userId } },
-      }),
-      client.creditLedger.groupBy({
-        by: ["purchaseId"],
-        _sum: { amount: true },
-        where: { userId, type: "refund_recovery", purchaseId: { not: null } },
-      }),
-      client.creditRefund.groupBy({
-        by: ["purchaseId"],
-        _sum: { lockedAmount: true },
-        where: {
-          purchase: { userId },
-          status: {
-            in: ["reserved", "payment_processing", "payment_succeeded"],
-          },
-        },
-      }),
+      client
+        .select()
+        .from(creditLedger)
+        .where(and(eq(creditLedger.userId, userId), eq(creditLedger.type, "grant")))
+        .orderBy(
+          asc(creditLedger.creditKind),
+          asc(creditLedger.expiresAt),
+          asc(creditLedger.createdAt),
+          asc(creditLedger.id),
+        ),
+      client
+        .select({
+          grantLedgerId: creditUsage.grantLedgerId,
+          amount: sum(creditUsage.amount).mapWith(Number),
+        })
+        .from(creditUsage)
+        .innerJoin(creditLedger, eq(creditUsage.grantLedgerId, creditLedger.id))
+        .where(eq(creditLedger.userId, userId))
+        .groupBy(creditUsage.grantLedgerId),
+      client
+        .select({
+          purchaseId: creditLedger.purchaseId,
+          amount: sum(creditLedger.amount).mapWith(Number),
+        })
+        .from(creditLedger)
+        .where(
+          and(
+            eq(creditLedger.userId, userId),
+            eq(creditLedger.type, "refund_recovery"),
+            isNotNull(creditLedger.purchaseId),
+          ),
+        )
+        .groupBy(creditLedger.purchaseId),
+      client
+        .select({
+          purchaseId: creditRefund.purchaseId,
+          amount: sum(creditRefund.lockedAmount).mapWith(Number),
+        })
+        .from(creditRefund)
+        .innerJoin(creditPurchases, eq(creditRefund.purchaseId, creditPurchases.id))
+        .where(
+          and(
+            eq(creditPurchases.userId, userId),
+            inArray(creditRefund.status, [
+              "reserved",
+              "payment_processing",
+              "payment_succeeded",
+            ]),
+          ),
+        )
+        .groupBy(creditRefund.purchaseId),
     ]);
-    const used = new Map(
-      usages.map((row) => [row.grantLedgerId, row._sum.amount ?? 0]),
-    );
+    const used = new Map(usages.map((row) => [row.grantLedgerId, row.amount ?? 0]));
     const purchaseRecoveries = new Map<string, number>();
     for (const row of recoveries) {
-      if (row.purchaseId) {
-        purchaseRecoveries.set(
-          row.purchaseId,
-          (purchaseRecoveries.get(row.purchaseId) ?? 0) +
-            (row._sum.amount ?? 0),
-        );
-      }
+      if (row.purchaseId) purchaseRecoveries.set(row.purchaseId, row.amount ?? 0);
     }
-    const purchaseLocks = new Map<string, number>();
-    for (const row of refunds) {
-      purchaseLocks.set(
-        row.purchaseId,
-        (purchaseLocks.get(row.purchaseId) ?? 0) + (row._sum.lockedAmount ?? 0),
-      );
-    }
+    const purchaseLocks = new Map(
+      refunds.map((row) => [row.purchaseId, row.amount ?? 0]),
+    );
 
     const snapshots: GrantSnapshot[] = [];
     for (const grant of grants) {
@@ -748,7 +744,6 @@ export class CreditsService {
         const recovered = Math.min(available, recovery);
         available -= recovered;
         purchaseRecoveries.set(grant.purchaseId, recovery - recovered);
-
         if (includeRefundLocks) {
           const lock = purchaseLocks.get(grant.purchaseId) ?? 0;
           const locked = Math.min(available, lock);
@@ -761,7 +756,7 @@ export class CreditsService {
     return {
       snapshots,
       recoveryDebt: [...purchaseRecoveries.values()].reduce(
-        (sum, amount) => sum + amount,
+        (total, amount) => total + amount,
         0,
       ),
     };
@@ -770,46 +765,66 @@ export class CreditsService {
   private async balanceBreakdown(client: CreditClient, userId: string) {
     const [grantState, adjustments, reservations] = await Promise.all([
       this.grantState(client, userId),
-      client.creditLedger.groupBy({
-        by: ["creditKind"],
-        _sum: { amount: true },
-        where: { userId, type: "adjustment" },
-      }),
-      client.creditReservation.aggregate({
-        _sum: { amount: true },
-        where: { userId, ...activeReservationFilter() },
-      }),
+      client
+        .select({
+          creditKind: creditLedger.creditKind,
+          amount: sum(creditLedger.amount).mapWith(Number),
+        })
+        .from(creditLedger)
+        .where(
+          and(
+            eq(creditLedger.userId, userId),
+            eq(creditLedger.type, "adjustment"),
+          ),
+        )
+        .groupBy(creditLedger.creditKind),
+      client
+        .select({ amount: sum(creditReservations.amount).mapWith(Number) })
+        .from(creditReservations)
+        .where(
+          and(eq(creditReservations.userId, userId), activeReservationCondition()),
+        ),
     ]);
-    const sumByKind = (
-      rows: Array<{
-        creditKind: "free" | "paid" | null;
-        _sum: { amount: number | null };
-      }>,
-      kind: "free" | "paid",
-    ) => rows.find((row) => row.creditKind === kind)?._sum.amount ?? 0;
+    const sumByKind = (kind: "free" | "paid") =>
+      adjustments.find((row) => row.creditKind === kind)?.amount ?? 0;
     const availableByKind = (kind: "free" | "paid") =>
       grantState.snapshots
         .filter(({ grant }) => grant.creditKind === kind)
-        .reduce((sum, { available }) => sum + available, 0);
+        .reduce((total, { available }) => total + available, 0);
     const paidBalance =
-      availableByKind("paid") -
-      grantState.recoveryDebt +
-      sumByKind(adjustments, "paid");
-    const freeBalance =
-      availableByKind("free") + sumByKind(adjustments, "free");
-    const reservedAmount = reservations._sum.amount ?? 0;
+      availableByKind("paid") - grantState.recoveryDebt + sumByKind("paid");
+    const freeBalance = availableByKind("free") + sumByKind("free");
+    const reservedAmount = reservations[0]?.amount ?? 0;
     return {
       paidBalance,
       freeBalance,
       availableBalance:
-        paidBalance < 0
-          ? paidBalance
-          : paidBalance + freeBalance - reservedAmount,
+        paidBalance < 0 ? paidBalance : paidBalance + freeBalance - reservedAmount,
     };
   }
 
+  private async findReservation(client: CreditClient, reference: string) {
+    const [row] = await client
+      .select()
+      .from(creditReservations)
+      .where(eq(creditReservations.reference, reference))
+      .limit(1);
+    return row;
+  }
+
+  private async findReservationById(client: CreditClient, id: string) {
+    const [row] = await client
+      .select()
+      .from(creditReservations)
+      .where(eq(creditReservations.id, id))
+      .limit(1);
+    return row;
+  }
+
   private async lockUserCredits(client: CreditClient, userId: string) {
-    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`credits:${userId}`}, 0))`;
+    await client.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`credits:${userId}`}, 0))`,
+    );
   }
 
   private freeCreditExpiry() {
