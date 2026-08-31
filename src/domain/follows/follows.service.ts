@@ -139,7 +139,7 @@ export class FollowsService {
   }): Promise<CharacterRelationship> {
     await this.assertUserAndCharacter(input);
 
-    // agent_relationship_state is opod-agent's table (schema.prisma keeps the
+    // agent_relationship_state is opod-agent's table (the canonical schema keeps the
     // ownership note); this service only ever reads bond_level from it, and
     // never writes. It has no FK to users/characters — identity reaches the
     // Agent through X-Opod-* headers — so an absent row simply means "they have

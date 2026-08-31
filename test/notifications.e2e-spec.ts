@@ -3,12 +3,13 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import { registerHuman } from "./human-auth";
 
 describe("notifications", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -17,7 +18,7 @@ describe("notifications", () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
   });
 
   afterAll(async () => {
@@ -37,7 +38,7 @@ describe("notifications", () => {
   it("marks an owned notification as read", async () => {
     const human = await registerHuman(app);
     const otherHuman = await registerHuman(app);
-    const notification = await prisma.notification.create({
+    const notification = await db.notification.create({
       data: {
         userId: human.user.id,
         type: "message",
@@ -57,7 +58,7 @@ describe("notifications", () => {
       });
 
     await expect(
-      prisma.notification.findUnique({ where: { id: notification.id } }),
+      db.notification.findUnique({ where: { id: notification.id } }),
     ).resolves.toMatchObject({ readAt: expect.any(Date) });
 
     await request(app.getHttpServer())
@@ -68,14 +69,14 @@ describe("notifications", () => {
 
   it("materializes follow notifications once, only for content after the follow", async () => {
     const human = await registerHuman(app);
-    const character = await prisma.character.create({
+    const character = await db.character.create({
       data: {
         publicId: `soi-${randomUUID()}`,
         displayName: "소이",
         bio: "film photos",
       },
     });
-    const beforeFollow = await prisma.post.create({
+    const beforeFollow = await db.post.create({
       data: { characterId: character.id, content: "before the follow" },
     });
 
@@ -85,23 +86,23 @@ describe("notifications", () => {
       .send({ characterId: character.id })
       .expect(201);
 
-    const afterFollow = await prisma.post.create({
+    const afterFollow = await db.post.create({
       data: { characterId: character.id, content: "after the follow" },
     });
-    const media = await prisma.media.create({
+    const media = await db.media.create({
       data: {
         mediaType: "image",
         url: `https://cdn.example.com/${randomUUID()}.jpg`,
       },
     });
-    const liveStory = await prisma.story.create({
+    const liveStory = await db.story.create({
       data: {
         characterId: character.id,
         mediaId: media.id,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
     });
-    const expiredStory = await prisma.story.create({
+    const expiredStory = await db.story.create({
       data: {
         characterId: character.id,
         mediaId: media.id,
@@ -115,7 +116,7 @@ describe("notifications", () => {
       .expect(201)
       .expect({ created: 2, truncated: false });
 
-    const targets = await prisma.notification.findMany({
+    const targets = await db.notification.findMany({
       where: { userId: human.user.id },
       select: { type: true, targetId: true },
     });
@@ -138,13 +139,13 @@ describe("notifications", () => {
       .expect(201)
       .expect({ created: 0, truncated: false });
     await expect(
-      prisma.notification.count({ where: { userId: human.user.id } }),
+      db.notification.count({ where: { userId: human.user.id } }),
     ).resolves.toBe(2);
   });
 
   it("stops materializing after an unfollow", async () => {
     const human = await registerHuman(app);
-    const character = await prisma.character.create({
+    const character = await db.character.create({
       data: {
         publicId: `arin-${randomUUID()}`,
         displayName: "아린",
@@ -163,7 +164,7 @@ describe("notifications", () => {
       .send({ characterId: character.id })
       .expect(200);
 
-    await prisma.post.create({
+    await db.post.create({
       data: { characterId: character.id, content: "after the unfollow" },
     });
 

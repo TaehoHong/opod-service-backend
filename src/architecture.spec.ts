@@ -115,6 +115,9 @@ describe("source layout", () => {
       "source-map-support",
       "testcontainers",
       "ts-loader",
+      "@prisma/adapter-pg",
+      "@prisma/client",
+      "prisma",
     ]) {
       expect(deps[name]).toBeUndefined();
     }
@@ -134,25 +137,16 @@ describe("source layout", () => {
     ]) {
       const source = readFileSync(path, "utf8");
       expect(source).not.toContain("DB-free fallback");
-      expect(source).not.toContain("@Inject(PrismaService)");
-      expect(source).not.toMatch(/type \w+PrismaClient =/);
+      expect(source).not.toContain("Prisma");
       expect(source).not.toMatch(/private readonly \w+: .*?\[\] = \[\]/);
     }
   });
 
   it("uses UUIDv7 defaults for UUID primary keys", () => {
-    const schema = readFileSync("prisma/schema.prisma", "utf8");
-    const uuidPrimaryKeys = schema
-      .split("\n")
-      .filter((line) => line.includes("@id"))
-      .filter((line) => line.includes("@db.Uuid"));
-
-    expect(uuidPrimaryKeys.length).toBeGreaterThan(0);
-    expect(schema).not.toContain("@default(uuid())");
-    for (const line of uuidPrimaryKeys) {
-      if (line.includes("@default(")) {
-        expect(line).toContain("@default(uuid(7))");
-      }
-    }
+    const schema = readFileSync("src/domain/database/schema.ts", "utf8");
+    const uuidV7PrimaryKeys = schema.match(
+      /uuid\(\)\s*\.primaryKey\(\)\s*\.\$defaultFn\(\(\) => createUuidV7\(\)\)/g,
+    );
+    expect(uuidV7PrimaryKeys?.length).toBeGreaterThan(0);
   });
 });

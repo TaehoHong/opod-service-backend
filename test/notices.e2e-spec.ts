@@ -2,7 +2,8 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 
 describe("notices", () => {
   let app: INestApplication;
@@ -17,9 +18,9 @@ describe("notices", () => {
     app = moduleRef.createNestApplication();
     await app.init();
 
-    const prisma = app.get(PrismaService);
-    await prisma.notice.deleteMany();
-    await prisma.notice.createMany({
+    const db = new TestDatabase(app.get(DatabaseService));
+    await db.notice.deleteMany();
+    await db.notice.createMany({
       data: [
         {
           title: "고정 공지",
@@ -52,7 +53,7 @@ describe("notices", () => {
   });
 
   afterAll(async () => {
-    await app.get(PrismaService).notice.deleteMany();
+    await new TestDatabase(app.get(DatabaseService)).notice.deleteMany();
     await app.close();
   });
 
@@ -78,14 +79,14 @@ describe("notices", () => {
   });
 
   it("returns a published notice with its body and hides unpublished ones", async () => {
-    const prisma = app.get(PrismaService);
-    const published = await prisma.notice.findFirst({
+    const db = new TestDatabase(app.get(DatabaseService));
+    const published = await db.notice.findFirst({
       where: { title: "최신 공지" },
     });
-    const draft = await prisma.notice.findFirst({
+    const draft = await db.notice.findFirst({
       where: { title: "초안 공지" },
     });
-    const scheduled = await prisma.notice.findFirst({
+    const scheduled = await db.notice.findFirst({
       where: { title: "예약 공지" },
     });
 

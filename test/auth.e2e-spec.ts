@@ -8,7 +8,8 @@ import {
   SocialIdentityProvider,
   VerifiedSocialIdentity,
 } from "../src/domain/auth/social-identity.provider";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 
 describe("auth", () => {
   let app: INestApplication;
@@ -150,7 +151,7 @@ describe("auth", () => {
       201, 401,
     ]);
     await expect(
-      app.get(PrismaService).userRefreshToken.count({
+      new TestDatabase(app.get(DatabaseService)).userRefreshToken.count({
         where: { userId: registered.body.user.id, revokedAt: null },
       }),
     ).resolves.toBe(1);
@@ -210,7 +211,7 @@ describe("auth", () => {
       .send({ email, password: "password456" })
       .expect(201);
 
-    const events = await app.get(PrismaService).userEvent.findMany({
+    const events = await new TestDatabase(app.get(DatabaseService)).userEvent.findMany({
       where: {
         userId: registered.body.user.id,
         eventType: "auth.password_changed",
@@ -259,7 +260,7 @@ describe("auth", () => {
 
   it("deletes the account, anonymizes personal data, and keeps ledger rows", async () => {
     const email = `reader-${randomUUID()}@example.com`;
-    const prisma = app.get(PrismaService);
+    const db = new TestDatabase(app.get(DatabaseService));
 
     const registered = await request(app.getHttpServer())
       .post("/auth/register")
@@ -269,17 +270,17 @@ describe("auth", () => {
     const authorization = `Bearer ${registered.body.accessToken}`;
 
     // 삭제 대상 데이터 심기: 캐릭터 팔로우, 대화+메시지, 알림.
-    const character = await prisma.character.create({
+    const character = await db.character.create({
       data: {
         publicId: `char-${randomUUID()}`,
         displayName: "Mira",
         bio: "test character",
       },
     });
-    await prisma.userCharacterFollow.create({
+    await db.userCharacterFollow.create({
       data: { userId, characterId: character.id },
     });
-    await prisma.messageConversation.create({
+    await db.messageConversation.create({
       data: {
         userId,
         characterId: character.id,
@@ -288,7 +289,7 @@ describe("auth", () => {
         },
       },
     });
-    await prisma.notification.create({
+    await db.notification.create({
       data: { userId, type: "system", title: "welcome" },
     });
 
@@ -304,7 +305,7 @@ describe("auth", () => {
       .expect({ deleted: true });
 
     // users 행 익명화 확인.
-    const anonymized = await prisma.user.findUnique({ where: { id: userId } });
+    const anonymized = await db.user.findUnique({ where: { id: userId } });
     expect(anonymized).toMatchObject({
       email: null,
       passwordHash: null,
@@ -315,25 +316,25 @@ describe("auth", () => {
 
     // 개인 데이터 삭제 확인.
     await expect(
-      prisma.userCharacterFollow.count({ where: { userId } }),
+      db.userCharacterFollow.count({ where: { userId } }),
     ).resolves.toBe(0);
     await expect(
-      prisma.messageConversation.count({ where: { userId } }),
+      db.messageConversation.count({ where: { userId } }),
     ).resolves.toBe(0);
     await expect(
-      prisma.notification.count({ where: { userId } }),
+      db.notification.count({ where: { userId } }),
     ).resolves.toBe(0);
     await expect(
-      prisma.userRefreshToken.count({ where: { userId } }),
+      db.userRefreshToken.count({ where: { userId } }),
     ).resolves.toBe(0);
 
     // 크레딧 원장(가입 보너스)은 익명 상태로 잔존.
     await expect(
-      prisma.creditLedger.count({ where: { userId } }),
+      db.creditLedger.count({ where: { userId } }),
     ).resolves.toBeGreaterThan(0);
 
     // 탈퇴 사유가 기록된다.
-    const withdrawal = await prisma.userWithdrawal.findFirst({
+    const withdrawal = await db.userWithdrawal.findFirst({
       where: { userId },
     });
     expect(withdrawal).toMatchObject({
@@ -543,9 +544,9 @@ describe("auth", () => {
     expect(created.body.accessToken).toEqual(expect.any(String));
     expect(created.body.refreshToken).toEqual(expect.any(String));
 
-    const prisma = app.get(PrismaService);
+    const db = new TestDatabase(app.get(DatabaseService));
     await expect(
-      prisma.user.findUnique({
+      db.user.findUnique({
         where: { id: created.body.user.id },
         select: { email: true, passwordHash: true, passwordSalt: true },
       }),
@@ -555,7 +556,7 @@ describe("auth", () => {
       passwordSalt: null,
     });
     await expect(
-      prisma.userAccount.findMany({
+      db.userAccount.findMany({
         where: { userId: created.body.user.id },
         select: {
           provider: true,
@@ -651,8 +652,8 @@ describe("auth", () => {
     expect(responses[0].body.user.displayName).toMatch(/^사용자#[0-9A-F]{6}$/);
     expect(responses[0].body.user.email).toBeNull();
 
-    const prisma = app.get(PrismaService);
-    const account = await prisma.userAccount.findUnique({
+    const db = new TestDatabase(app.get(DatabaseService));
+    const account = await db.userAccount.findUnique({
       where: {
         provider_providerAccountId: {
           provider: "google",
@@ -663,7 +664,7 @@ describe("auth", () => {
     });
     expect(account?.userId).toBe(responses[0].body.user.id);
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: {
           userId: responses[0].body.user.id,
           externalReference: `signup_bonus:${responses[0].body.user.id}`,
@@ -673,8 +674,8 @@ describe("auth", () => {
   });
 
   it("normalizes social login request failures without persisting an account", async () => {
-    const prisma = app.get(PrismaService);
-    const accountCountBefore = await prisma.userAccount.count();
+    const db = new TestDatabase(app.get(DatabaseService));
+    const accountCountBefore = await db.userAccount.count();
 
     await request(app.getHttpServer())
       .post("/auth/social/google")
@@ -697,6 +698,6 @@ describe("auth", () => {
         message: "유효하지 않은 소셜 로그인 토큰입니다",
         error: "Unauthorized",
       });
-    await expect(prisma.userAccount.count()).resolves.toBe(accountCountBefore);
+    await expect(db.userAccount.count()).resolves.toBe(accountCountBefore);
   });
 });

@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
 import { CreditsService } from "../src/domain/credits/credits.service";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import { PaymentsService } from "../src/domain/payments/payments.service";
 import { PurchasesService } from "../src/domain/purchases/purchases.service";
 import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
@@ -13,7 +14,7 @@ import { registerHuman } from "./human-auth";
 
 describe("credits, purchases and payments", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
   let credits: CreditsService;
   let payments: PaymentsService;
   let purchases: PurchasesService;
@@ -26,7 +27,7 @@ describe("credits, purchases and payments", () => {
       .compile();
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
     credits = app.get(CreditsService);
     payments = app.get(PaymentsService);
     purchases = app.get(PurchasesService);
@@ -36,7 +37,7 @@ describe("credits, purchases and payments", () => {
   afterAll(() => app.close());
 
   async function character() {
-    return prisma.character.create({
+    return db.character.create({
       data: {
         publicId: `arin-${randomUUID()}`,
         displayName: "Arin",
@@ -115,11 +116,11 @@ describe("credits, purchases and payments", () => {
       .set("Idempotency-Key", idempotencyKey)
       .send({ productId: "credits_500" })
       .expect(201);
-    const product = await prisma.creditProduct.findUniqueOrThrow({
+    const product = await db.creditProduct.findUniqueOrThrow({
       where: { code: "credits_500" },
     });
 
-    await prisma.creditProduct.update({
+    await db.creditProduct.update({
       where: { id: product.id },
       data: { isActive: false },
     });
@@ -146,7 +147,7 @@ describe("credits, purchases and payments", () => {
         .send({ productId: "credits_500" })
         .expect(409);
     } finally {
-      await prisma.creditProduct.update({
+      await db.creditProduct.update({
         where: { id: product.id },
         data: { isActive: true },
       });
@@ -157,7 +158,7 @@ describe("credits, purchases and payments", () => {
     "blocks a web checkout without mapping %s",
     async (field) => {
       const human = await registerHuman(app);
-      const mapping = await prisma.paymentProductMapping.findFirstOrThrow({
+      const mapping = await db.paymentProductMapping.findFirstOrThrow({
         where: {
           provider: "local",
           environment: "development",
@@ -165,7 +166,7 @@ describe("credits, purchases and payments", () => {
         },
       });
       const original = mapping[field];
-      await prisma.paymentProductMapping.update({
+      await db.paymentProductMapping.update({
         where: { id: mapping.id },
         data: { [field]: null },
       });
@@ -178,7 +179,7 @@ describe("credits, purchases and payments", () => {
           .send({ productId: "credits_500" })
           .expect(409);
       } finally {
-        await prisma.paymentProductMapping.update({
+        await db.paymentProductMapping.update({
           where: { id: mapping.id },
           data: { [field]: original },
         });
@@ -233,7 +234,7 @@ describe("credits, purchases and payments", () => {
         returnUrl: "http://localhost:3000/profile",
       })
       .expect(201);
-    const payment = await prisma.payment.findUniqueOrThrow({
+    const payment = await db.payment.findUniqueOrThrow({
       where: { purchaseId: checkout.body.id },
     });
 
@@ -290,10 +291,10 @@ describe("credits, purchases and payments", () => {
         freeBalance: 98,
       });
 
-    const usage = await prisma.creditLedger.findFirstOrThrow({
+    const usage = await db.creditLedger.findFirstOrThrow({
       where: { userId: human.user.id, type: "usage" },
     });
-    const sources = await prisma.creditUsage.findMany({
+    const sources = await db.creditUsage.findMany({
       where: { usageLedgerId: usage.id },
       include: { grantLedger: true },
     });
@@ -332,19 +333,19 @@ describe("credits, purchases and payments", () => {
     }
 
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { externalReference: `credit_purchase:${checkout.body.id}` },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.paymentLedger.count({
+      db.paymentLedger.count({
         where: { payment: { purchaseId: checkout.body.id }, type: "capture" },
       }),
     ).resolves.toBe(1);
     // 웹훅을 두 번 보냈다. 알림을 트랜잭션 밖에서 만들면 inbox 멱등 가드를
     // 우회해 배달마다 쌓이므로 이 단언이 먼저 깨진다.
     await expect(
-      prisma.notification.findMany({
+      db.notification.findMany({
         where: { userId: human.user.id, type: "credit.purchase_completed" },
         select: { targetType: true, targetId: true },
       }),
@@ -388,12 +389,12 @@ describe("credits, purchases and payments", () => {
     }
 
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { externalReference: `credit_purchase:${checkout.body.id}` },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.paymentLedger.findFirstOrThrow({
+      db.paymentLedger.findFirstOrThrow({
         where: { providerEventId: eventId },
         select: { amount: true, currency: true },
       }),
@@ -448,7 +449,7 @@ describe("credits, purchases and payments", () => {
       }
 
       await expect(
-        prisma.creditLedger.count({
+        db.creditLedger.count({
           where: { externalReference: `credit_purchase:${checkout.body.id}` },
         }),
       ).resolves.toBe(0);
@@ -487,17 +488,17 @@ describe("credits, purchases and payments", () => {
       .expect(201);
     expect(refund.body).toMatchObject({ status: "completed", debtAmount: 0 });
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { purchaseId: checkout.body.id, type: "refund_recovery" },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.paymentLedger.count({
+      db.paymentLedger.count({
         where: { payment: { purchaseId: checkout.body.id }, type: "refund" },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.notification.count({
+      db.notification.count({
         where: { userId: human.user.id, type: "credit.refund_completed" },
       }),
     ).resolves.toBe(1);
@@ -515,7 +516,7 @@ describe("credits, purchases and payments", () => {
       .post("/payments/webhooks/local")
       .send({ purchaseId: checkout.body.id, status: "paid" })
       .expect(201);
-    await prisma.payment.update({
+    await db.payment.update({
       where: { purchaseId: checkout.body.id },
       data: {
         provider: "polar",
@@ -551,7 +552,7 @@ describe("credits, purchases and payments", () => {
       .expect(201);
     const quote = await purchases.refundQuote(human.user.id, checkout.body.id);
     const idempotencyKey = `refund-${randomUUID()}`;
-    await prisma.creditRefund.create({
+    await db.creditRefund.create({
       data: {
         purchaseId: checkout.body.id,
         provider: "local",
@@ -625,12 +626,12 @@ describe("credits, purchases and payments", () => {
     verify.mockRestore();
 
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { purchaseId: checkout.body.id, type: "refund_recovery" },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.paymentLedger.count({
+      db.paymentLedger.count({
         where: {
           payment: { purchaseId: checkout.body.id },
           type: "chargeback",
@@ -715,7 +716,7 @@ describe("credits, purchases and payments", () => {
     }
 
     await expect(
-      prisma.creditRefund.aggregate({
+      db.creditRefund.aggregate({
         where: {
           purchaseId: checkout.body.id,
           reason: "provider_reversal",
@@ -742,7 +743,7 @@ describe("credits, purchases and payments", () => {
       },
     });
     await expect(
-      prisma.payment.findFirstOrThrow({
+      db.payment.findFirstOrThrow({
         where: { purchaseId: checkout.body.id },
         select: { status: true, netAmount: true, taxAmount: true },
       }),
@@ -752,7 +753,7 @@ describe("credits, purchases and payments", () => {
       taxAmount: 490,
     });
     await expect(
-      prisma.creditPurchase.findUniqueOrThrow({
+      db.creditPurchase.findUniqueOrThrow({
         where: { id: checkout.body.id },
         select: { status: true },
       }),
@@ -868,7 +869,7 @@ describe("credits, purchases and payments", () => {
     );
     expect(new Set(grants.map((grant) => grant.id)).size).toBe(1);
     await expect(
-      prisma.creditLedger.count({ where: { externalReference } }),
+      db.creditLedger.count({ where: { externalReference } }),
     ).resolves.toBe(1);
   });
 
@@ -881,7 +882,7 @@ describe("credits, purchases and payments", () => {
     });
     // 일반 예약이라면 진작 만료됐을 시점으로 밀어도 살아 있어야 한다. 만료되면
     // 답변 성공과 예약 만료가 경합해 크레딧을 못 받는 답변이 생긴다.
-    await prisma.creditReservation.update({
+    await db.creditReservation.update({
       where: { id: reservation.id },
       data: { createdAt: new Date(Date.now() - 60 * 60_000) },
     });
@@ -910,7 +911,7 @@ describe("credits, purchases and payments", () => {
 
     // 진행 중인 DM 답변이 만료 조건으로만 걸러지면 이 예약은 보이지 않고,
     // 환불이 통과해 원장이 음수로 간다.
-    const reservations = await prisma.creditReservation.count({
+    const reservations = await db.creditReservation.count({
       where: { userId: human.user.id, status: "reserved", expiresAt: null },
     });
     expect(reservations).toBe(1);
@@ -922,7 +923,7 @@ describe("credits, purchases and payments", () => {
       userId: human.user.id,
       actionType: "chat_reply",
     });
-    await prisma.creditReservation.update({
+    await db.creditReservation.update({
       where: { id: reservation.id },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
@@ -930,7 +931,7 @@ describe("credits, purchases and payments", () => {
       credits.captureReservation({ reference: reservation.reference }),
     ).rejects.toThrow("Credit reservation expired");
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { externalReference: `credit_reservation:${reservation.id}` },
       }),
     ).resolves.toBe(0);
@@ -948,10 +949,10 @@ describe("credits, purchases and payments", () => {
       credits.captureReservation({ reference: reservation.reference }),
       credits.releaseReservation({ reference: reservation.reference }),
     ]);
-    const stored = await prisma.creditReservation.findUniqueOrThrow({
+    const stored = await db.creditReservation.findUniqueOrThrow({
       where: { id: reservation.id },
     });
-    const usageCount = await prisma.creditLedger.count({
+    const usageCount = await db.creditLedger.count({
       where: { externalReference: `credit_reservation:${reservation.id}` },
     });
 

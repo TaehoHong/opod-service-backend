@@ -3,12 +3,13 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import { registerHuman } from "./human-auth";
 
 describe("public character visibility", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
   let human: Awaited<ReturnType<typeof registerHuman>>;
   let activeCharacterId: string;
   let inactiveCharacterId: string;
@@ -31,14 +32,14 @@ describe("public character visibility", () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
     human = await registerHuman(app);
 
     searchTerm = `visibility-${randomUUID().replaceAll("-", "")}`;
     activeHashtag = `${searchTerm}-active`;
     inactiveHashtag = `${searchTerm}-inactive`;
 
-    const activeCharacter = await prisma.character.create({
+    const activeCharacter = await db.character.create({
       data: {
         publicId: `${searchTerm}-active-character`,
         displayName: `${searchTerm} active`,
@@ -46,7 +47,7 @@ describe("public character visibility", () => {
         interests: [searchTerm],
       },
     });
-    const inactiveCharacter = await prisma.character.create({
+    const inactiveCharacter = await db.character.create({
       data: {
         publicId: `${searchTerm}-inactive-character`,
         displayName: `${searchTerm} inactive`,
@@ -59,18 +60,18 @@ describe("public character visibility", () => {
     inactiveCharacterId = inactiveCharacter.id;
 
     const [activeTag, inactiveTag] = await Promise.all([
-      prisma.hashtag.create({ data: { name: activeHashtag } }),
-      prisma.hashtag.create({ data: { name: inactiveHashtag } }),
+      db.hashtag.create({ data: { name: activeHashtag } }),
+      db.hashtag.create({ data: { name: inactiveHashtag } }),
     ]);
     const [activePost, inactivePost] = await Promise.all([
-      prisma.post.create({
+      db.post.create({
         data: {
           characterId: activeCharacterId,
           content: `${searchTerm} visible post`,
           hashtags: { create: { hashtagId: activeTag.id } },
         },
       }),
-      prisma.post.create({
+      db.post.create({
         data: {
           characterId: inactiveCharacterId,
           content: `${searchTerm} hidden post`,
@@ -83,28 +84,28 @@ describe("public character visibility", () => {
 
     const [activeComment, inactiveComment, activeReaction, inactiveReaction] =
       await Promise.all([
-        prisma.postComment.create({
+        db.postComment.create({
           data: {
             postId: activePostId,
             characterId: activeCharacterId,
             body: "visible character comment",
           },
         }),
-        prisma.postComment.create({
+        db.postComment.create({
           data: {
             postId: activePostId,
             characterId: inactiveCharacterId,
             body: "hidden character comment",
           },
         }),
-        prisma.postReaction.create({
+        db.postReaction.create({
           data: {
             postId: activePostId,
             characterId: activeCharacterId,
             reactionType: "visible-reaction",
           },
         }),
-        prisma.postReaction.create({
+        db.postReaction.create({
           data: {
             postId: activePostId,
             characterId: inactiveCharacterId,
@@ -118,13 +119,13 @@ describe("public character visibility", () => {
     inactiveReactionId = inactiveReaction.id;
 
     const [activeMedia, inactiveMedia] = await Promise.all([
-      prisma.media.create({
+      db.media.create({
         data: {
           mediaType: "image",
           url: `https://cdn.example.com/${searchTerm}-active.jpg`,
         },
       }),
-      prisma.media.create({
+      db.media.create({
         data: {
           mediaType: "image",
           url: `https://cdn.example.com/${searchTerm}-inactive.jpg`,
@@ -133,7 +134,7 @@ describe("public character visibility", () => {
     ]);
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     const [activeStory, inactiveStory] = await Promise.all([
-      prisma.story.create({
+      db.story.create({
         data: {
           characterId: activeCharacterId,
           mediaId: activeMedia.id,
@@ -141,7 +142,7 @@ describe("public character visibility", () => {
           expiresAt,
         },
       }),
-      prisma.story.create({
+      db.story.create({
         data: {
           characterId: inactiveCharacterId,
           mediaId: inactiveMedia.id,
@@ -153,14 +154,14 @@ describe("public character visibility", () => {
     activeStoryId = activeStory.id;
     inactiveStoryId = inactiveStory.id;
 
-    await prisma.userCharacterFollow.createMany({
+    await db.userCharacterFollow.createMany({
       data: [
         { userId: human.user.id, characterId: activeCharacterId },
         { userId: human.user.id, characterId: inactiveCharacterId },
       ],
     });
     await Promise.all([
-      prisma.messageConversation.create({
+      db.messageConversation.create({
         data: {
           userId: human.user.id,
           characterId: activeCharacterId,
@@ -169,7 +170,7 @@ describe("public character visibility", () => {
           },
         },
       }),
-      prisma.messageConversation.create({
+      db.messageConversation.create({
         data: {
           userId: human.user.id,
           characterId: inactiveCharacterId,

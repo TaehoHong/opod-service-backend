@@ -2,7 +2,8 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import { registerHuman } from "./human-auth";
 
 function kstToday() {
@@ -22,7 +23,7 @@ function previousMonth(month: string) {
 
 describe("check-in", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -30,7 +31,7 @@ describe("check-in", () => {
     }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
   });
 
   afterAll(() => app.close());
@@ -100,7 +101,7 @@ describe("check-in", () => {
       { length: 7 },
       (_, index) => `${month}-${String(index + 1).padStart(2, "0")}`,
     );
-    await prisma.creditCheckIn.createMany({
+    await db.creditCheckIn.createMany({
       data: checkedInDates.map((checkInDate) => ({
         userId: human.user.id,
         checkInDate,

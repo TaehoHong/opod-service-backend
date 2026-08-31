@@ -3,7 +3,8 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyError,
@@ -13,7 +14,7 @@ import { registerHuman } from "./human-auth";
 
 describe("asynchronous DM replies", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
   let worker: MessageReplyWorker;
   const createReply = jest.fn();
 
@@ -24,7 +25,7 @@ describe("asynchronous DM replies", () => {
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
     worker = app.get(MessageReplyWorker);
   });
 
@@ -36,7 +37,7 @@ describe("asynchronous DM replies", () => {
   });
 
   async function character() {
-    return prisma.character.create({
+    return db.character.create({
       data: {
         publicId: `soi-${randomUUID()}`,
         displayName: "소이",
@@ -124,12 +125,12 @@ describe("asynchronous DM replies", () => {
     await worker.runOnce();
 
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { userId: human.user.id, type: "usage", reason: "chat_reply" },
       }),
     ).resolves.toBe(1);
     await expect(
-      prisma.message.count({
+      db.message.count({
         where: {
           senderType: "character",
           conversation: { userId: human.user.id },
@@ -183,13 +184,13 @@ describe("asynchronous DM replies", () => {
     ]);
     // 실패해도 유저가 쓴 말은 사라지지 않는다.
     await expect(
-      prisma.creditReservation.findFirst({
+      db.creditReservation.findFirst({
         where: { userId: human.user.id },
         select: { status: true },
       }),
     ).resolves.toEqual({ status: "released" });
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { userId: human.user.id, type: "usage" },
       }),
     ).resolves.toBe(0);
@@ -214,7 +215,7 @@ describe("asynchronous DM replies", () => {
       expect.objectContaining({ body: "다시 안녕" }),
     ]);
     await expect(
-      prisma.creditLedger.count({
+      db.creditLedger.count({
         where: { userId: human.user.id, type: "usage", reason: "chat_reply" },
       }),
     ).resolves.toBe(1);
@@ -230,14 +231,14 @@ describe("asynchronous DM replies", () => {
 
     // 백오프 때문에 다음 tick이 바로 집지 않는다. 준비 시각을 당겨 재시도를 몬다.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await prisma.messageReplyJob.updateMany({
+      await db.messageReplyJob.updateMany({
         where: jobId,
         data: { readyAt: new Date() },
       });
       await worker.runOnce();
     }
 
-    const job = await prisma.messageReplyJob.findUniqueOrThrow({
+    const job = await db.messageReplyJob.findUniqueOrThrow({
       where: jobId,
     });
     // 무한 재시도는 크레딧을 잡아둔 채 Agent만 계속 부른다.
@@ -289,7 +290,7 @@ describe("asynchronous DM replies", () => {
 
 describe("message read receipts", () => {
   let app: INestApplication;
-  let prisma: PrismaService;
+  let db: TestDatabase;
   let worker: MessageReplyWorker;
 
   beforeAll(async () => {
@@ -299,14 +300,14 @@ describe("message read receipts", () => {
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();
-    prisma = app.get(PrismaService);
+    db = new TestDatabase(app.get(DatabaseService));
     worker = app.get(MessageReplyWorker);
   });
 
   afterAll(() => app.close());
 
   async function character() {
-    return prisma.character.create({
+    return db.character.create({
       data: {
         publicId: `soi-${randomUUID()}`,
         displayName: "소이",

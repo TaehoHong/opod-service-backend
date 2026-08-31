@@ -2,7 +2,8 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 
 describe("faqs", () => {
   let app: INestApplication;
@@ -15,9 +16,9 @@ describe("faqs", () => {
     app = moduleRef.createNestApplication();
     await app.init();
 
-    const prisma = app.get(PrismaService);
-    await prisma.faq.deleteMany();
-    await prisma.faq.createMany({
+    const db = new TestDatabase(app.get(DatabaseService));
+    await db.faq.deleteMany();
+    await db.faq.createMany({
       data: [
         {
           category: "credit",
@@ -45,7 +46,7 @@ describe("faqs", () => {
   });
 
   afterAll(async () => {
-    await app.get(PrismaService).faq.deleteMany();
+    await new TestDatabase(app.get(DatabaseService)).faq.deleteMany();
     await app.close();
   });
 

@@ -2,7 +2,8 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/domain/database/prisma.service";
+import { DatabaseService } from "../src/domain/database/database.service";
+import { TestDatabase } from "./test-database";
 import { registerHuman } from "./human-auth";
 
 describe("inquiries", () => {
@@ -131,7 +132,7 @@ describe("inquiries", () => {
     });
 
     // 어드민 답변 기록을 시뮬레이션 (opod-admin이 수행하는 계약 — 정책 §5.3).
-    await app.get(PrismaService).inquiry.update({
+    await new TestDatabase(app.get(DatabaseService)).inquiry.update({
       where: { id: inquiryId },
       data: {
         status: "answered",
@@ -183,7 +184,7 @@ describe("inquiries", () => {
       .send({ category: "etc", body: "답변받을 문의" })
       .expect(201);
 
-    await app.get(PrismaService).inquiry.update({
+    await new TestDatabase(app.get(DatabaseService)).inquiry.update({
       where: { id: answered.body.id },
       data: {
         status: "answered",
@@ -273,7 +274,7 @@ describe("inquiries", () => {
       responses.filter((response) => response.status === 429),
     ).toHaveLength(1);
     await expect(
-      app.get(PrismaService).inquiry.count({
+      new TestDatabase(app.get(DatabaseService)).inquiry.count({
         where: { userId: human.user.id },
       }),
     ).resolves.toBe(10);
