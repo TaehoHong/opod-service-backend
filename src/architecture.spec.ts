@@ -94,7 +94,7 @@ describe("source layout", () => {
     }
   });
 
-  it("keeps persistence on the current Prisma path only", () => {
+  it("keeps persistence behind approved database adapters", () => {
     const removedFiles = [
       "database/migrations/001_mvp_schema.sql",
       "src/domain/database/database.module.ts",
@@ -114,8 +114,7 @@ describe("source layout", () => {
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     for (const name of [
       "@types/express",
-      "@types/pg",
-      "pg",
+      "postgres",
       "source-map-support",
       "testcontainers",
       "ts-loader",
