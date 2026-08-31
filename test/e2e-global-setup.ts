@@ -1,14 +1,8 @@
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Client } from "pg";
 
 const envFilePath = join(__dirname, ".tmp", "e2e-db.json");
 
@@ -29,26 +23,15 @@ export default async function globalSetup(): Promise<void> {
     mkdirSync(dirname(envFilePath), { recursive: true });
     writeFileSync(envFilePath, JSON.stringify({ DATABASE_URL: databaseUrl }));
 
-    const migrationsDirectory = join(
-      __dirname,
-      "fixtures",
-      "legacy-migrations",
+    execFileSync(
+      process.execPath,
+      [join(__dirname, "..", "scripts", "db-migrations.mjs")],
+      {
+        cwd: join(__dirname, ".."),
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+        stdio: "inherit",
+      },
     );
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
-      for (const directory of readdirSync(migrationsDirectory).sort()) {
-        const migrationPath = join(
-          migrationsDirectory,
-          directory,
-          "migration.sql",
-        );
-        if (!existsSync(migrationPath)) continue;
-        await client.query(readFileSync(migrationPath, "utf8"));
-      }
-    } finally {
-      await client.end();
-    }
 
     (globalThis as E2EGlobal).__E2E_POSTGRES_CONTAINER__ = container;
   } catch (error) {

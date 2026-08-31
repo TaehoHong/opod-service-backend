@@ -14,7 +14,7 @@ ssh-agent sh -c '
   docker --host "$2" build --platform linux/amd64 -f docker/Dockerfile -t "$3" .
 ' sh "$key" "$remote_docker" "$image"
 
-echo "[2/3] api 재시작 (컨테이너 시작 시 prisma migrate deploy 자동 실행)"
+echo "[2/3] api 재시작 (컨테이너 시작 시 Drizzle migration 자동 실행)"
 ssh -i "$key" -p "$port" "$host" bash -s -- "$remote_dir" <<'REMOTE'
 set -euo pipefail
 cd "$1"
