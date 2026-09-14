@@ -296,7 +296,9 @@ describe("Drizzle migrations", () => {
          VALUES ('legacy-user', 'legacy-character', '사용자는 이름을 민지라고 알려줬다.', now())`,
       );
 
-      expect(runMigrations(databaseUrl, "--baseline")).toContain(
+      const searchPathUrl = new URL(databaseUrl);
+      searchPathUrl.searchParams.set("options", "-c search_path=opod,public");
+      expect(runMigrations(searchPathUrl.toString(), "--baseline")).toContain(
         `Registered existing schema as ${baselineName}`,
       );
 

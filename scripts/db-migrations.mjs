@@ -139,11 +139,16 @@ async function assertBaselineSchema(client, snapshot) {
   const actualColumns = await client.query(`
     SELECT c.relname AS table_name,
            a.attname AS column_name,
-           format_type(a.atttypid, a.atttypmod) AS data_type,
+           CASE
+             WHEN tn.nspname = 'opod' THEN tn.nspname || '.' || t.typname
+             ELSE format_type(a.atttypid, a.atttypmod)
+           END AS data_type,
            a.attnotnull AS not_null
       FROM pg_attribute a
       JOIN pg_class c ON c.oid = a.attrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_type t ON t.oid = a.atttypid
+      JOIN pg_namespace tn ON tn.oid = t.typnamespace
      WHERE n.nspname = 'opod'
        AND c.relkind IN ('r', 'p')
        AND c.relname <> '_prisma_migrations'
