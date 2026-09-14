@@ -11,7 +11,9 @@ type E2EGlobal = typeof globalThis & {
 };
 
 export default async function globalSetup(): Promise<void> {
-  const container = await new PostgreSqlContainer("postgres:16-alpine")
+  const container = await new PostgreSqlContainer(
+    "pgvector/pgvector:0.8.6-pg16",
+  )
     .withDatabase("ai_sns_test")
     .withUsername("ai_sns")
     .withPassword("ai_sns")

@@ -70,6 +70,14 @@ export class PaymentsService {
     return provider.findCheckout?.(input);
   }
 
+  async reconcileCheckout(
+    providerName: string,
+    input: Parameters<NonNullable<PaymentProvider["reconcileCheckout"]>>[0],
+  ) {
+    const provider = this.provider(providerName);
+    return provider.reconcileCheckout?.(input);
+  }
+
   async verifyPurchase(
     channel: "apple" | "google",
     input: Parameters<NonNullable<PaymentProvider["verifyPurchase"]>>[0],

@@ -15,6 +15,13 @@ export type CheckoutResult = {
   checkoutUrl: string;
 };
 
+export type CheckoutReconciliationRequest = {
+  checkoutId: string;
+  purchaseId: string;
+  userId: string;
+  providerProductId: string;
+};
+
 export type VerifiedPurchase = {
   provider: string;
   channel: "apple" | "google";
@@ -55,6 +62,9 @@ export interface PaymentProvider {
   readonly environment: string;
   findCheckout?(input: CheckoutRequest): Promise<CheckoutResult | undefined>;
   createCheckout?(input: CheckoutRequest): Promise<CheckoutResult>;
+  reconcileCheckout?(
+    input: CheckoutReconciliationRequest,
+  ): Promise<PaymentEvent | undefined>;
   verifyPurchase?(input: {
     proof: string;
     expectedAccountToken: string;

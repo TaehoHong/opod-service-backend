@@ -255,6 +255,71 @@ describe("credits, purchases and payments", () => {
       .expect(404);
   });
 
+  it("reconciles a paid checkout once when its webhook was missed", async () => {
+    const human = await registerHuman(app);
+    const checkout = await request(app.getHttpServer())
+      .post("/purchases/checkouts")
+      .set(human.authHeaders)
+      .set("Idempotency-Key", `checkout-${randomUUID()}`)
+      .send({ productId: "credits_500" })
+      .expect(201);
+    const payment = await db.payment.findUniqueOrThrow({
+      where: { purchaseId: checkout.body.id },
+    });
+    const reconcile = jest
+      .spyOn(payments, "reconcileCheckout")
+      .mockResolvedValue({
+        eventId: `reconcile-${randomUUID()}`,
+        type: "paid",
+        purchaseId: checkout.body.id,
+        transactionId: `order-${randomUUID()}`,
+        providerProductId: "credits_500",
+        netAmount: 4900,
+        taxAmount: 0,
+        amount: 4900,
+        currency: "KRW",
+        occurredAt: new Date(),
+      });
+
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        await request(app.getHttpServer())
+          .get(`/purchases/checkouts/${payment.providerCheckoutId}`)
+          .set(human.authHeaders)
+          .expect(200)
+          .expect(({ body }) => {
+            expect(body).toMatchObject({
+              id: checkout.body.id,
+              status: "completed",
+              payment: { status: "paid" },
+            });
+          });
+      }
+    } finally {
+      reconcile.mockRestore();
+    }
+
+    await expect(
+      db.creditLedger.count({
+        where: { externalReference: `credit_purchase:${checkout.body.id}` },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      db.paymentLedger.count({
+        where: { payment: { purchaseId: checkout.body.id }, type: "capture" },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      db.notification.count({
+        where: {
+          userId: human.user.id,
+          type: "credit.purchase_completed",
+          targetId: checkout.body.id,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("records a captured action in the immutable ledger with its grant source", async () => {
     const human = await registerHuman(app);
     const target = await character();

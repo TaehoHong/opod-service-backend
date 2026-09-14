@@ -99,7 +99,9 @@ export class PurchasesService {
       ...(mapping.mapping.priceAmount !== null
         ? { priceAmount: mapping.mapping.priceAmount }
         : {}),
-      ...(mapping.mapping.currency ? { currency: mapping.mapping.currency } : {}),
+      ...(mapping.mapping.currency
+        ? { currency: mapping.mapping.currency }
+        : {}),
     }));
   }
 
@@ -291,9 +293,17 @@ export class PurchasesService {
     let cursor: { id: string; createdAt: Date } | undefined;
     if (cursorId) {
       [cursor] = await this.database.client
-        .select({ id: creditPurchases.id, createdAt: creditPurchases.createdAt })
+        .select({
+          id: creditPurchases.id,
+          createdAt: creditPurchases.createdAt,
+        })
         .from(creditPurchases)
-        .where(and(eq(creditPurchases.id, cursorId), eq(creditPurchases.userId, userId)))
+        .where(
+          and(
+            eq(creditPurchases.id, cursorId),
+            eq(creditPurchases.userId, userId),
+          ),
+        )
         .limit(1);
       if (!cursor) throw new BadRequestException("Invalid cursor");
     }
@@ -317,7 +327,10 @@ export class PurchasesService {
       )
       .orderBy(desc(creditPurchases.createdAt), desc(creditPurchases.id))
       .limit(input.limit + 1);
-    const rows = joined.map(({ purchase, payment }) => ({ ...purchase, payment }));
+    const rows = joined.map(({ purchase, payment }) => ({
+      ...purchase,
+      payment,
+    }));
     return pageFromRows(
       rows.map((row) => this.toPurchase(row)),
       input.limit,
@@ -342,6 +355,29 @@ export class PurchasesService {
       ? ({ ...joined.purchase, payment: joined.payment } as PurchaseRow)
       : null;
     if (!purchase) throw new NotFoundException("Purchase not found");
+    const payment = purchase.payment;
+    if (
+      purchase.status === "pending" &&
+      payment &&
+      ["pending", "verified", "processing"].includes(payment.status)
+    ) {
+      const event = await this.payments.reconcileCheckout(payment.provider, {
+        checkoutId: normalized,
+        purchaseId: purchase.id,
+        userId,
+        providerProductId: payment.providerProductId,
+      });
+      if (event) {
+        await this.database.client.transaction(async (tx) =>
+          this.applyEvent(tx, payment.provider, event),
+        );
+        const current = await this.requirePurchase(
+          this.database.client,
+          purchase.id,
+        );
+        return this.toPurchase(current);
+      }
+    }
     return this.toPurchase(purchase);
   }
 
@@ -634,7 +670,10 @@ export class PurchasesService {
         .where(
           and(
             eq(creditRefund.purchaseId, payment.purchaseId),
-            inArray(creditRefund.status, ["payment_processing", "payment_succeeded"]),
+            inArray(creditRefund.status, [
+              "payment_processing",
+              "payment_succeeded",
+            ]),
           ),
         )
         .orderBy(asc(creditRefund.createdAt), asc(creditRefund.id))
@@ -713,7 +752,10 @@ export class PurchasesService {
       .where(
         and(
           eq(creditRefund.purchaseId, initialPayment.purchaseId),
-          inArray(creditRefund.status, ["payment_processing", "payment_succeeded"]),
+          inArray(creditRefund.status, [
+            "payment_processing",
+            "payment_succeeded",
+          ]),
         ),
       )
       .orderBy(asc(creditRefund.createdAt), asc(creditRefund.id))
@@ -740,7 +782,9 @@ export class PurchasesService {
       .select({
         creditAmount: sum(creditRefund.creditAmount).mapWith(Number),
         promotionAmount: sum(creditRefund.promotionAmount).mapWith(Number),
-        freePromotionAmount: sum(creditRefund.freePromotionAmount).mapWith(Number),
+        freePromotionAmount: sum(creditRefund.freePromotionAmount).mapWith(
+          Number,
+        ),
       })
       .from(creditRefund)
       .where(
@@ -946,14 +990,14 @@ export class PurchasesService {
       reason: "user refund",
     });
     await tx.insert(paymentLedger).values({
-        paymentId: payment.id,
-        type: "refund",
-        direction: "outflow",
-        amount: refund.refundAmount,
-        currency: event?.currency ?? refund.currency,
-        providerTransactionId: refund.providerRefundId,
-        providerEventId: event?.eventId,
-        occurredAt: event?.occurredAt ?? new Date(),
+      paymentId: payment.id,
+      type: "refund",
+      direction: "outflow",
+      amount: refund.refundAmount,
+      currency: event?.currency ?? refund.currency,
+      providerTransactionId: refund.providerRefundId,
+      providerEventId: event?.eventId,
+      occurredAt: event?.occurredAt ?? new Date(),
     });
     await tx
       .update(paymentRows)
@@ -995,7 +1039,10 @@ export class PurchasesService {
   ) {
     const purchase = await this.findPurchase(
       tx,
-      and(eq(creditPurchases.id, purchaseId), eq(creditPurchases.userId, userId)),
+      and(
+        eq(creditPurchases.id, purchaseId),
+        eq(creditPurchases.userId, userId),
+      ),
     );
     if (!purchase) throw new NotFoundException("Purchase not found");
     if (purchase.payment?.channel !== "web")
@@ -1004,7 +1051,10 @@ export class PurchasesService {
       .select({ value: count() })
       .from(creditReservations)
       .where(
-        and(eq(creditReservations.userId, userId), activeReservationCondition()),
+        and(
+          eq(creditReservations.userId, userId),
+          activeReservationCondition(),
+        ),
       );
     if (activeReservations > 0)
       throw new ConflictException("Credit usage is in progress");
@@ -1062,9 +1112,7 @@ export class PurchasesService {
     };
   }
 
-  private toPurchase(
-    row: PurchaseRow,
-  ) {
+  private toPurchase(row: PurchaseRow) {
     return {
       id: row.id,
       productId: row.productId,
@@ -1227,7 +1275,10 @@ export class PurchasesService {
           ),
         );
     });
-    const current = await this.requirePurchase(this.database.client, purchase.id);
+    const current = await this.requirePurchase(
+      this.database.client,
+      purchase.id,
+    );
     return {
       ...this.toPurchase(current),
       checkoutUrl: current.payment?.providerCheckoutUrl ?? checkout.checkoutUrl,
@@ -1262,7 +1313,10 @@ export class PurchasesService {
   }
 
   private async requirePurchase(client: Tx, id: string): Promise<PurchaseRow> {
-    const purchase = await this.findPurchase(client, eq(creditPurchases.id, id));
+    const purchase = await this.findPurchase(
+      client,
+      eq(creditPurchases.id, id),
+    );
     if (!purchase) throw new NotFoundException("Purchase not found");
     return purchase;
   }
@@ -1274,7 +1328,10 @@ export class PurchasesService {
     const [row] = await client
       .select(paymentWithPurchase)
       .from(paymentRows)
-      .innerJoin(creditPurchases, eq(paymentRows.purchaseId, creditPurchases.id))
+      .innerJoin(
+        creditPurchases,
+        eq(paymentRows.purchaseId, creditPurchases.id),
+      )
       .where(condition)
       .limit(1);
     return row ? { ...row.payment, purchase: row.purchase } : null;

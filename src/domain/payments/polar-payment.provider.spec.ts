@@ -122,6 +122,122 @@ describe("PolarPaymentProvider", () => {
     });
   });
 
+  it("normalizes a succeeded checkout with its paid order", async () => {
+    process.env.POLAR_ACCESS_TOKEN = "polar-test-token";
+    const occurredAt = new Date("2026-08-23T08:38:00.000Z");
+    const get = jest.fn().mockResolvedValue({
+      id: "polar-checkout-1",
+      status: "succeeded",
+      externalCustomerId: "user-1",
+      productId: "polar-product-1",
+      metadata: { purchase_id: "purchase-1" },
+    });
+    const list = jest.fn().mockResolvedValue({
+      result: {
+        items: [
+          {
+            id: "polar-order-1",
+            status: "paid",
+            paid: true,
+            checkoutId: "polar-checkout-1",
+            productId: "polar-product-1",
+            metadata: { purchase_id: "purchase-1" },
+            netAmount: 1200,
+            taxAmount: 0,
+            totalAmount: 1200,
+            currency: "krw",
+            createdAt: occurredAt,
+            modifiedAt: occurredAt,
+          },
+        ],
+      },
+    });
+    jest
+      .mocked(Polar)
+      .mockImplementation(
+        () => ({ checkouts: { get }, orders: { list } }) as never,
+      );
+    const provider = new PolarPaymentProvider();
+
+    await expect(
+      provider.reconcileCheckout({
+        checkoutId: "polar-checkout-1",
+        purchaseId: "purchase-1",
+        userId: "user-1",
+        providerProductId: "polar-product-1",
+      }),
+    ).resolves.toEqual({
+      eventId: "reconcile:polar-order-1",
+      type: "paid",
+      purchaseId: "purchase-1",
+      transactionId: "polar-order-1",
+      providerProductId: "polar-product-1",
+      netAmount: 1200,
+      taxAmount: 0,
+      amount: 1200,
+      currency: "KRW",
+      occurredAt,
+    });
+  });
+
+  it("does not reconcile before both checkout and order are paid", async () => {
+    process.env.POLAR_ACCESS_TOKEN = "polar-test-token";
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "confirmed" })
+      .mockResolvedValueOnce({
+        id: "polar-checkout-1",
+        status: "succeeded",
+        externalCustomerId: "user-1",
+        productId: "polar-product-1",
+        metadata: { purchase_id: "purchase-1" },
+      });
+    const list = jest.fn().mockResolvedValue({
+      result: { items: [{ status: "pending", paid: false }] },
+    });
+    jest
+      .mocked(Polar)
+      .mockImplementation(
+        () => ({ checkouts: { get }, orders: { list } }) as never,
+      );
+    const provider = new PolarPaymentProvider();
+    const input = {
+      checkoutId: "polar-checkout-1",
+      purchaseId: "purchase-1",
+      userId: "user-1",
+      providerProductId: "polar-product-1",
+    };
+
+    await expect(provider.reconcileCheckout(input)).resolves.toBeUndefined();
+    await expect(provider.reconcileCheckout(input)).resolves.toBeUndefined();
+  });
+
+  it("rejects a succeeded checkout bound to another purchase", async () => {
+    process.env.POLAR_ACCESS_TOKEN = "polar-test-token";
+    const get = jest.fn().mockResolvedValue({
+      id: "polar-checkout-1",
+      status: "succeeded",
+      externalCustomerId: "user-1",
+      productId: "polar-product-1",
+      metadata: { purchase_id: "another-purchase" },
+    });
+    jest
+      .mocked(Polar)
+      .mockImplementation(
+        () => ({ checkouts: { get }, orders: { list: jest.fn() } }) as never,
+      );
+    const provider = new PolarPaymentProvider();
+
+    await expect(
+      provider.reconcileCheckout({
+        checkoutId: "polar-checkout-1",
+        purchaseId: "purchase-1",
+        userId: "user-1",
+        providerProductId: "polar-product-1",
+      }),
+    ).rejects.toThrow("Invalid provider checkout");
+  });
+
   it("rejects a Polar paid event with a missing tax amount", async () => {
     const provider = new PolarPaymentProvider();
 

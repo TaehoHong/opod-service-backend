@@ -2,14 +2,14 @@ name: opod
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.6-pg16
     container_name: ai_sns_postgres
     environment:
       POSTGRES_DB: ai_sns
       POSTGRES_USER: ai_sns
       POSTGRES_PASSWORD: ai_sns
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - ai_sns_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,3 +20,5 @@ services:
 
 volumes:
   ai_sns_postgres_data:
+    # Upgraded local data; the pre-upgrade Alpine volume remains a rollback copy.
+    name: opod_local_pgvector_20260913

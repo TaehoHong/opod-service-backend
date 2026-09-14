@@ -6,6 +6,7 @@ import {
 import { Polar } from "@polar-sh/sdk";
 import { Webhook, WebhookVerificationError } from "standardwebhooks";
 import {
+  CheckoutReconciliationRequest,
   PaymentEvent,
   PaymentProvider,
   RefundResult,
@@ -81,6 +82,51 @@ export class PolarPaymentProvider implements PaymentProvider {
       returnUrl: input.returnUrl,
     });
     return { checkoutId: checkout.id, checkoutUrl: checkout.url };
+  }
+
+  async reconcileCheckout(
+    input: CheckoutReconciliationRequest,
+  ): Promise<PaymentEvent | undefined> {
+    const client = this.client();
+    const checkout = await client.checkouts.get({ id: input.checkoutId });
+    if (checkout.status !== "succeeded") return undefined;
+    if (
+      checkout.externalCustomerId !== input.userId ||
+      checkout.productId !== input.providerProductId ||
+      String(checkout.metadata.purchase_id ?? "") !== input.purchaseId
+    ) {
+      throw new ForbiddenException("Invalid provider checkout");
+    }
+
+    const page = await client.orders.list({
+      checkoutId: input.checkoutId,
+      sorting: ["-created_at"],
+      limit: 100,
+    });
+    const order = page.result.items.find(
+      (candidate) => candidate.status === "paid" && candidate.paid,
+    );
+    if (!order) return undefined;
+    if (
+      order.checkoutId !== input.checkoutId ||
+      order.productId !== input.providerProductId ||
+      String(order.metadata.purchase_id ?? "") !== input.purchaseId
+    ) {
+      throw new ForbiddenException("Invalid provider order");
+    }
+
+    return {
+      eventId: `reconcile:${order.id}`,
+      type: "paid",
+      purchaseId: input.purchaseId,
+      transactionId: order.id,
+      providerProductId: order.productId,
+      netAmount: order.netAmount,
+      taxAmount: order.taxAmount,
+      amount: order.totalAmount,
+      currency: order.currency.trim().toUpperCase(),
+      occurredAt: order.modifiedAt ?? order.createdAt,
+    };
   }
 
   async verifyEvent(input: {

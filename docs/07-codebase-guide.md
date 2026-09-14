@@ -52,15 +52,15 @@
 | 소셜 ID 토큰 검증      | `SOCIAL_IDENTITY_PROVIDERS` / `SocialIdentityProvider`                     | `AuthService.socialLogin`               | provider adapter가 검증 완료 `sub`·verified email·이름만 반환. 현재 Google 등록                                                                                                                                                                                                | `src/domain/auth/social-identity.provider.ts`, `src/domain/auth/google-social-identity.provider.ts`                                     |
 | 크레딧 예약/캡처       | `CreditsService.reserveCredits`/`captureReservation`/`releaseReservation`  | messages(chat_reply) 등 액션            | 멱등·사용자 단위 직렬화·TTL 5분                                                                                                                                                                                                                                                | `src/domain/credits/credits.service.ts`                                                                                                 |
 | 요금 상수              | `credit-pricing.ts`                                                        | credits, purchases, messages            | 상품·액션 가격의 단일 정본. `credit-policy.md`와 일치해야 함                                                                                                                                                                                                                   | `src/domain/credits/credit-pricing.ts`                                                                                                  |
-| 결제 provider 경계     | `PaymentProvider` / `PaymentsService`                                      | purchases, payment webhook              | 구매 로직은 Polar/Apple/Google SDK 타입을 직접 import하지 않음. Polar 금액은 adapter가 net/tax/total로 정규화하고 `PurchasesService.applyEvent`가 등록 가격을 net 또는 total과 비교하며 통화를 검증                                                                            | `src/domain/payments/payment-provider.ts`, `src/domain/payments/polar-payment.provider.ts`, `src/domain/purchases/purchases.service.ts` |
-| Web checkout 신뢰 경계 | `PurchasesService.assertCheckoutRedirects` / `getByCheckoutId`             | Web checkout 생성·복귀 상태 조회        | success는 허용 origin의 `/profile/payment-return?checkout_id={CHECKOUT_ID}`, return은 `/profile`만 허용. checkout ID 조회는 인증 사용자의 구매만 반환하며 타 사용자와 미존재는 동일하게 404 처리. 고객 IP는 `TRUST_PROXY_HOPS`가 명시적으로 신뢰한 `request.ip`만 Polar에 전달 | `src/main.ts`, `src/domain/purchases/purchases.service.ts`, `src/service/purchases/purchases.controller.ts`, `test/credits.e2e-spec.ts` |
+| 결제 provider 경계     | `PaymentProvider` / `PaymentsService`                                      | purchases, payment webhook              | 구매 로직은 Polar/Apple/Google SDK 타입을 직접 import하지 않음. Polar webhook과 Checkout/Order 직접 조회는 adapter가 같은 `PaymentEvent`로 정규화하고 `PurchasesService.applyEvent`가 등록 가격을 net 또는 total과 비교하며 통화를 검증                                          | `src/domain/payments/payment-provider.ts`, `src/domain/payments/polar-payment.provider.ts`, `src/domain/purchases/purchases.service.ts` |
+| Web checkout 신뢰 경계 | `PurchasesService.assertCheckoutRedirects` / `getByCheckoutId`             | Web checkout 생성·복귀 상태 조회        | success는 허용 origin의 `/profile/payment-return?checkout_id={CHECKOUT_ID}`, return은 `/profile`만 허용. checkout ID 조회는 인증 사용자의 구매만 반환하며 타 사용자와 미존재는 동일하게 404 처리. 본인 pending 구매는 Polar checkout `succeeded`와 order `paid` 및 사용자·구매·상품 binding을 직접 재검증해 webhook 누락을 복구. 고객 IP는 `TRUST_PROXY_HOPS`가 명시적으로 신뢰한 `request.ip`만 Polar에 전달 | `src/main.ts`, `src/domain/purchases/purchases.service.ts`, `src/domain/payments/polar-payment.provider.ts`, `src/service/purchases/purchases.controller.ts`, `test/credits.e2e-spec.ts` |
 | Polar 누적 환불        | `PurchasesService.applyCumulativeRefund`                                   | `order.refunded` webhook                | `refunded_amount`를 누적 세전 환불액으로 보고 금전·유상 크레딧 증가분만 기록. 남은 무상 프로모션은 1회 회수하며 사용분은 유상 부채로 전환하지 않음. 동일·감소 누적액은 중복 회수 또는 역전 금지                                                                                | `src/domain/purchases/purchases.service.ts`, `src/domain/payments/polar-payment.provider.ts`, `test/credits.e2e-spec.ts`                |
 | 미디어 공개 URL        | `publicMediaUrl`                                                           | posts, stories                          | `S3_PUBLIC_BASE_URL`로 조립                                                                                                                                                                                                                                                    | `src/domain/media/media-url.ts`                                                                                                         |
 | DM 답장 provider       | `MESSAGE_REPLY_PROVIDER` / `createMessageReplyProvider`                    | messages worker                         | opod-agent 호출(OpenAI 호환), 주입형(테스트 대체). 실패는 `MessageReplyError`로 던지고 `retryable`이 worker의 재시도 여부를 가른다 — 5xx·429·timeout·연결실패·빈 생성은 재시도, 4xx·계약 불일치는 즉시 실패                                                                    | `src/domain/messages/message-reply.provider.ts`                                                                                         |
 | 알림 생성              | `NotificationsService.createNotificationWithClient` / `NOTIFICATION_TYPES` | purchases (충전·환불 완료)              | 유발한 쓰기와 **같은 트랜잭션**에서 생성(커밋 후 생성 금지 — 멱등 가드 우회). 중복 방지는 호출자의 상태 전이 가드가 담당. admin 소유 트리거(문의 답변·공지·신고)는 opod-admin이 같은 테이블에 직접 insert                                                                      | `src/domain/notifications/notifications.service.ts`, `notification-types.ts`                                                            |
 | 팔로우 알림 물질화     | `NotificationsService.syncFollowNotifications`                             | `POST /notifications/sync` (앱 호출)    | 게시는 admin 소관이고 서버 푸시 경로가 없어 write-time 팬아웃 대신 **접촉 시** 생성. 워터마크는 `user_character_follows.notified_up_to_at`(기본값=팔로우 시각), 유저 단위 advisory lock으로 직렬화. 상한 `FOLLOW_NOTIFICATION_SYNC_LIMIT`, 잘려도 워터마크는 전진              | `src/domain/notifications/notifications.service.ts`                                                                                     |
-| DM 읽음/미읽음         | `MessagesService.markConversationRead` / `unreadCountsFor`                 | `POST /messages/read`, 대화 목록        | 워터마크는 `message_conversations.last_read_at`(null=한 번도 안 읽음). 미읽음은 `senderType=character`만 세고 대화 목록 1회 `groupBy`로 계산. 전송·조회는 읽음을 찍지 않는다 — 앱이 노출 시점을 제어                                                                           | `src/domain/messages/messages.service.ts`                                                                                               |
-| 대화 목록 정렬         | `message_conversations.last_message_at`                                    | `MessagesService.listConversationsPage` | 관계의 `MAX(createdAt)`으로는 정렬할 수 없어 비정규화. **갱신은 `addMessage`에 있다** — 전송 경로가 아니라 메시지 추가 지점이라 선톡 등 새 경로도 자동 반영. 정렬은 `[lastMessageAt desc, id desc]`                                                                            | `src/domain/messages/messages.service.ts`                                                                                               |
+| DM 읽음/미읽음         | `MessagesService.markConversationRead` / `unreadCountsFor`                 | `POST /messages/read`, 대화 목록        | 워터마크는 `chat_conversations.user_last_read_at`(null=한 번도 안 읽음). 미읽음은 `sender_role=character`만 세고 대화 목록 1회 `groupBy`로 계산. 전송·조회는 읽음을 찍지 않는다 — 앱이 노출 시점을 제어                                                                           | `src/domain/messages/messages.service.ts`                                                                                               |
+| 대화 목록 정렬         | `chat_conversations.latest_message_at`                                     | `MessagesService.listConversationsPage` | 관계의 `MAX(sent_at)`으로는 정렬할 수 없어 비정규화. **갱신은 `addMessage`에 있다** — 전송 경로가 아니라 메시지 추가 지점이라 선톡 등 새 경로도 자동 반영. 정렬은 `[lastMessageAt desc, id desc]`                                                                                | `src/domain/messages/messages.service.ts`                                                                                               |
 | 요청 로깅              | `RequestLoggingInterceptor`                                                | 전역(APP_INTERCEPTOR)                   | 성공 읽기 무로그, 쓰기·실패만                                                                                                                                                                                                                                                  | `src/service/request-logging.interceptor.ts`                                                                                            |
 | Swagger 셋업/예시      | `setupServiceSwagger`                                                      | main                                    | operationId 기준 예시·태그 주입                                                                                                                                                                                                                                                | `src/service/swagger.ts`                                                                                                                |
 
@@ -147,3 +147,39 @@
 - **미매핑**: opod-agent가 쓰는 `agent_*` 테이블의 서비스측 read 경로(현재
   서비스 코드에서 사용 안 함). 관계 메모리 노출은 미구현.
 - affinity 관련 코드는 존재하지 않음(스키마에 `affinity` 컬럼 없음). 정책은 초안.
+
+## Authored character context — 2026-09-08 verified boundary
+
+### 2026-09-11 추가 검증
+
+- `drizzle/20260911074900_character_canon_sources/`는 정본 연결 테이블과 canon의
+  `source_refs/occurred_label/occurred_precision` nullable 필드를 추가한다. 복합 PK, 원문 조각 삭제
+  cascade, 정본 물리 삭제 restrict, 출처 배열·시점 조합 CHECK를 소유한다. 기존 NULL을 추정해 채우지 않는다.
+  연결 캐릭터 일치·활성 상태·never_prompt·편집 CAS는 admin이, 읽기 무결성 차단은 agent가 소유한다.
+  빈 DB/기존 DB 업그레이드·down/up·원문 보존 검증은 아래 두 migration suite의 5개 테스트다.
+  적용 시험은55433 원본을 복원한 격리 복제본에서만 수행했다. 원본·개발 DB 적용을 뜻하지 않는다.
+- `drizzle/20260911063302_character_chat_context/`는 추가형 문맥 스키마 정본이다.
+  persona fragment vector(1024)/model/source SHA/time, canon source SHA/occurredAt,
+  archival model/source SHA/session/sourceMessages/type/occurredAt을 nullable로 추가한다.
+  sourceMessages 배열/type 허용값 CHECK만 적용하며 기존 자료를 추정해 backfill하지 않는다.
+- admin이 내용 변경·색인 무효화를, agent가 검색·출처 검증·주입을 소유한다.
+  기존 archival double precision[] 타입과 operation_key/ordinal은 유지한다.
+- `test/character-context-migration.e2e-spec.ts`는 새 컬럼 down/up 및 savepoint 복원을
+  일회용 DB에서 검사한다. `test/drizzle-migrations.e2e-spec.ts`는 빈 DB/legacy와5개 migration 이력을
+  확인한다. 두 suite5개 테스트 및 build/lint 통과. 보존 로컬 DB에서 down을 실행하지 않는다.
+
+- `src/domain/database/schema.ts`와 `drizzle/20260908093302_persist_character_context/`가
+  `character_persona_fragments` 및 `character_canon_memories.temporal_kind/context_injection_mode/retrieval_keywords`의 정본이다.
+  원문은 `character_personas`, 조각은 source FK/ordinal로 연결된다. UUIDv7, timestamps,
+  unique ordinal, kind/injection 값 및 명시적 event의 retrieved-only DB 제약을 유지한다.
+- 원문/조각의 원자 수정과 canon 정책 저장은 **opod-admin**의 CharacterRepository/API가
+  소유한다. 대화 입력 선택은 **opod-agent**의 PostgresPersonaStore/Persona Router가 소유한다.
+  이 서비스에 admin 쓰기 API나 캐릭터별 분류 로직을 추가하지 않는다.
+- migration 이후 새 reader/admin 코드를 사용해야 한다. nullable canon metadata와 child 없는
+  원문은 legacy 호환이다. 사용자별 `agent_*` 기억을 공용 캐릭터 설정으로 합치지 않는다.
+- 좁은 검증: `npm run test:e2e -- --runTestsByPath test/drizzle-migrations.e2e-spec.ts
+  test/character-context-migration.e2e-spec.ts`. 후자는 Testcontainers 트랜잭션에서만
+  새 구조의 down/up·원문 보존·rollback 복구를 검사한다.
+- D29 적용 대상은 새 격리 로컬 DB55433뿐이다. 기존5433 및 개발 DB에 자동 적용하지 않는다.
+  단위149/E2E99/build/lint 및 migration 재실행·schema drift를 검증했다. 이 좁은 항목의
+  확인이며 guide 전체 freshness를 갱신한 것은 아니다.

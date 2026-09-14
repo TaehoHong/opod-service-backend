@@ -18,23 +18,45 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(63);
-    expect(enums).toHaveLength(28);
-    expect(columns).toHaveLength(552);
+    expect(tableConfigs).toHaveLength(64);
+    expect(enums).toHaveLength(29);
+    expect(columns).toHaveLength(586);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(120);
+    ).toBe(121);
     expect(
       tableConfigs.reduce(
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(68);
+    ).toBe(71);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
     expect(tableConfigs.map((table) => table.name)).not.toContain(
       "_prisma_migrations",
+    );
+    expect(tableConfigs.map((table) => table.name)).toEqual(
+      expect.arrayContaining([
+        "chat_conversations",
+        "chat_messages",
+        "chat_reply_generation_jobs",
+        "chat_memory_entries",
+        "chat_memory_consolidation_jobs",
+        "chat_applied_state_changes",
+        "chat_relationship_states",
+        "chat_memory_session_summaries",
+        "character_canon_memories",
+      ]),
+    );
+    expect(tableConfigs.map((table) => table.name)).not.toEqual(
+      expect.arrayContaining([
+        "agent_core_memories",
+        "agent_archival_memories",
+        "message_conversations",
+        "messages",
+        "character_memories",
+      ]),
     );
   });
 
@@ -46,7 +68,7 @@ describe("Drizzle schema", () => {
       ({ column }) => column.name === "updated_at",
     );
 
-    expect(uuidPrimaryKeys).toHaveLength(46);
+    expect(uuidPrimaryKeys).toHaveLength(47);
     for (const { column, path } of uuidPrimaryKeys) {
       expect({ defaultFn: column.defaultFn, path }).toEqual({
         defaultFn: expect.any(Function),
@@ -87,8 +109,54 @@ describe("Drizzle schema", () => {
       "service_logs.id",
     ]);
     expect(checkNames).toEqual([
+      "character_canon_memories_event_time_fields_check",
+      "character_canon_memories_event_time_precision_check",
+      "character_canon_memories_routing_check",
+      "character_canon_memories_source_references_check",
+      "character_persona_fragments_content_check",
+      "character_persona_fragments_injection_check",
+      "character_persona_fragments_kind_check",
+      "character_persona_fragments_ordinal_check",
+      "chat_memory_entries_memory_category_check",
+      "chat_memory_entries_source_message_snapshots_check",
       "generation_job_outputs_filter_preset_check",
       "unsettled_credit_debts_paid_debt_check",
     ]);
+  });
+
+  it("stores 1024-dimensional embeddings for memory and reference captions", () => {
+    const embeddingTables = [
+      "character_canon_memories",
+      "character_visual_profile_references",
+      "character_location_references",
+    ];
+
+    for (const tableName of embeddingTables) {
+      const table = tableConfigs.find((config) => config.name === tableName);
+      const embedding = table?.columns.find((column) =>
+        ["embedding", "canon_embedding"].includes(column.name),
+      );
+
+      expect({ tableName, columnType: embedding?.columnType }).toEqual({
+        tableName,
+        columnType: "PgVector",
+      });
+      expect({ tableName, sqlType: embedding?.getSQLType() }).toEqual({
+        tableName,
+        sqlType: "vector(1024)",
+      });
+      expect({ tableName, notNull: embedding?.notNull }).toEqual({
+        tableName,
+        notNull: false,
+      });
+      expect(table?.columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "embedding_model",
+          tableName === "character_canon_memories"
+            ? "embedding_generated_at"
+            : "embedded_at",
+        ]),
+      );
+    }
   });
 });

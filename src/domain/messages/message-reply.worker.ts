@@ -5,7 +5,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, count, eq, gt, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, lte, ne, or, sql } from "drizzle-orm";
 import { CreditsService } from "../credits/credits.service";
 import { DatabaseService } from "../database/database.service";
 import {
@@ -61,6 +61,7 @@ type ClaimedJob = {
   id: string;
   conversationId: string;
   turnId: string;
+  createdAt: Date;
   attemptCount: number;
   deadlineAt: Date;
   reservationReference: string | null;
@@ -243,6 +244,7 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
         id: claimed.id,
         conversationId: claimed.conversationId,
         turnId: claimed.turnId,
+        createdAt: claimed.createdAt,
         attemptCount: claimed.attemptCount,
         deadlineAt,
         reservationReference: claimed.reservationReference,
@@ -266,8 +268,9 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Agent 문맥은 이 작업의 사용자 메시지 시각까지만 담는다. 뒤에 도착해 대기 중인
-   * 메시지를 넣으면 아직 답하지 않은 말에 이미 답한 것처럼 보인다.
+   * Agent 문맥은 현재 작업까지의 논리적 답변 순서만 담는다. 답변 생성 중 다음
+   * 사용자 메시지가 먼저 저장될 수 있으므로, 물리적 메시지 시각이 아니라
+   * replyJob 생성 순서 안에서 user → character 순으로 복원한다.
    */
   private async replyContext(job: ClaimedJob) {
     const [turn] = await this.database.client
@@ -292,28 +295,57 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
         id: messages.id,
         senderType: messages.senderType,
         body: messages.body,
+        createdAt: messages.createdAt,
+        replyJob: {
+          id: messageReplyJobs.id,
+          createdAt: messageReplyJobs.createdAt,
+        },
       })
       .from(messages)
-      .where(
-        and(
-          eq(messages.conversationId, job.conversationId),
-          or(
-            lt(messages.createdAt, turn.createdAt),
-            and(
-              eq(messages.createdAt, turn.createdAt),
-              lte(messages.id, turn.id),
-            ),
-          ),
-        ),
-      )
-      .orderBy(asc(messages.createdAt), asc(messages.id));
+      .leftJoin(messageReplyJobs, eq(messages.replyJobId, messageReplyJobs.id))
+      .where(eq(messages.conversationId, job.conversationId));
+
+    const scopedHistory = history.filter((message) => {
+      if (!message.replyJob) {
+        return (
+          message.createdAt < turn.createdAt ||
+          (message.createdAt.getTime() === turn.createdAt.getTime() &&
+            message.id.localeCompare(turn.id) <= 0)
+        );
+      }
+      return (
+        message.replyJob.createdAt < job.createdAt ||
+        (message.replyJob.createdAt.getTime() === job.createdAt.getTime() &&
+          message.replyJob.id.localeCompare(job.id) <= 0)
+      );
+    });
+
+    scopedHistory.sort((left, right) => {
+      const leftGroupAt = left.replyJob?.createdAt ?? left.createdAt;
+      const rightGroupAt = right.replyJob?.createdAt ?? right.createdAt;
+      const byGroupAt = leftGroupAt.getTime() - rightGroupAt.getTime();
+      if (byGroupAt !== 0) return byGroupAt;
+
+      const leftGroupId = left.replyJob?.id ?? left.id;
+      const rightGroupId = right.replyJob?.id ?? right.id;
+      const byGroupId = leftGroupId.localeCompare(rightGroupId);
+      if (byGroupId !== 0) return byGroupId;
+
+      const leftRoleOrder = left.senderType === "user" ? 0 : 1;
+      const rightRoleOrder = right.senderType === "user" ? 0 : 1;
+      const byRole = leftRoleOrder - rightRoleOrder;
+      if (byRole !== 0) return byRole;
+
+      const byMessageAt = left.createdAt.getTime() - right.createdAt.getTime();
+      return byMessageAt !== 0 ? byMessageAt : left.id.localeCompare(right.id);
+    });
 
     return {
       userId: turn.conversation.userId,
       characterId: turn.conversation.characterId,
       conversationId: job.conversationId,
       turnId: job.turnId,
-      messages: history.map((message) => ({
+      messages: scopedHistory.map((message) => ({
         role:
           message.senderType === "user"
             ? ("user" as const)

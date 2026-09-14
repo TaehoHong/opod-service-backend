@@ -13,6 +13,7 @@ type JobRow = {
   id: string;
   conversationId: string;
   turnId: string;
+  createdAt: Date;
   status: "queued" | "running" | "completed" | "failed";
   attemptCount: number;
   readyAt: Date;
@@ -27,6 +28,7 @@ function job(overrides: Partial<JobRow> = {}): JobRow {
     id: "job-1",
     conversationId: "conversation-1",
     turnId: "message-human",
+    createdAt: turnCreatedAt,
     status: "queued",
     attemptCount: 0,
     readyAt: turnCreatedAt,
@@ -67,6 +69,8 @@ function createHarness(options: {
     id: string;
     senderType: "user" | "character";
     body: string;
+    createdAt: Date;
+    replyJob: { id: string; createdAt: Date } | null;
   }>;
   reply?: jest.Mock;
   runningSiblings?: number;
@@ -78,6 +82,8 @@ function createHarness(options: {
       id: "message-human",
       senderType: "user" as const,
       body: "hello",
+      createdAt: turnCreatedAt,
+      replyJob: { id: "job-1", createdAt: turnCreatedAt },
     },
   ];
   const updateSets: Array<Record<string, unknown>> = [];
@@ -216,21 +222,49 @@ describe("MessageReplyWorker", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("sends only the messages selected up to the turn being answered", async () => {
+  it("queries reply-job order when building context for the current turn", async () => {
+    const harness = createHarness({});
+    await harness.worker.runOnce();
+    expect(harness.historySelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("orders a completed prior reply before a later user turn", async () => {
+    const previousJobAt = new Date("2026-06-29T23:59:59.000Z");
+    const laterTurnAt = new Date("2026-06-30T00:00:01.000Z");
     const harness = createHarness({
+      jobs: [job({ createdAt: laterTurnAt })],
       history: [
+        {
+          id: "message-user-1",
+          senderType: "user",
+          body: "first user message",
+          createdAt: previousJobAt,
+          replyJob: { id: "job-previous", createdAt: previousJobAt },
+        },
         {
           id: "message-human",
           senderType: "user",
-          body: "hello",
+          body: "second user message",
+          createdAt: laterTurnAt,
+          replyJob: { id: "job-1", createdAt: laterTurnAt },
+        },
+        {
+          id: "message-character-1",
+          senderType: "character",
+          body: "first assistant reply",
+          createdAt: new Date("2026-06-30T00:00:02.000Z"),
+          replyJob: { id: "job-previous", createdAt: previousJobAt },
         },
       ],
     });
     await harness.worker.runOnce();
-    expect(harness.historySelect).toHaveBeenCalledTimes(1);
     expect(harness.replyProvider.createReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        messages: [{ role: "user", content: "hello" }],
+        messages: [
+          { role: "user", content: "first user message" },
+          { role: "assistant", content: "first assistant reply" },
+          { role: "user", content: "second user message" },
+        ],
       }),
     );
   });

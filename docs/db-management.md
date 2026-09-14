@@ -8,12 +8,12 @@ Status: 운영 중 (Drizzle v1 전환 2026-08-31)
 
 ## 데이터 도메인과 관리 원칙
 
-| 도메인 | 성격 | 원칙 |
-|---|---|---|
-| 캐릭터 설정 (personas, memories, visual profile) | 정본 | 운영자가 admin UI로 수정. 벡터화의 원천 |
-| 레퍼런스 캡션, (차후) 임베딩 | 파생 | 정본에서 언제든 재생성 가능해야 한다 — 백필 멱등, 유실은 사고가 아니다 |
-| drafts, generation jobs, action logs | 런타임 산출물 | append 중심 추적 데이터. 보존 정책으로 정리 |
-| admin_settings | 설정 | DB 값이 env보다 우선 |
+| 도메인                                           | 성격          | 원칙                                                                   |
+| ------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
+| 캐릭터 설정 (personas, memories, visual profile) | 정본          | 운영자가 admin UI로 수정. 벡터화의 원천                                |
+| 레퍼런스 캡션, (차후) 임베딩                     | 파생          | 정본에서 언제든 재생성 가능해야 한다 — 백필 멱등, 유실은 사고가 아니다 |
+| drafts, generation jobs, action logs             | 런타임 산출물 | append 중심 추적 데이터. 보존 정책으로 정리                            |
+| admin_settings                                   | 설정          | DB 값이 env보다 우선                                                   |
 
 핵심 원칙: **임베딩을 포함한 파생 데이터는 절대 정본이 아니다.** 재생성
 가능성이 보장되면 모델 교체·장애·마이그레이션이 전부 "백필 재실행"으로
@@ -102,17 +102,35 @@ Drizzle 실행기는 pending migration과 metadata 기록을 transaction으로 �
 데이터 손실 가능성이 있는 schema rollback은 자동화하지 않으며, 새 forward
 migration 또는 검증된 백업 복구로 처리한다.
 
-## pgvector 확장 설계 (차후 — 트리거 도달 시)
+## 채팅·메모리 테이블 역할
 
-컨텍스트 선별은 현재 LLM 선별이다 (opod-admin
-docs/media-generation-pipeline.md "컨텍스트 선별"). 아래 트리거 중 하나라도
-관측되면 "임베딩 1차 축소 → LLM 최종 선별" 하이브리드로 전환한다:
+| 테이블 | 역할 |
+| --- | --- |
+| `chat_conversations` | 사용자와 캐릭터 조합별 대화방 및 읽음·최신 메시지 시각 |
+| `chat_messages` | 사용자와 캐릭터가 주고받은 원문 메시지 |
+| `chat_reply_generation_jobs` | 캐릭터 답변 생성 작업과 재시도 상태 |
+| `chat_memory_entries` | 대화에서 추출·추론한 검색 단위 장기 기억. `context_injection_mode`로 `always`와 `retrieved`를 구분 |
+| `chat_memory_consolidation_jobs` | 대화를 기억·요약으로 통합하는 비동기 작업 |
+| `chat_applied_state_changes` | 관계 상태 변경의 중복 적용을 막는 멱등성 원장 |
+| `chat_relationship_states` | 사용자-캐릭터별 유대 경험치와 reflection 누적 상태 |
+| `chat_memory_session_summaries` | 세션별 대화 요약과 요약된 메시지 수 |
+| `character_canon_memories` | 사용자와 무관한 캐릭터 공식 설정·사건·선호 기억 |
 
-1. 캐릭터당 활성 메모리 > 100개
-2. 캐릭터당 레퍼런스 > 30장
-3. 기획 호출 입력이 상시 10K 토큰 초과
+원문 대화는 `chat_messages`가 정본이다. `chat_conversations` 행 하나를 통째로
+임베딩하지 않고, 장기 기억은 `chat_memory_entries.memory_text` 단위로 임베딩한다.
+항상 필요한 명시적 사용자 사실은 `always`, 그 외 기억은 `retrieved`로 저장한다.
 
-관측 지점: post_drafts.concept_json의 planInput 스냅샷, draft 워커 로그.
+## pgvector + Qwen 임베딩 설계
+
+1단계에서는 pgvector 저장 기반만 활성화한다. 임베딩 생성·백필·유사도 검색은
+후속 단계에서 연결하므로 현재 컨텍스트 선별 동작은 바뀌지 않는다. 원문과 저장
+위치는 다음과 같다.
+
+| 원문                             | 테이블                                | 임베딩 식별자             |
+| -------------------------------- | ------------------------------------- | ------------------------- |
+| 캐릭터 공식 기억 `canon_text`    | `character_canon_memories`            | `id`                      |
+| 외형 레퍼런스 캡션 `description` | `character_visual_profile_references` | `(profile_id, media_id)`  |
+| 장소 레퍼런스 캡션 `description` | `character_location_references`       | `(location_id, media_id)` |
 
 ### 왜 외부 벡터 DB가 아니라 pgvector인가
 
@@ -121,28 +139,34 @@ docs/media-generation-pipeline.md "컨텍스트 선별"). 아래 트리거 중 �
 - 인프라 추가 없음. RDS가 pgvector를 지원한다.
 - 외부 벡터 스토어는 수백만 행 규모에서만 재검토한다.
 
-### 스키마 (전환 시 마이그레이션 1건)
+### 스키마
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-ALTER TABLE opod.character_memories
-  ADD COLUMN embedding vector(1536),
-  ADD COLUMN embedded_at timestamptz(6);
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+ALTER TABLE opod.character_canon_memories
+  ADD COLUMN canon_embedding vector(1024),
+  ADD COLUMN embedding_model text,
+  ADD COLUMN embedding_generated_at timestamptz(6);
 ALTER TABLE opod.character_visual_profile_references
-  ADD COLUMN embedding vector(1536),
+  ADD COLUMN embedding vector(1024),
+  ADD COLUMN embedding_model text,
+  ADD COLUMN embedded_at timestamptz(6);
+ALTER TABLE opod.character_location_references
+  ADD COLUMN embedding vector(1024),
+  ADD COLUMN embedding_model text,
   ADD COLUMN embedded_at timestamptz(6);
 ```
 
-실제 도입 시 이 SQL과 같은 변경을 Drizzle 정본 schema에도 선언하고 migration으로
-생성·검토한다.
+Qwen3-Embedding-0.6B의 최대 출력 크기에 맞춰 1024차원으로 고정한다. 세 컬럼은
+모두 nullable이다. 기존 행과 기존 쓰기 경로를 깨지 않고 후속 백필을 분리하기
+위해서다.
 
 - 별도 임베딩 테이블(polymorphic)이 아니라 **정본 테이블의 컬럼**: 조인
-  불필요, cascade 공짜. 다중 임베딩 모델 버전 관리는 이 규모에서
-  오버엔지니어링이다.
-- 임베딩 모델은 admin_settings `embedding.*` 네임스페이스(apiUrl/apiKey/model,
-  generation-settings 패턴 복제)로 전역 고정. 모델 교체 = 전체 백필.
+  불필요, cascade 공짜.
+- `embedding_model`은 행별 생성 모델을 기록한다. 모델 교체 시 현재 설정과 다른
+  행만 안전하게 재임베딩할 수 있다.
 
-### 쓰기 경로
+### 쓰기 경로 (후속 단계)
 
 - 메모리 생성/수정, 캡셔닝 완료 시점에 동기 임베딩. **실패해도 저장은 막지
   않는다** (embedding null → 백필 대상).
@@ -150,10 +174,10 @@ ALTER TABLE opod.character_visual_profile_references
 - admin UI "임베딩 백필" 버튼: `embedding IS NULL OR embedded_at < updated_at`
   행만 처리 (캡션 생성 버튼과 같은 멱등 패턴).
 
-### 읽기 경로 (하이브리드 선별)
+### 읽기 경로 (후속 단계)
 
 ```sql
-SELECT id FROM opod.character_memories
+SELECT id FROM opod.character_canon_memories
 WHERE character_id = $1 AND deleted_at IS NULL AND embedding IS NOT NULL
 ORDER BY embedding <=> $2 LIMIT 20
 ```
