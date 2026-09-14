@@ -75,6 +75,12 @@ docker compose up -d --no-build api
   snapshot과 일치
 - baseline의 크레딧 상품 4개와 local development 결제 mapping 4개가 존재
 
+레거시 개발 DB에서 `generation_job_status`의 `draft` 값이 마지막에 추가된 이력이
+있으므로, baseline 검증은 이 enum에 한해 값 집합이 같으면 순서 차이를 허용한다.
+애플리케이션은 이 enum의 PostgreSQL 대소 비교를 사용하지 않는다. 또한 배포
+migration 실행기는 `public.vector` 타입을 항상 찾을 수 있도록 실행 세션의
+`search_path`를 `opod, public`으로 정규화한다.
+
 하나라도 다르면 등록을 중단한다. 이 경우 `db:push`로 맞추지 말고 차이를 별도
 검토해 명시적인 정합화 migration을 만든다. **이 작업에서는 로컬/개발/운영 DB에
 baseline을 실행하지 않았으므로 각 기존 환경은 최초 Drizzle 배포 전에 따로
