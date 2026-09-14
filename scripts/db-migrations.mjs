@@ -65,6 +65,12 @@ function expectedEntities(snapshot, entityType) {
   );
 }
 
+function comparableEnum([name, values]) {
+  return name === "generation_job_status"
+    ? [name, [...values].sort()]
+    : [name, values];
+}
+
 async function assertNoRecordedDrizzleMigrations(client) {
   const { rows } = await client.query(
     "SELECT to_regclass('drizzle.__drizzle_migrations')::text AS relation",
@@ -183,8 +189,8 @@ async function assertBaselineSchema(client, snapshot) {
   `);
   compareSets(
     "enums",
-    expectedEnums,
-    actualEnums.rows.map((row) => [row.name, row.values]),
+    expectedEnums.map(comparableEnum),
+    actualEnums.rows.map((row) => comparableEnum([row.name, row.values])),
   );
 
   const expectedIndexes = expectedEntities(snapshot, "indexes").map((index) => [

@@ -295,6 +295,14 @@ describe("Drizzle migrations", () => {
            (user_id, character_id, content, updated_at)
          VALUES ('legacy-user', 'legacy-character', '사용자는 이름을 민지라고 알려줬다.', now())`,
       );
+      await client.query(`
+        ALTER TYPE opod.generation_job_status RENAME TO generation_job_status_old;
+        CREATE TYPE opod.generation_job_status AS ENUM ('queued', 'running', 'completed', 'failed', 'draft');
+        ALTER TABLE opod.generation_jobs ALTER COLUMN status DROP DEFAULT;
+        ALTER TABLE opod.generation_jobs ALTER COLUMN status TYPE opod.generation_job_status USING status::text::opod.generation_job_status;
+        ALTER TABLE opod.generation_jobs ALTER COLUMN status SET DEFAULT 'queued';
+        DROP TYPE opod.generation_job_status_old;
+      `);
 
       const searchPathUrl = new URL(databaseUrl);
       searchPathUrl.searchParams.set("options", "-c search_path=opod,public");
