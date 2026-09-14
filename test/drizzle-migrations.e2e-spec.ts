@@ -70,7 +70,9 @@ describe("Drizzle migrations", () => {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-    expect(runMigrations(databaseUrl)).toContain(
+    const migrationUrl = new URL(databaseUrl);
+    migrationUrl.searchParams.set("options", "-c search_path=opod");
+    expect(runMigrations(migrationUrl.toString())).toContain(
       "Drizzle migrations are up to date",
     );
 

@@ -418,6 +418,7 @@ async function main() {
     const database = drizzle({ client });
 
     if (!baselineMode) {
+      await client.query("SET search_path TO opod, public");
       await migrate(database, migrationConfig);
       console.log("Drizzle migrations are up to date");
       return;
