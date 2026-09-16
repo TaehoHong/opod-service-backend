@@ -150,6 +150,16 @@
 
 ## Authored character context — 2026-09-08 verified boundary
 
+### 2026-09-16 persona schema v2 검증
+
+- `drizzle/20260916062345_persona_schema_v2/`는 `character_personas.schema_version`
+  (`smallint`, 기본값 1)을 추가하고 fragment kind에 `motivation`, `judgment`, `tension`,
+  `relationship`, `boundary`를 추가한다. 기존 `behavior`/`lore` 행은 변환하거나 삭제하지 않는다.
+- backend는 kind 허용 범위와 v1 기본값의 DDL 정본만 소유한다. v2 조합 검증과 원자 저장은 admin,
+  prompt 목적 설명과 주입은 agent가 소유한다. 좁은 검증은
+  `npm run test:e2e -- --runInBand test/character-context-migration.e2e-spec.ts test/drizzle-migrations.e2e-spec.ts`이며
+  일회용 Testcontainers DB에서 5개 테스트가 통과했다. 로컬 DB와 개발 DB에는 적용하지 않았다.
+
 ### 2026-09-11 추가 검증
 
 - `drizzle/20260911074900_character_canon_sources/`는 정본 연결 테이블과 canon의

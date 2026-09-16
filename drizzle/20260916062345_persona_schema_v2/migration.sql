@@ -1,0 +1,2 @@
+ALTER TABLE "opod"."character_personas" ADD COLUMN "schema_version" smallint DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "opod"."character_persona_fragments" DROP CONSTRAINT "character_persona_fragments_kind_check", ADD CONSTRAINT "character_persona_fragments_kind_check" CHECK ("kind" IN ('identity', 'behavior', 'voice', 'example', 'greeting', 'lore', 'creator_note', 'motivation', 'judgment', 'tension', 'relationship', 'boundary'));

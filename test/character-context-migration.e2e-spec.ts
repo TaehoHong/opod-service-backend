@@ -3,6 +3,53 @@ import { Client } from "pg";
 
 // Runs only on the disposable DB provisioned by the E2E global setup.
 describe("character and chat memory schema", () => {
+  it("supports versioned v2 persona facets without rewriting v1 sources", async () => {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query("BEGIN");
+      const character = randomUUID();
+      const legacyPersona = randomUUID();
+      const v2Persona = randomUUID();
+      await client.query(
+        "INSERT INTO opod.characters(id,public_id,display_name,bio,updated_at) VALUES($1,$2,'Synthetic','',now())",
+        [character, `persona-v2-${character}`],
+      );
+      await client.query(
+        "INSERT INTO opod.character_personas(id,character_id,title,content,updated_at) VALUES($1,$2,'legacy','legacy',now())",
+        [legacyPersona, character],
+      );
+      expect(
+        (
+          await client.query(
+            "SELECT schema_version FROM opod.character_personas WHERE id=$1",
+            [legacyPersona],
+          )
+        ).rows,
+      ).toEqual([{ schema_version: 1 }]);
+
+      await client.query(
+        "INSERT INTO opod.character_personas(id,character_id,title,content,schema_version,updated_at) VALUES($1,$2,'v2','v2',2,now())",
+        [v2Persona, character],
+      );
+      for (const [ordinal, kind] of [
+        "motivation",
+        "judgment",
+        "tension",
+        "relationship",
+        "boundary",
+      ].entries()) {
+        await client.query(
+          "INSERT INTO opod.character_persona_fragments(id,persona_id,ordinal,content,kind,injection,updated_at) VALUES($1,$2,$3,$4,$5,'always',now())",
+          [randomUUID(), v2Persona, ordinal, kind, kind],
+        );
+      }
+    } finally {
+      await client.query("ROLLBACK");
+      await client.end();
+    }
+  });
+
   it("protects canon provenance, event time, and persona links", async () => {
     const client = new Client({ connectionString: process.env.DATABASE_URL });
     await client.connect();

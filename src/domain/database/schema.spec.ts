@@ -20,7 +20,7 @@ describe("Drizzle schema", () => {
 
     expect(tableConfigs).toHaveLength(64);
     expect(enums).toHaveLength(29);
-    expect(columns).toHaveLength(586);
+    expect(columns).toHaveLength(587);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
     ).toBe(121);
