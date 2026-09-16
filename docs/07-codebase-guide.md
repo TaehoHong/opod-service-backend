@@ -158,7 +158,8 @@
 - backend는 kind 허용 범위와 v1 기본값의 DDL 정본만 소유한다. v2 조합 검증과 원자 저장은 admin,
   prompt 목적 설명과 주입은 agent가 소유한다. 좁은 검증은
   `npm run test:e2e -- --runInBand test/character-context-migration.e2e-spec.ts test/drizzle-migrations.e2e-spec.ts`이며
-  일회용 Testcontainers DB에서 5개 테스트가 통과했다. 로컬 DB와 개발 DB에는 적용하지 않았다.
+  일회용 Testcontainers DB에서 5개 테스트가 통과했다. 2026-09-16 로컬 DB와 개발 DB에 적용했으며,
+  개발 DB 적용 전 백업은 서버의 `backups/pre-persona-v2-20260916T083322Z.dump`에 보관한다.
 
 ### 2026-09-11 추가 검증
 
