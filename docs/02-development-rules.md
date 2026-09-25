@@ -17,9 +17,63 @@
 - Integration/E2E: `npm run test:e2e` (Testcontainers Postgres 필요 — Docker 요구)
 - Build/typecheck: `npm run build` (nest build, tsc strict)
 
+## Repository 의존 절대 규칙 (2026-09-22 사용자 확정)
+
+이 규칙은 `opod-service-backend`(opod-backend)와 `opod-admin`에 동일하게 적용한다.
+권고가 아닌 필수 컨벤션이며, 기존 코드 패턴이나 편의를 이유로 우회할 수 없다.
+이전의 “Application Service가 Repository를 직접 주입한다”는 규칙을 대체한다.
+
+1. **Repository는 테이블당 하나**로 둔다. 기능별로 같은 테이블의 Repository를 중복 생성하지 않는다.
+2. **A Repository에 의존할 수 있는 업무 계층은 소유자인 A Domain Service뿐이다.**
+   Repository를 직접 주입·생성·호출하거나 DI 컨테이너에서 조회하는 행위를 포함한다.
+3. **B Domain Service가 A 테이블의 기능을 사용하려면 반드시 A Domain Service를 호출한다.**
+   B Domain Service가 A Repository를 직접 사용하는 것은 금지한다.
+4. **Application Service / Facade Service / UseCase Service는 Domain Service들을 조합한다.**
+   이 계층은 Repository를 직접 의존하지 않는다. 이름에 `Service`가 붙었다는 이유만으로
+   Repository 접근 권한을 갖는 것은 아니다.
+5. Controller, Worker, Scheduler 및 다른 Repository도 Repository를 직접 사용하지 않는다.
+   해당 Domain Service를 거쳐야 하며, 여러 도메인의 유스케이스는 Application Service가 조율한다.
+6. Domain Service는 Repository 또는 DB client를 외부에 반환해 우회 통로를 만들지 않는다.
+   다른 도메인에는 업무 메서드와 결과를 제공한다. 직접 SQL·DB client 접근으로 경계를 우회하는 것도 금지한다.
+7. 여러 도메인에 걸친 트랜잭션에서도 이 의존 규칙은 유지한다.
+   트랜잭션이 필요하다는 이유로 Application Service나 B Domain Service가 A Repository에 접근할 수 없다.
+   구체적인 트랜잭션 전파 방식은 기능 설계에서 정하되, 필요한 원자성을 유지한다.
+
+| 의존 또는 호출 | 허용 여부 |
+| --- | --- |
+| A Domain Service → A Repository | 허용 |
+| B Domain Service → A Domain Service → A Repository | 허용 |
+| Application Service → A/B Domain Service → 각 소유 Repository | 허용 |
+| B Domain Service → A Repository | 금지 |
+| Application / Facade / UseCase Service → Repository | 금지 |
+| Controller / Worker / Scheduler → Repository | 금지 |
+| A Repository → B Repository | 금지 |
+
+Nest module의 provider 등록은 객체 구성 작업이며, 업무 코드의 Repository 접근을
+허용하는 예외가 아니다. 다른 모듈에는 Domain Service를 공개하고 Repository를
+다른 도메인의 호출 진입점으로 공개하지 않는다.
+
+실제 클래스명은 `CharacterService`, `PostReactionService`, `CharacterFollowService`처럼
+`Domain`을 붙이지 않는다. Domain Service는 역할을 가리키는 용어다. 유스케이스 조율자는
+`CharacterSocialActivityApplicationService`처럼 `ApplicationService` 접미사로 구분한다.
+
+Domain Service는 자기 도메인의 정책·불변식과 Repository 접근을 소유한다.
+Application Service는 유스케이스 순서와 여러 Domain Service의 협력을 조율한다.
+다른 Domain Service 호출 시 순환 의존을 만들지 않도록 협력 방향을 설계한다.
+
+기존 코드가 이 규칙과 다르면 **예외가 아니라 미준수 리팩터링 대상**이다.
+새 설계·신규 코드·변경 코드의 의존 관계는 이 규칙을 따라야 하며,
+문서 갱신만으로 기존 구현까지 전환된 것으로 간주하지 않는다.
+기존 위반을 발견해도 요청 범위를 넘어 자동 리팩터링하지 않고 별도 변경으로 다룬다.
+
+리뷰에서는 Repository의 주입자·호출자, 타 도메인의 접근 경로, 모듈의 공개 provider를 확인한다.
+소셜 활동 관련 Repository의 정적 import와 모듈 export는 아키텍처 테스트로 검사한다.
+검사 범위는 해당 기능에 한정되며, 프로젝트 전체의 기존 위반이나 동적 우회까지
+검증한 것으로 보지 않는다. 직접 SQL과 테이블별 소유권도 코드 리뷰에서 확인한다.
+
 ## Code Rules
 
-- 기존 패턴을 우선 따른다. 새 도메인은 `src/domain/<area>` + `src/service/<area>`
+- 명시적으로 확정한 컨벤션을 우선하고, 그 범위 안에서 기존 패턴을 따른다. 새 도메인은 `src/domain/<area>` + `src/service/<area>`
   쌍으로 만들고, HTTP는 service, DB 로직은 domain에 둔다. (사실)
 - 변경은 요청 범위로 한정한다. 무관한 사용자 변경을 되돌리지 않는다.
 - 추상화는 실제 복잡도를 줄일 때만 추가한다.
