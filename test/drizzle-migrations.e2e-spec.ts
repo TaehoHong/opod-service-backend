@@ -19,6 +19,19 @@ const canonSourcesMigrationName = "20260911074900_character_canon_sources";
 const chatMemorySchemaMigrationName =
   "20260913111235_chat_memory_schema_clarity";
 const personaSchemaV2MigrationName = "20260916062345_persona_schema_v2";
+const characterSocialMigrationName = "20260918053849_character_social_activity";
+const characterSocialMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(
+        projectRoot,
+        "drizzle",
+        characterSocialMigrationName,
+        "migration.sql",
+      ),
+    ),
+  )
+  .digest("hex");
 const personaSchemaV2MigrationHash = createHash("sha256")
   .update(
     readFileSync(
@@ -113,6 +126,10 @@ describe("Drizzle migrations", () => {
         {
           name: personaSchemaV2MigrationName,
           hash: personaSchemaV2MigrationHash,
+        },
+        {
+          name: characterSocialMigrationName,
+          hash: characterSocialMigrationHash,
         },
       ]);
 
@@ -344,7 +361,7 @@ describe("Drizzle migrations", () => {
       const metadata = await client.query(
         "SELECT count(*)::integer AS count FROM drizzle.__drizzle_migrations",
       );
-      expect(metadata.rows[0].count).toBe(7);
+      expect(metadata.rows[0].count).toBe(8);
       const legacyMetadata = await client.query(
         "SELECT count(*)::integer AS count FROM opod._prisma_migrations",
       );
@@ -381,6 +398,161 @@ describe("Drizzle migrations", () => {
       );
       expect(comments.rows[0].table_comment).toContain("장기 기억");
       expect(comments.rows[0].column_comment).toContain("메모리 문장");
+    } finally {
+      await client.end().catch(() => undefined);
+      await container.stop();
+    }
+  });
+
+  it("fails invalid reaction upgrades without cleanup, then preserves valid history", async () => {
+    const container = await new PostgreSqlContainer(
+      "pgvector/pgvector:0.8.6-pg16",
+    )
+      .withDatabase("ai_sns_invalid_history")
+      .withUsername("ai_sns")
+      .withPassword("ai_sns")
+      .start();
+    const client = new Client({
+      connectionString: container.getConnectionUri(),
+    });
+    await client.connect();
+    try {
+      for (const migrationName of [
+        baselineName,
+        embeddingMigrationName,
+        contextMigrationName,
+        integratedContextMigrationName,
+        canonSourcesMigrationName,
+        chatMemorySchemaMigrationName,
+        personaSchemaV2MigrationName,
+      ]) {
+        await client.query(
+          readFileSync(
+            join(projectRoot, "drizzle", migrationName, "migration.sql"),
+            "utf8",
+          ),
+        );
+      }
+
+      const characterId = randomUUID();
+      const userId = randomUUID();
+      const postId = randomUUID();
+      await client.query(
+        "INSERT INTO opod.characters(id,public_id,display_name,bio,updated_at) VALUES($1,$2,'Legacy','',now())",
+        [characterId, `legacy-${characterId}`],
+      );
+      await client.query(
+        "INSERT INTO opod.users(id,display_name) VALUES($1,'Legacy')",
+        [userId],
+      );
+      await client.query(
+        "INSERT INTO opod.posts(id,character_id,content) VALUES($1,$2,'legacy')",
+        [postId, characterId],
+      );
+      await client.query(
+        `INSERT INTO opod.post_reactions(id,post_id,user_id,character_id,reaction_type)
+         VALUES($1,$2,$3,$4,'like')`,
+        [randomUUID(), postId, userId, characterId],
+      );
+
+      await expect(
+        client.query(
+          readFileSync(
+            join(
+              projectRoot,
+              "drizzle",
+              characterSocialMigrationName,
+              "migration.sql",
+            ),
+            "utf8",
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+      expect(
+        (
+          await client.query(
+            "SELECT user_id,character_id FROM opod.post_reactions WHERE post_id=$1",
+            [postId],
+          )
+        ).rows,
+      ).toEqual([{ user_id: userId, character_id: characterId }]);
+      expect(
+        (
+          await client.query(
+            `SELECT to_regclass('opod.character_social_activity_jobs') AS jobs,
+                    EXISTS (
+                      SELECT 1 FROM information_schema.columns
+                      WHERE table_schema='opod' AND table_name='characters'
+                        AND column_name='timezone'
+                    ) AS has_timezone`,
+          )
+        ).rows,
+      ).toEqual([{ jobs: null, has_timezone: false }]);
+
+      await client.query(
+        "UPDATE opod.post_reactions SET user_id=NULL WHERE post_id=$1",
+        [postId],
+      );
+      const duplicateReactionId = randomUUID();
+      await client.query(
+        `INSERT INTO opod.post_reactions(id,post_id,character_id,reaction_type)
+         VALUES($1,$2,$3,'like')`,
+        [duplicateReactionId, postId, characterId],
+      );
+      await expect(
+        client.query(
+          readFileSync(
+            join(
+              projectRoot,
+              "drizzle",
+              characterSocialMigrationName,
+              "migration.sql",
+            ),
+            "utf8",
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "23505" });
+      expect(
+        (
+          await client.query(
+            "SELECT count(*)::integer AS count FROM opod.post_reactions WHERE post_id=$1",
+            [postId],
+          )
+        ).rows,
+      ).toEqual([{ count: 2 }]);
+
+      await client.query("DELETE FROM opod.post_reactions WHERE id=$1", [
+        duplicateReactionId,
+      ]);
+      await client.query(
+        readFileSync(
+          join(
+            projectRoot,
+            "drizzle",
+            characterSocialMigrationName,
+            "migration.sql",
+          ),
+          "utf8",
+        ),
+      );
+      expect(
+        (
+          await client.query(
+            `SELECT c.timezone,r.id,r.character_id,r.user_id
+               FROM opod.characters c
+               JOIN opod.post_reactions r ON r.character_id=c.id
+              WHERE c.id=$1`,
+            [characterId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          timezone: null,
+          id: expect.any(String),
+          character_id: characterId,
+          user_id: null,
+        },
+      ]);
     } finally {
       await client.end().catch(() => undefined);
       await container.stop();

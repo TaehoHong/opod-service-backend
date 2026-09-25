@@ -18,18 +18,18 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(64);
+    expect(tableConfigs).toHaveLength(68);
     expect(enums).toHaveLength(29);
-    expect(columns).toHaveLength(587);
+    expect(columns).toHaveLength(618);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(121);
+    ).toBe(131);
     expect(
       tableConfigs.reduce(
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(71);
+    ).toBe(77);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
@@ -61,15 +61,18 @@ describe("Drizzle schema", () => {
   });
 
   it("preserves UUIDv7 and updatedAt client-side behavior", () => {
-    const uuidPrimaryKeys = columns.filter(
-      ({ column }) => column.primary && column.columnType === "PgUUID",
+    const generatedUuidPrimaryKeys = columns.filter(
+      ({ column, path }) =>
+        column.primary &&
+        column.columnType === "PgUUID" &&
+        path !== "character_social_activity_policies.character_id",
     );
     const updatedAtColumns = columns.filter(
       ({ column }) => column.name === "updated_at",
     );
 
-    expect(uuidPrimaryKeys).toHaveLength(47);
-    for (const { column, path } of uuidPrimaryKeys) {
+    expect(generatedUuidPrimaryKeys).toHaveLength(47);
+    for (const { column, path } of generatedUuidPrimaryKeys) {
       expect({ defaultFn: column.defaultFn, path }).toEqual({
         defaultFn: expect.any(Function),
         path,
@@ -81,8 +84,14 @@ describe("Drizzle schema", () => {
         ),
       });
     }
+    expect(
+      columns.find(
+        ({ path }) =>
+          path === "character_social_activity_policies.character_id",
+      )?.column.defaultFn,
+    ).toBeUndefined();
 
-    expect(updatedAtColumns).toHaveLength(33);
+    expect(updatedAtColumns).toHaveLength(35);
     for (const { column, path } of updatedAtColumns) {
       expect({ onUpdateFn: column.onUpdateFn, path }).toEqual({
         onUpdateFn: expect.any(Function),
@@ -103,6 +112,7 @@ describe("Drizzle schema", () => {
 
     expect(bigintColumns.map(({ path }) => path).sort()).toEqual([
       "character_action_logs.id",
+      "character_social_activity_jobs.id",
       "console_logs.id",
       "llm_log_media.llm_log_id",
       "llm_logs.id",
@@ -113,13 +123,25 @@ describe("Drizzle schema", () => {
       "character_canon_memories_event_time_precision_check",
       "character_canon_memories_routing_check",
       "character_canon_memories_source_references_check",
+      "character_follows_no_self_check",
       "character_persona_fragments_content_check",
       "character_persona_fragments_injection_check",
       "character_persona_fragments_kind_check",
       "character_persona_fragments_ordinal_check",
+      "character_social_activity_jobs_attempt_count_check",
+      "character_social_activity_jobs_finished_at_check",
+      "character_social_activity_jobs_lease_check",
+      "character_social_activity_jobs_status_check",
+      "character_social_activity_policies_active_time_check",
+      "character_social_activity_policies_daily_limits_check",
+      "character_social_activity_policies_enabled_schedule_check",
+      "character_social_activity_policies_interval_check",
+      "character_social_activity_policies_like_probability_check",
+      "characters_timezone_check",
       "chat_memory_entries_memory_category_check",
       "chat_memory_entries_source_message_snapshots_check",
       "generation_job_outputs_filter_preset_check",
+      "post_reactions_single_actor_check",
       "unsettled_credit_debts_paid_debt_check",
     ]);
   });
