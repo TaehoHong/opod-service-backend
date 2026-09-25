@@ -1,7 +1,8 @@
 # 07. 코드베이스 가이드
 
 > 현재 코드 근거로 만든 에이전트 내비게이션 인덱스. 소스 탐색을 좁히는 용도이며
-> 검증을 대체하지 않는다. 항목이 코드와 충돌하면 코드를 따르고 항목을 갱신한다.
+> 검증을 대체하지 않는다. 현재 동작 설명은 코드로 확인한다. 명시적으로 확정한
+> 컨벤션과 코드가 충돌하면 코드를 미준수 대상으로 기록하며 컨벤션을 약화하지 않는다.
 
 ## 사용법
 
@@ -46,6 +47,7 @@
 | ---------------------- | -------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | DB 접근                | `DatabaseService`                                                          | 모든 도메인 서비스                      | 앱 런타임의 유일 DB 클라이언트. `pg` 직접 사용은 migration 실행기로 한정                                                                                                                                                                                                        | `src/domain/database/database.service.ts`                                                                                               |
 | DB schema/migration    | `schema.ts` / `db-migrations.mjs`                                          | backend·admin 공유 schema, 배포 시작    | backend schema가 정본. 신규 DB는 migration 전체 적용, 기존 DB는 snapshot 카탈로그 검증 후 baseline 1회 등록                                                                                                                                                                    | `src/domain/database/schema.ts`, `scripts/db-migrations.mjs`, `test/drizzle-migrations.e2e-spec.ts`                                    |
+| 캐릭터 소셜 활동 | `src/domain/character-social` / `CharacterSocialWorker`, `CharacterSocialActivityApplicationService` | 캐릭터 자동 조회·좋아요·팔로우 | timezone은 characters 정본. 옵트인 워커가 현지 날짜 한도·관심사 필터·lease 토큰·캐릭터 잠금으로 활동을 저장한다. 관리자 정책 API는 admin 소유 | `src/domain/character-social/character-social-activity-application.service.ts`, `test/character-social-runtime.e2e-spec.ts`, `test/character-social-schema.e2e-spec.ts` |
 | 커서 페이지네이션      | `parsePageQuery`/`decodeCursor`/`pageFromRows`                             | 목록 API 전반                           | limit 기본 20·최대 50, `{items,nextCursor?}`                                                                                                                                                                                                                                   | `src/domain/database/page.ts`                                                                                                           |
 | UUID 검증              | `isUuid`                                                                   | 404 정규화(posts, notices, inquiries…)  | 비-uuid는 질의 전에 없음 처리                                                                                                                                                                                                                                                  | `src/domain/database/uuid.ts`                                                                                                           |
 | 인증 추출              | `AuthService.userIdFromAuthorization` 등                                   | 인증 필요한 모든 컨트롤러               | Bearer JWT → userId. 선택 인증은 `optional*`                                                                                                                                                                                                                                   | `src/domain/auth/auth.service.ts`                                                                                                       |
@@ -79,6 +81,14 @@
 
 ## 의존·소유 규칙
 
+- 필수 정본: [개발 규칙](02-development-rules.md)의 “Repository 의존 절대 규칙”.
+- Repository는 테이블당 하나이고 소유 Domain Service만 접근한다.
+  B Domain Service → A Domain Service → A Repository가 허용 경로다.
+- Application / Facade / UseCase Service는 Domain Service를 조합한다.
+  Controller·Worker·Application Service·다른 Domain Service의 Repository 직접 접근은 금지한다.
+- 아래 현재 코드 경로는 탐색 근거다. 직접 DB 접근·도메인 경계 우회가 있는 코드는
+  새 의존 규칙의 정본 예시가 아니며 리팩터링 대상으로 취급한다.
+
 - 허용 방향: `service` → `domain` → `domain/database`. 역방향·형제 우회 금지.
 - 우회 금지 경계: `service`는 admin을 import하지 않는다. HTTP 컨트롤러는
   `domain`에 두지 않는다. 앱 DB 접근은 `DatabaseService`로만 한다.
@@ -97,9 +107,11 @@
    `npm run db:generate`로 SQL 생성·검토 → `npm run db:migrate`로 로컬 적용 →
    admin 미러 갱신·`npm run schema:check`. 새 도메인 폴더면 `architecture.spec.ts`의
    `expectedDomainEntries`에 추가.
-2. 도메인 `src/domain/<area>/`: `<area>.service.ts`(`@Injectable`, `DatabaseService`
-   주입, DB 접근 + 비즈니스 불변식, 도메인 타입 + `to*` 매퍼, `page.ts`/`uuid.ts`
-   재사용) · `<area>.module.ts`(providers/exports/imports) · `<area>.service.spec.ts`.
+2. 도메인 `src/domain/<area>/`: 테이블별 Repository(DB 접근)와 소유 Domain Service
+   (해당 Repository 주입, 정책·비즈니스 불변식)를 둔다. 다른 도메인은 이 Domain Service를
+   호출하며, 여러 도메인의 유스케이스는 Application Service에서 조율한다.
+   모듈은 외부에 Domain Service를 공개한다. `page.ts`/`uuid.ts` 등 정본 헬퍼와
+   실제 동작을 검증하는 spec을 재사용한다.
 3. 서비스 `src/service/<area>/`: `<area>.controller.ts`(`@Controller`, 인증 추출 +
    DTO 구문검증 + 도메인 호출 + 404 정규화 + Swagger) · `<area>.dto.ts` ·
    `<area>.module.ts`. **`src/service/service.module.ts` imports에 등록**.
@@ -194,3 +206,18 @@
 - D29 적용 대상은 새 격리 로컬 DB55433뿐이다. 기존5433 및 개발 DB에 자동 적용하지 않는다.
   단위149/E2E99/build/lint 및 migration 재실행·schema drift를 검증했다. 이 좁은 항목의
   확인이며 guide 전체 freshness를 갱신한 것은 아니다.
+
+## Character social activity service boundaries — 2026-09-22
+
+- `CharacterSocialActivityApplicationService.scheduleDueActivities/processNextActivity`가
+  예약·점유·실행을 조율한다. 워커는 주기와 배치만 관리한다.
+- characters의 `CharacterService`/`CharacterRepository`, posts의 `PostService`/`PostRepository`,
+  `PostReactionService`/`PostReactionRepository`, character-social의 조회·팔로우·정책·작업
+  Service/Repository가 각 테이블을 소유한다. 다른 Service는 소유 Service를 경유한다.
+- 트랜잭션 시작은 `CharacterService.withActivityTransaction`이며,
+  `src/domain/database/database-transaction-context.ts`가 같은 비동기 흐름의 Repository에
+  트랜잭션을 전달한다. DB client를 Service에 넘기거나 Repository를 모듈 밖에 공개하지 않는다.
+- 회귀 검증: `src/architecture.spec.ts`의 소셜 Repository 의존 검사,
+  `test/character-social-runtime.e2e-spec.ts`의 실제 DB 원자성·동시성 검증.
+- 기존 공개 API용 복수형 `CharactersService`/`PostsService`는 이번 소셜 활동의
+  단수형 소유 Service와 역할이 다르다. 기존 직접 DB 접근은 별도 정리할 미준수 대상이다.

@@ -18,3 +18,4 @@ process.env.OPOD_AGENT_URL = "http://127.0.0.1:1";
 // 무엇이 무엇을 만들었는지가 흐려진다. 워커를 검증하는 스펙은 runOnce를 직접
 // 부른다.
 process.env.MESSAGE_REPLY_WORKER_ENABLED = "false";
+process.env.CHARACTER_SOCIAL_WORKER_ENABLED = "false";

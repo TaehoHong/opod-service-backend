@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import * as ts from "typescript";
 
 function listFiles(root: string): string[] {
   if (!existsSync(root)) {
@@ -13,6 +14,92 @@ function listFiles(root: string): string[] {
 }
 
 describe("source layout", () => {
+  it("keeps social activity repositories private to their owning services", () => {
+    const scopedRepositories = new Set([
+      "character.repository",
+      "post.repository",
+      "post-reaction.repository",
+      "character-post-view.repository",
+      "character-follow.repository",
+      "character-social-activity-policy.repository",
+      "character-social-activity-job.repository",
+      "character-social.repository",
+    ]);
+    const violations: string[] = [];
+    for (const path of listFiles("src").filter(
+      (file) => file.endsWith(".ts") && !file.endsWith(".spec.ts"),
+    )) {
+      const source = ts.createSourceFile(
+        path,
+        readFileSync(path, "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const repositoryNames = new Set<string>();
+      const isSocialService =
+        path.startsWith("src/domain/character-social/") &&
+        (path.endsWith(".service.ts") || path.endsWith(".worker.ts"));
+      const isOwningService = scopedRepositories.has(
+        basename(path).replace(/\.service\.ts$/, ".repository"),
+      );
+      for (const statement of source.statements) {
+        if (
+          !ts.isImportDeclaration(statement) ||
+          !ts.isStringLiteral(statement.moduleSpecifier)
+        )
+          continue;
+        const target = statement.moduleSpecifier.text;
+        if (
+          (isSocialService || isOwningService) &&
+          (target === "drizzle-orm" ||
+            [
+              "database.service",
+              "database-transaction-context",
+              "schema",
+            ].includes(basename(target)))
+        ) {
+          violations.push(`${path} bypasses its repository through ${target}`);
+        }
+        if (!scopedRepositories.has(basename(target))) continue;
+        const owner = resolve(
+          dirname(path),
+          target.replace(/\.repository$/, ".service.ts"),
+        );
+        if (
+          basename(target) === "character-social.repository" ||
+          (resolve(path) !== owner && !path.endsWith(".module.ts"))
+        ) {
+          violations.push(`${path} imports ${target} outside its owner`);
+        }
+        const bindings = statement.importClause?.namedBindings;
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) {
+            repositoryNames.add(element.name.text);
+          }
+        }
+      }
+      if (path.endsWith(".module.ts")) {
+        const inspect = (node: ts.Node): void => {
+          if (
+            ts.isPropertyAssignment(node) &&
+            node.name.getText(source) === "exports"
+          ) {
+            const inspectExport = (value: ts.Node): void => {
+              if (ts.isIdentifier(value) && repositoryNames.has(value.text)) {
+                violations.push(`${path} exports repository ${value.text}`);
+              }
+              ts.forEachChild(value, inspectExport);
+            };
+            inspectExport(node.initializer);
+          }
+          ts.forEachChild(node, inspect);
+        };
+        inspect(source);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("keeps feature code under service or domain", () => {
     const allowedRootEntries = new Set([
       "app.module.ts",
@@ -47,6 +134,7 @@ describe("source layout", () => {
     const expectedDomainEntries = [
       "auth",
       "characters",
+      "character-social",
       "consents",
       "credits",
       "database",

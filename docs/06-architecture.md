@@ -3,6 +3,25 @@
 > 분류 범례는 [00-overview.md](./00-overview.md) 참조. 모듈별 상세는
 > [07-codebase-guide.md](./07-codebase-guide.md).
 
+## Repository 의존 경계 (2026-09-22 확정)
+
+필수 정본은 [개발 규칙](02-development-rules.md)의 “Repository 의존 절대 규칙”이다.
+Repository는 테이블당 하나이고 소유 Domain Service만 의존한다.
+Application / Facade / UseCase Service는 Domain Service들을 조합하며 Repository를 직접 사용하지 않는다.
+B Domain Service가 A 테이블의 기능을 사용하려면 A Domain Service를 거쳐 A Repository에 접근한다.
+Controller·Worker·다른 Repository의 직접 Repository 접근도 금지한다.
+
+```text
+Application Service -> A Domain Service -> A Repository
+                    -> B Domain Service -> B Repository
+B Domain Service    -> A Domain Service -> A Repository
+```
+
+아래 “사실” 절과 소셜 활동 런타임 설명은 현재 구현의 기록이다.
+Domain Service의 직접 DB 접근이나 Worker → Repository 등 미준수 경로는
+기존 구현 공백이며 새 코드의 정본 예시가 아니다. 이번 결정은 문서 규칙 확정이고
+코드 리팩터링 완료를 뜻하지 않는다.
+
 ## System Shape (사실)
 
 - 런타임: NestJS 10 (Node 22, TypeScript strict). 진입점 `src/main.ts` →
@@ -204,6 +223,94 @@ Kafka) 기반 전달로 교체한다. 이번 구현에서는 브로커 의존성
   (`agent_memory_jobs`)는 **opod-admin/opod-agent가 소유**. 이 리포는 스키마만
   가지며 잡을 실행하지 않는다. (현재 사실 — 스키마 주석) 목표 구조의 DM 답변
   작업은 관리자 생성 잡과 별개이며 service-backend가 소유한다. (결정)
+
+### Character social activity schema foundation (2026-09-18)
+
+- `characters.timezone` is the shared IANA living timezone for all character
+  capabilities. It is nullable during the transition so existing characters
+  remain valid; the admin character write API validates a supplied IANA
+  timezone before persisting it. The database currently enforces only
+  non-empty, trimmed text.
+- Social activity policy windows use local wall-clock time with an inclusive
+  start and exclusive end and may wrap midnight. Runtime daily limits
+  use the character's local calendar day. DST-shortened or DST-lengthened days
+  remain one local calendar day; runtime must convert each boundary with the
+  timezone rules effective for that date rather than assuming 24 elapsed hours.
+- Views and character follows are durable composite-key facts. Social activity
+  jobs use a generated-always BIGINT identity, durable state/lease constraints,
+  and at most one queued or running job per character.
+- Post reactions permit either a user actor or a character actor, plus legacy
+  rows with both actors null after existing `ON DELETE SET NULL`. Mixed actors
+  and duplicate character reactions are invalid. Automated likes and manual
+  admin character reactions share the existing reaction table.
+- New social foreign keys use `ON UPDATE CASCADE ON DELETE RESTRICT`. Current
+  character removal is a soft status update, so it remains compatible. Before
+  applying the migration to a shared database, preflight historical
+  `post_reactions` for mixed actors and duplicate non-null character reactions;
+  the migration intentionally fails instead of deleting or rewriting data.
+- The schema migration is provided as artifacts. This work does not apply
+  them to a persistent local DB, development DB, or any future production DB.
+
+### Character social activity runtime (2026-09-22)
+
+- `src/domain/character-social` owns the non-LLM scheduler and executor.
+  `CharacterSocialWorker.runOnce` delegates scheduling and execution to
+  `CharacterSocialActivityApplicationService`. Its `scheduleDueActivities` and
+  `processNextActivity` compose owning services; the worker does not access repositories. The automatic loop is opt-in with `CHARACTER_SOCIAL_WORKER_ENABLED=true`;
+  the default is disabled. Apply the schema migration before enabling it.
+  Boot options also include `CHARACTER_SOCIAL_POLL_INTERVAL_MS` (5000),
+  `CHARACTER_SOCIAL_BATCH_SIZE` (20), `CHARACTER_SOCIAL_MAX_ATTEMPTS` (3),
+  `CHARACTER_SOCIAL_LEASE_MS` (60000), and
+  `CHARACTER_SOCIAL_RETRY_BACKOFF_MS` (5000). The run and follow thresholds
+  use `CHARACTER_SOCIAL_POSTS_PER_RUN` (5) and
+  `CHARACTER_SOCIAL_MIN_LIKED_POSTS_TO_FOLLOW` (3).
+- Repository ownership is explicit: Character, Post, PostReaction,
+  CharacterPostView, CharacterFollow, CharacterSocialActivityPolicy and
+  CharacterSocialActivityJob each have one Repository and its sole owning
+  Service. Names omit `Domain`. Services own decisions; repositories own
+  persistence. CharacterFollowService obtains reaction counts through PostReactionService.
+- `CharacterService.withActivityTransaction` delegates to CharacterRepository,
+  which opens the transaction and character advisory lock. Each repository injects the shared
+  `DatabaseTransactionContext` provider from DatabaseModule, which propagates
+  that transaction with AsyncLocalStorage.
+  Other services use their own repositories; neither application nor domain
+  services receive the database client. Nested work joins the active transaction,
+  and an expired context cannot be reused.
+- This slice does not refactor the old public `CharactersService`/`PostsService`
+  database access. Those legacy paths are not examples of the mandatory rule.
+- An active character with an enabled policy and valid `characters.timezone`
+  can act within its local time window. There is no inferred timezone. A
+  timezone edit takes effect on the next execution, and quotas are recomputed
+  against that timezone's current calendar day. Historical instants are retained.
+- Candidate posts have active authors, are already published by creation time,
+  are not the actor's own posts and have not been viewed by that actor. Matching
+  uses interests and hashtags after trimming, removing a leading `#`, and
+  lowercasing; it is exact text matching without translation or semantic search.
+  Empty or unmatched interests produce no new views.
+- The default run views at most five newest matching posts, likes newly viewed
+  posts using the policy probability, and follows an author after three distinct
+  liked posts. Daily view, like and follow caps are independent; existing manual
+  character likes count toward the automatic like allowance. Manual admin writes
+  are not themselves limited by an automation policy.
+- Per-character transaction advisory locks use `character_social:<UUID>` in
+  both backend and admin. Schedule advancement and enqueue are atomic; missed
+  intervals do not create a backlog burst. Lease tokens fence retries, and activity
+  effects plus job completion commit together. Expired jobs are retried at most
+  three attempts by default. Disabling a policy cancels unfinished jobs.
+- UTC instants are stored in `TIMESTAMPTZ`; PostgreSQL converts local midnight
+  and the next local midnight separately. A 23-hour or 25-hour DST day has one
+  quota. This does not use the fixed-KST attendance rule.
+- Admin owns character timezone and `GET/PUT
+  /api/admin/v1/characters/:id/social-activity-policy`. The policy PUT supplies
+  enabled, local window, interval, three daily limits and like probability.
+  Missing policies are returned as null. Jobs expose BIGINT IDs as strings.
+- Public human analytics, cosmetic web view counts and user-follow counts retain
+  their existing behavior. Comments, unfollow, admin UI and live deployment are
+  outside this runtime slice.
+- Regression evidence: `test/character-social-runtime.e2e-spec.ts` uses a
+  disposable PostgreSQL database for filtering, local quotas, DST, concurrent
+  workers, lease recovery and cancellation. No persistent local or development
+  database is modified by these tests.
 
 ## Operational Constraints
 
