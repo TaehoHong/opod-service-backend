@@ -221,3 +221,15 @@
   `test/character-social-runtime.e2e-spec.ts`의 실제 DB 원자성·동시성 검증.
 - 기존 공개 API용 복수형 `CharactersService`/`PostsService`는 이번 소셜 활동의
   단수형 소유 Service와 역할이 다르다. 기존 직접 DB 접근은 별도 정리할 미준수 대상이다.
+
+## Character content profiles — 2026-09-27
+
+- `src/domain/database/schema.ts`의 characterContentProfiles와
+  `drizzle/20260927073129_character_content_profiles/`가 게시물 제작 설정의 정본이다.
+  character_id PK/FK, account_concept/image_style/caption_style/constraints와 timestamps를
+  가지며 캐릭터 삭제 시 cascade한다. 기존 persona/Canon 데이터는 수정하지 않는다.
+- 관리 API·UI·게시물 워커의 설정 읽기는 opod-admin 소유다. 채팅은 이 테이블을 읽지 않는다.
+- `test/drizzle-migrations.e2e-spec.ts`가 빈 DB/기존 DB migration과 재실행을 검증한다.
+  admin `test/character-content-profile.e2e-spec.ts`에서 실제 FK/유일성 및 저장/조회 격리를 검사한다.
+- 추가형 배포: schema 적용 후 admin 코드를 배포한다. 코드 롤백 시 새 테이블과 데이터는 보존한다.
+  기존 제작 전용 페르소나의 데이터 이전은 DDL에 포함하지 않는다.

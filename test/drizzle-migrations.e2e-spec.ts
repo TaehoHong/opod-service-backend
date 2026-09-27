@@ -19,6 +19,19 @@ const canonSourcesMigrationName = "20260911074900_character_canon_sources";
 const chatMemorySchemaMigrationName =
   "20260913111235_chat_memory_schema_clarity";
 const personaSchemaV2MigrationName = "20260916062345_persona_schema_v2";
+const contentProfileMigrationName = "20260927073129_character_content_profiles";
+const contentProfileMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(
+        projectRoot,
+        "drizzle",
+        contentProfileMigrationName,
+        "migration.sql",
+      ),
+    ),
+  )
+  .digest("hex");
 const characterSocialMigrationName = "20260918053849_character_social_activity";
 const characterSocialMigrationHash = createHash("sha256")
   .update(
@@ -130,6 +143,10 @@ describe("Drizzle migrations", () => {
         {
           name: characterSocialMigrationName,
           hash: characterSocialMigrationHash,
+        },
+        {
+          name: contentProfileMigrationName,
+          hash: contentProfileMigrationHash,
         },
       ]);
 
@@ -361,7 +378,7 @@ describe("Drizzle migrations", () => {
       const metadata = await client.query(
         "SELECT count(*)::integer AS count FROM drizzle.__drizzle_migrations",
       );
-      expect(metadata.rows[0].count).toBe(8);
+      expect(metadata.rows[0].count).toBe(9);
       const legacyMetadata = await client.query(
         "SELECT count(*)::integer AS count FROM opod._prisma_migrations",
       );

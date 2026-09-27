@@ -18,9 +18,9 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(68);
+    expect(tableConfigs).toHaveLength(69);
     expect(enums).toHaveLength(29);
-    expect(columns).toHaveLength(618);
+    expect(columns).toHaveLength(625);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
     ).toBe(131);
@@ -29,7 +29,7 @@ describe("Drizzle schema", () => {
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(77);
+    ).toBe(78);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
@@ -65,7 +65,8 @@ describe("Drizzle schema", () => {
       ({ column, path }) =>
         column.primary &&
         column.columnType === "PgUUID" &&
-        path !== "character_social_activity_policies.character_id",
+        path !== "character_social_activity_policies.character_id" &&
+        path !== "character_content_profiles.character_id",
     );
     const updatedAtColumns = columns.filter(
       ({ column }) => column.name === "updated_at",
@@ -91,7 +92,10 @@ describe("Drizzle schema", () => {
       )?.column.defaultFn,
     ).toBeUndefined();
 
-    expect(updatedAtColumns).toHaveLength(35);
+    expect(
+      schema.characterContentProfiles.characterId.defaultFn,
+    ).toBeUndefined();
+    expect(updatedAtColumns).toHaveLength(36);
     for (const { column, path } of updatedAtColumns) {
       expect({ onUpdateFn: column.onUpdateFn, path }).toEqual({
         onUpdateFn: expect.any(Function),
