@@ -233,3 +233,20 @@
   admin `test/character-content-profile.e2e-spec.ts`에서 실제 FK/유일성 및 저장/조회 격리를 검사한다.
 - 추가형 배포: schema 적용 후 admin 코드를 배포한다. 코드 롤백 시 새 테이블과 데이터는 보존한다.
   기존 제작 전용 페르소나의 데이터 이전은 DDL에 포함하지 않는다.
+
+### 2026-09-28 게시물 Agent 모델/지침 관리 스키마
+
+- `src/domain/database/schema.ts`의 aiModels / postAgentPrompts와
+  `drizzle/20260928080853_post_agent_prompts/`가 정본이다. Admin이 관리 API와
+  실행 로직을 소유하고 backend에는 공개 관리 API를 추가하지 않는다.
+- ai_models는 BIGINT identity PK, type ENUM(llm/image), provider TEXT, model을
+  저장한다. post_agent_prompts는 단계 ENUM, revision, 지침, 실제 LLM 입력용
+  output_schema와 필수 ai_model_id FK / nullable model override를 저장한다.
+- 모델 override가 있으면 우선하고 공급자는 참조 모델에서 해석한다.
+  단계별 지침/모델 변경·복원은 새 revision으로 보존하며 (stage, revision)이
+  UNIQUE다. generation은 지침/schema가 NULL이고 네 LLM 단계는 필수다.
+  FK는 DELETE RESTRICT다. 모델 type/provider 조합은 Admin Service가 검증한다.
+- `test/drizzle-migrations.e2e-spec.ts`가 임시 DB에서 새 스키마의 필수 FK,
+  지침 CHECK, revision 중복 차단, 참조 모델 삭제 제한과 기존 migration
+  적용/legacy 데이터 보존을 확인한다. 배포 시 migration을 Admin 코드보다
+  먼저 적용하며 코드 롤백 시 새 테이블과 이력은 보존한다.

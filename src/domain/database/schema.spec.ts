@@ -18,18 +18,18 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(69);
-    expect(enums).toHaveLength(29);
-    expect(columns).toHaveLength(625);
+    expect(tableConfigs).toHaveLength(71);
+    expect(enums).toHaveLength(31);
+    expect(columns).toHaveLength(638);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(131);
+    ).toBe(132);
     expect(
       tableConfigs.reduce(
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(78);
+    ).toBe(79);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
@@ -38,6 +38,8 @@ describe("Drizzle schema", () => {
     );
     expect(tableConfigs.map((table) => table.name)).toEqual(
       expect.arrayContaining([
+        "ai_models",
+        "post_agent_prompts",
         "chat_conversations",
         "chat_messages",
         "chat_reply_generation_jobs",
@@ -115,14 +117,19 @@ describe("Drizzle schema", () => {
       .sort();
 
     expect(bigintColumns.map(({ path }) => path).sort()).toEqual([
+      "ai_models.id",
       "character_action_logs.id",
       "character_social_activity_jobs.id",
       "console_logs.id",
       "llm_log_media.llm_log_id",
       "llm_logs.id",
+      "post_agent_prompts.ai_model_id",
+      "post_agent_prompts.id",
       "service_logs.id",
     ]);
     expect(checkNames).toEqual([
+      "ai_models_model_check",
+      "ai_models_provider_check",
       "character_canon_memories_event_time_fields_check",
       "character_canon_memories_event_time_precision_check",
       "character_canon_memories_routing_check",
@@ -145,6 +152,9 @@ describe("Drizzle schema", () => {
       "chat_memory_entries_memory_category_check",
       "chat_memory_entries_source_message_snapshots_check",
       "generation_job_outputs_filter_preset_check",
+      "post_agent_prompts_model_check",
+      "post_agent_prompts_revision_check",
+      "post_agent_prompts_stage_content_check",
       "post_reactions_single_actor_check",
       "unsettled_credit_debts_paid_debt_check",
     ]);

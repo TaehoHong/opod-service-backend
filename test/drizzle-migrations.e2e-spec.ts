@@ -32,6 +32,14 @@ const contentProfileMigrationHash = createHash("sha256")
     ),
   )
   .digest("hex");
+const postAgentMigrationName = "20260928080853_post_agent_prompts";
+const postAgentMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(projectRoot, "drizzle", postAgentMigrationName, "migration.sql"),
+    ),
+  )
+  .digest("hex");
 const characterSocialMigrationName = "20260918053849_character_social_activity";
 const characterSocialMigrationHash = createHash("sha256")
   .update(
@@ -105,6 +113,56 @@ function runMigrations(databaseUrl: string, ...arguments_: string[]): string {
 }
 
 describe("Drizzle migrations", () => {
+  it("enforces prompt content, required model references, revisions and deletion restriction", async () => {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    let modelId: string | undefined;
+    try {
+      const created = await client.query(
+        "INSERT INTO opod.ai_models(type,provider,model) VALUES('llm','openai-compatible','test') RETURNING id",
+      );
+      modelId = created.rows[0].id;
+      await expect(
+        client.query(
+          "INSERT INTO opod.post_agent_prompts(stage,revision,system_prompt,output_schema) VALUES('post_plan',1,'prompt','{}')",
+        ),
+      ).rejects.toMatchObject({ code: "23502" });
+      await expect(
+        client.query(
+          "INSERT INTO opod.post_agent_prompts(stage,revision,ai_model_id,system_prompt,output_schema) VALUES('post_plan',1,$1,'','{}')",
+          [modelId],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        client.query(
+          "INSERT INTO opod.post_agent_prompts(stage,revision,ai_model_id,system_prompt,output_schema) VALUES('generation',1,$1,'prompt','{}')",
+          [modelId],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+      await client.query(
+        "INSERT INTO opod.post_agent_prompts(stage,revision,ai_model_id,system_prompt,output_schema,model) VALUES('post_plan',1,$1,'prompt','{}',NULL)",
+        [modelId],
+      );
+      await expect(
+        client.query(
+          "INSERT INTO opod.post_agent_prompts(stage,revision,ai_model_id,system_prompt,output_schema) VALUES('post_plan',1,$1,'prompt','{}')",
+          [modelId],
+        ),
+      ).rejects.toMatchObject({ code: "23505" });
+      await expect(
+        client.query("DELETE FROM opod.ai_models WHERE id=$1", [modelId]),
+      ).rejects.toMatchObject({ code: "23503" });
+    } finally {
+      if (modelId) {
+        await client.query(
+          "DELETE FROM opod.post_agent_prompts WHERE ai_model_id=$1",
+          [modelId],
+        );
+        await client.query("DELETE FROM opod.ai_models WHERE id=$1", [modelId]);
+      }
+      await client.end();
+    }
+  });
   it("applies the baseline and records its seed data on a blank database", async () => {
     const databaseUrl = process.env.DATABASE_URL;
     if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -148,6 +206,7 @@ describe("Drizzle migrations", () => {
           name: contentProfileMigrationName,
           hash: contentProfileMigrationHash,
         },
+        { name: postAgentMigrationName, hash: postAgentMigrationHash },
       ]);
 
       const extension = await client.query(
@@ -378,7 +437,7 @@ describe("Drizzle migrations", () => {
       const metadata = await client.query(
         "SELECT count(*)::integer AS count FROM drizzle.__drizzle_migrations",
       );
-      expect(metadata.rows[0].count).toBe(9);
+      expect(metadata.rows[0].count).toBe(10);
       const legacyMetadata = await client.query(
         "SELECT count(*)::integer AS count FROM opod._prisma_migrations",
       );
