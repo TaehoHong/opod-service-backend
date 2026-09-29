@@ -3,7 +3,7 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { DatabaseService } from "../src/domain/database/database.service";
+import { DatabaseService } from "../src/core/database/database.service";
 import { TestDatabase } from "./test-database";
 import { registerHuman } from "./human-auth";
 

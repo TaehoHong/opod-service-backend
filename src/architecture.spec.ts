@@ -37,7 +37,7 @@ describe("source layout", () => {
       );
       const repositoryNames = new Set<string>();
       const isSocialService =
-        path.startsWith("src/domain/character-social/") &&
+        path.startsWith("src/character-social/") &&
         (path.endsWith(".service.ts") || path.endsWith(".worker.ts"));
       const isOwningService = scopedRepositories.has(
         basename(path).replace(/\.service\.ts$/, ".repository"),
@@ -100,22 +100,6 @@ describe("source layout", () => {
     expect(violations).toEqual([]);
   });
 
-  it("keeps feature code under service or domain", () => {
-    const allowedRootEntries = new Set([
-      "app.module.ts",
-      "architecture.spec.ts",
-      "domain",
-      "main.ts",
-      "service",
-    ]);
-
-    const entries = readdirSync("src").filter(
-      (entry) => !entry.endsWith(".js"),
-    );
-
-    expect(entries.sort()).toEqual([...allowedRootEntries].sort());
-  });
-
   it("keeps the service backend at the repository root", () => {
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       name?: string;
@@ -130,20 +114,23 @@ describe("source layout", () => {
     expect(existsSync("src/admin")).toBe(false);
   });
 
-  it("keeps domain folders aligned with database groups", () => {
-    const expectedDomainEntries = [
+  it("groups feature code beside core and shared infrastructure", () => {
+    const expectedRootEntries = [
+      "app.module.ts",
+      "architecture.spec.ts",
       "auth",
       "characters",
       "character-social",
       "consents",
       "credits",
-      "database",
+      "core",
       "events",
       "faqs",
       "feed",
       "follows",
+      "health",
       "inquiries",
-      "media",
+      "main.ts",
       "messages",
       "notices",
       "notifications",
@@ -151,28 +138,31 @@ describe("source layout", () => {
       "posts",
       "purchases",
       "reports",
+      "search",
+      "shared",
       "stories",
       "users",
     ];
 
-    const entries = readdirSync("src/domain").filter(
+    const entries = readdirSync("src").filter(
       (entry) => !entry.endsWith(".js"),
     );
 
-    expect(entries.sort()).toEqual(expectedDomainEntries.sort());
+    expect(entries.sort()).toEqual(expectedRootEntries.sort());
   });
 
-  it("keeps HTTP controllers out of shared domain modules", () => {
-    const domainControllers = listFiles("src/domain").filter((path) =>
-      path.endsWith(".controller.ts"),
-    );
+  it("keeps HTTP controllers out of core and shared infrastructure", () => {
+    const infrastructureControllers = [
+      ...listFiles("src/core"),
+      ...listFiles("src/shared"),
+    ].filter((path) => path.endsWith(".controller.ts"));
 
-    expect(domainControllers).toEqual([]);
+    expect(infrastructureControllers).toEqual([]);
   });
 
   it("keeps service routes independent from admin modules", () => {
-    const serviceSources = listFiles("src/service").filter((path) =>
-      path.endsWith(".ts"),
+    const serviceSources = listFiles("src").filter((path) =>
+      path.endsWith(".controller.ts"),
     );
 
     expect(serviceSources.length).toBeGreaterThan(0);
@@ -185,9 +175,9 @@ describe("source layout", () => {
   it("keeps persistence behind approved database adapters", () => {
     const removedFiles = [
       "database/migrations/001_mvp_schema.sql",
-      "src/domain/generation/generation.service.ts",
-      "src/domain/media/media.service.ts",
-      "src/domain/users/users.controller.ts",
+      "src/generation/generation.service.ts",
+      "src/shared/media/media.service.ts",
+      "src/users/users.controller.ts",
     ];
 
     expect(removedFiles.filter((path) => existsSync(path))).toEqual([]);
@@ -211,17 +201,17 @@ describe("source layout", () => {
     }
 
     for (const path of [
-      "src/domain/auth/auth.service.ts",
-      "src/domain/characters/characters.service.ts",
-      "src/domain/credits/credits.service.ts",
-      "src/domain/events/events.service.ts",
-      "src/domain/feed/feed.service.ts",
-      "src/domain/follows/follows.service.ts",
-      "src/domain/messages/messages.service.ts",
-      "src/domain/notifications/notifications.service.ts",
-      "src/domain/posts/posts.service.ts",
-      "src/domain/reports/reports.service.ts",
-      "src/domain/users/users.service.ts",
+      "src/auth/auth.service.ts",
+      "src/characters/characters.service.ts",
+      "src/credits/credits.service.ts",
+      "src/events/events.service.ts",
+      "src/feed/feed.service.ts",
+      "src/follows/follows.service.ts",
+      "src/messages/messages.service.ts",
+      "src/notifications/notifications.service.ts",
+      "src/posts/posts.service.ts",
+      "src/reports/reports.service.ts",
+      "src/users/users.service.ts",
     ]) {
       const source = readFileSync(path, "utf8");
       expect(source).not.toContain("DB-free fallback");
@@ -231,7 +221,7 @@ describe("source layout", () => {
   });
 
   it("uses UUIDv7 defaults for UUID primary keys", () => {
-    const schema = readFileSync("src/domain/database/schema.ts", "utf8");
+    const schema = readFileSync("src/core/database/schema.ts", "utf8");
     const uuidV7PrimaryKeys = schema.match(
       /uuid\(\)\s*\.primaryKey\(\)\s*\.\$defaultFn\(\(\) => createUuidV7\(\)\)/g,
     );

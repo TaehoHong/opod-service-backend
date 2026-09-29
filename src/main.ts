@@ -1,10 +1,10 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
-import { ServiceModule } from "./service/service.module";
-import { setupServiceSwagger } from "./service/swagger";
+import { CoreModule } from "./core/core.module";
+import { setupServiceSwagger } from "./shared/swagger";
 
 async function bootstrap() {
-  // Request validation runs through the APP_PIPE provider in ServiceModule so
+  // Request validation runs through the APP_PIPE provider in CoreModule so
   // module-built test apps exercise the same pipe.
   const app = await NestFactory.create(AppModule, { rawBody: true });
   const trustedProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? "0");
@@ -34,7 +34,7 @@ async function bootstrap() {
       /^https?:\/\/127\.0\.0\.1(?::\d+)?$/,
     ],
   });
-  setupServiceSwagger(app, [ServiceModule]);
+  setupServiceSwagger(app, [CoreModule]);
   await app.listen(process.env.PORT ?? 3000);
 }
 

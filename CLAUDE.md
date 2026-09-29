@@ -24,8 +24,8 @@ planning, UI/UX, fullstack, and QA subagent discovery.
 ## Repo Facts (quick)
 
 - NestJS 10 + Drizzle ORM v1 + PostgreSQL(schema `opod`), TypeScript strict.
-- Layers: `src/service` (HTTP) → `src/domain` (DB logic) →
-  `src/domain/database/schema.ts` (canonical schema). Enforced by
+- Feature folders: `src/<feature>/` (HTTP and domain logic) →
+  `src/core/database/schema.ts` (canonical schema). Enforced by
   `src/architecture.spec.ts`.
 - This repo owns user-facing APIs + canonical schema. Admin lives in
   `opod-admin`; chat generation + relationship memory in `opod-agent`; frontend

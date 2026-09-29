@@ -4,9 +4,9 @@
 
 - Project: `opod-service-backend`
 - Role: public/user-facing NestJS service backend.
-- Owns service HTTP APIs under `src/service`.
+- Owns service HTTP APIs under `src/<feature>/`.
 - Owns shared service domain code and the canonical Drizzle schema under
-  `src/domain/database/schema.ts`.
+  `src/core/database/schema.ts`.
 - Owns Drizzle migration generation and application under `drizzle`.
 - Does not own admin APIs, admin UI, admin media upload, admin credit grants,
   generation job operation, or other `/admin/*` routes.
@@ -66,8 +66,9 @@ DB를 가리킬 때 아래 네 단어만 쓴다. 파괴적 작업의 대상이 �
 ## Boundaries
 
 - Do not add `src/admin` or admin UI code here.
-- Public controllers stay in `src/service`.
-- Shared DB-backed business logic stays in `src/domain`.
+- Public controllers and DB-backed business logic stay in `src/<feature>/`.
+- HTTP DTOs live in `src/<feature>/dto/`; infrastructure lives in `src/core/`
+  and cross-cutting helpers in `src/shared/`.
 - Admin-only behavior belongs in `opod-admin`.
 
 ## PAVE Agent Contract

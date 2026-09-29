@@ -1,37 +1,37 @@
 import { Controller, Get, Module, Post } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
-import { setupServiceSwagger } from "../src/service/swagger";
-import { PostsController } from "../src/service/posts/posts.controller";
-import { PostsService } from "../src/domain/posts/posts.service";
-import { FeedController } from "../src/service/feed/feed.controller";
-import { FeedService } from "../src/domain/feed/feed.service";
-import { AuthService } from "../src/domain/auth/auth.service";
-import { AuthController as RealAuthController } from "../src/service/auth/auth.controller";
-import { StoriesController } from "../src/service/stories/stories.controller";
-import { StoriesService } from "../src/domain/stories/stories.service";
-import { CharactersController } from "../src/service/characters/characters.controller";
-import { CharactersService } from "../src/domain/characters/characters.service";
-import { FollowsService } from "../src/domain/follows/follows.service";
+import { setupServiceSwagger } from "../src/shared/swagger";
+import { PostsController } from "../src/posts/posts.controller";
+import { PostsService } from "../src/posts/posts.service";
+import { FeedController } from "../src/feed/feed.controller";
+import { FeedService } from "../src/feed/feed.service";
+import { AuthService } from "../src/auth/auth.service";
+import { AuthController as RealAuthController } from "../src/auth/auth.controller";
+import { StoriesController } from "../src/stories/stories.controller";
+import { StoriesService } from "../src/stories/stories.service";
+import { CharactersController } from "../src/characters/characters.controller";
+import { CharactersService } from "../src/characters/characters.service";
+import { FollowsService } from "../src/follows/follows.service";
 import {
   HashtagsController,
   SearchController,
-} from "../src/service/search/search.controller";
-import { ReportsController } from "../src/service/reports/reports.controller";
-import { ReportsService } from "../src/domain/reports/reports.service";
-import { CreditsController } from "../src/service/credits/credits.controller";
-import { CheckInController } from "../src/service/credits/check-in.controller";
-import { CreditsService } from "../src/domain/credits/credits.service";
-import { NotificationsController } from "../src/service/notifications/notifications.controller";
-import { NotificationsService } from "../src/domain/notifications/notifications.service";
-import { FaqsController } from "../src/service/faqs/faqs.controller";
-import { FaqsService } from "../src/domain/faqs/faqs.service";
-import { NoticesController } from "../src/service/notices/notices.controller";
-import { NoticesService } from "../src/domain/notices/notices.service";
-import { InquiriesController } from "../src/service/inquiries/inquiries.controller";
-import { InquiriesService } from "../src/domain/inquiries/inquiries.service";
-import { MessagesController } from "../src/service/messages/messages.controller";
-import { MessagesService } from "../src/domain/messages/messages.service";
+} from "../src/search/search.controller";
+import { ReportsController } from "../src/reports/reports.controller";
+import { ReportsService } from "../src/reports/reports.service";
+import { CreditsController } from "../src/credits/credits.controller";
+import { CheckInController } from "../src/credits/check-in.controller";
+import { CreditsService } from "../src/credits/credits.service";
+import { NotificationsController } from "../src/notifications/notifications.controller";
+import { NotificationsService } from "../src/notifications/notifications.service";
+import { FaqsController } from "../src/faqs/faqs.controller";
+import { FaqsService } from "../src/faqs/faqs.service";
+import { NoticesController } from "../src/notices/notices.controller";
+import { NoticesService } from "../src/notices/notices.service";
+import { InquiriesController } from "../src/inquiries/inquiries.controller";
+import { InquiriesService } from "../src/inquiries/inquiries.service";
+import { MessagesController } from "../src/messages/messages.controller";
+import { MessagesService } from "../src/messages/messages.service";
 
 @Controller("health")
 class ServiceDocController {

@@ -3,13 +3,13 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { CreditsService } from "../src/domain/credits/credits.service";
-import { DatabaseService } from "../src/domain/database/database.service";
+import { CreditsService } from "../src/credits/credits.service";
+import { DatabaseService } from "../src/core/database/database.service";
 import { TestDatabase } from "./test-database";
-import { PaymentsService } from "../src/domain/payments/payments.service";
-import { PurchasesService } from "../src/domain/purchases/purchases.service";
-import { MESSAGE_REPLY_PROVIDER } from "../src/domain/messages/message-reply.provider";
-import { MessageReplyWorker } from "../src/domain/messages/message-reply.worker";
+import { PaymentsService } from "../src/payments/payments.service";
+import { PurchasesService } from "../src/purchases/purchases.service";
+import { MESSAGE_REPLY_PROVIDER } from "../src/messages/message-reply.provider";
+import { MessageReplyWorker } from "../src/messages/message-reply.worker";
 import { registerHuman } from "./human-auth";
 
 describe("credits, purchases and payments", () => {

@@ -25,12 +25,15 @@ Domain Service의 직접 DB 접근이나 Worker → Repository 등 미준수 경
 ## System Shape (사실)
 
 - 런타임: NestJS 10 (Node 22, TypeScript strict). 진입점 `src/main.ts` →
-  `AppModule` → `ServiceModule`.
-- 주요 계층:
-  - `src/service/<area>`: HTTP 컨트롤러 + DTO + service 모듈(도메인 wiring).
-  - `src/domain/<area>`: DB 접근·비즈니스 로직(`*.service.ts`), 도메인 모듈.
-  - `src/domain/database`: 공유 DB 인프라(`DatabaseService`, Drizzle schema,
-    페이지네이션, uuid).
+  `AppModule` → `CoreModule`.
+- 주요 폴더:
+  - `src/<area>/`: 기능별 HTTP 컨트롤러, 서비스, Repository, 모듈, 단위 테스트.
+    입력 DTO는 기능 안의 `dto/`에 둔다.
+  - `<area>.module.ts`는 도메인 provider, `<area>.http.module.ts`는 HTTP wiring을
+    소유한다. 분리된 DI 경계를 유지해 도메인 간 의존이 HTTP 순환 의존을 만들지 않는다.
+  - `src/core/core.module.ts`: HTTP 기능 등록과 전역 validation/logging 설정.
+  - `src/core/database/`: 공유 DB 인프라(`DatabaseService`, Drizzle schema, transaction).
+  - `src/shared/`: 페이지네이션·UUID·미디어 URL, 요청 interceptor, Swagger.
   - `drizzle/`: 정본 스키마에서 생성하고 검토한 SQL 마이그레이션.
 - 소유권 경계:
   - 이 리포: 유저용 API + 공유 도메인 + **정본 스키마**.
@@ -49,7 +52,7 @@ Domain Service의 직접 DB 접근이나 Worker → Repository 등 미준수 경
   호출.
 - Persistence: PostgreSQL(스키마 `opod`) + Drizzle ORM v1. UUIDv7 PK. 미디어는 URL/
   storageKey로 참조하고 공개 URL은 `S3_PUBLIC_BASE_URL`로 조립
-  (`src/domain/media/media-url.ts`).
+  (`src/shared/media/media-url.ts`).
 
 ## DM Reply Sequence (현재 구현)
 
@@ -211,7 +214,7 @@ Kafka) 기반 전달로 교체한다. 이번 구현에서는 브로커 의존성
   - opod-agent (`OPOD_AGENT_URL`): DM 답장 생성. OpenAI 호환 chat completion,
     `x-opod-*` 헤더로 관계 식별, `OPOD_AGENT_TIMEOUT_MS`로 설정하는 기본 300초
     타임아웃
-    (`src/domain/messages/message-reply.provider.ts`).
+    (`src/messages/message-reply.provider.ts`).
   - S3 (`S3_PUBLIC_BASE_URL`): 미디어 공개 URL.
   - 결제 provider: 공통 `PaymentProvider` 경계 뒤에 Web Polar, Apple App Store,
     Google Play adapter가 있으며 local adapter는 개발 환경 전용이다. 운영 전환에는
@@ -253,7 +256,7 @@ Kafka) 기반 전달로 교체한다. 이번 구현에서는 브로커 의존성
 
 ### Character social activity runtime (2026-09-22)
 
-- `src/domain/character-social` owns the non-LLM scheduler and executor.
+- `src/character-social` owns the non-LLM scheduler and executor.
   `CharacterSocialWorker.runOnce` delegates scheduling and execution to
   `CharacterSocialActivityApplicationService`. Its `scheduleDueActivities` and
   `processNextActivity` compose owning services; the worker does not access repositories. The automatic loop is opt-in with `CHARACTER_SOCIAL_WORKER_ENABLED=true`;

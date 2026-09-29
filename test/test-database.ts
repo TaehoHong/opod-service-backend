@@ -15,8 +15,8 @@ import {
   ne,
   sum,
 } from "drizzle-orm";
-import type { DatabaseClient } from "../src/domain/database/database.service";
-import { DatabaseService } from "../src/domain/database/database.service";
+import type { DatabaseClient } from "../src/core/database/database.service";
+import { DatabaseService } from "../src/core/database/database.service";
 import {
   characters,
   creditCheckIns,
@@ -49,7 +49,7 @@ import {
   userRefreshTokens,
   users,
   userWithdrawals,
-} from "../src/domain/database/schema";
+} from "../src/core/database/schema";
 
 type RelationWhere = (
   client: DatabaseClient,

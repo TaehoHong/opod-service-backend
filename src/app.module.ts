@@ -1,8 +1,8 @@
 import { Module } from "@nestjs/common";
-import { CharacterSocialModule } from "./domain/character-social/character-social.module";
-import { ServiceModule } from "./service/service.module";
+import { CharacterSocialModule } from "./character-social/character-social.module";
+import { CoreModule } from "./core/core.module";
 
 @Module({
-  imports: [CharacterSocialModule, ServiceModule],
+  imports: [CharacterSocialModule, CoreModule],
 })
 export class AppModule {}

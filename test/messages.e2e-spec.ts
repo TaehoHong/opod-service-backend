@@ -3,13 +3,13 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { DatabaseService } from "../src/domain/database/database.service";
+import { DatabaseService } from "../src/core/database/database.service";
 import { TestDatabase } from "./test-database";
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyError,
-} from "../src/domain/messages/message-reply.provider";
-import { MessageReplyWorker } from "../src/domain/messages/message-reply.worker";
+} from "../src/messages/message-reply.provider";
+import { MessageReplyWorker } from "../src/messages/message-reply.worker";
 import { registerHuman } from "./human-auth";
 
 describe("asynchronous DM replies", () => {

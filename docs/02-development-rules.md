@@ -73,23 +73,22 @@ Application Service는 유스케이스 순서와 여러 Domain Service의 협력
 
 ## Code Rules
 
-- 명시적으로 확정한 컨벤션을 우선하고, 그 범위 안에서 기존 패턴을 따른다. 새 도메인은 `src/domain/<area>` + `src/service/<area>`
-  쌍으로 만들고, HTTP는 service, DB 로직은 domain에 둔다. (사실)
+- 명시적으로 확정한 컨벤션을 우선하고, 그 범위 안에서 기존 패턴을 따른다.
+  기능별 `src/<area>/`에 컨트롤러·서비스·Repository·모듈·단위 테스트를 모으고,
+  HTTP DTO는 `dto/`에 둔다. 도메인 모듈과 HTTP 모듈은 각각 `<area>.module.ts`와
+  `<area>.http.module.ts`로 구분해 기존 DI 경계를 유지한다.
 - 변경은 요청 범위로 한정한다. 무관한 사용자 변경을 되돌리지 않는다.
 - 추상화는 실제 복잡도를 줄일 때만 추가한다.
 - **계층·경계 규칙** (테스트로 강제 — `src/architecture.spec.ts`):
-  - `src` 최상위는 `app.module.ts`, `main.ts`, `architecture.spec.ts`,
-    `domain/`, `service/`만 허용.
-  - HTTP 컨트롤러(`*.controller.ts`)는 `src/domain`에 두지 않는다.
-  - `src/service`는 admin 모듈을 import 하지 않는다 (`from ... admin` 금지).
+  - `src` 최상위는 기능 폴더, `core/`, `shared/`, 앱 진입점과 아키텍처 테스트를 둔다.
+  - HTTP 컨트롤러는 기능 폴더에 두고 `core/`·`shared/`에는 두지 않는다.
+  - 공개 API는 admin 모듈을 import 하지 않는다 (`from ... admin` 금지).
   - `src/admin`·`packages/admin`을 만들지 않는다 (admin은 opod-admin 소관).
-  - `src/domain` 폴더 집합은 DB 그룹과 정렬 (auth, characters, consents,
-    credits, database, events, faqs, feed, follows, inquiries, media, messages,
-    notices, notifications, posts, reports, stories, users).
+  - 기능 폴더 집합은 `architecture.spec.ts`의 `expectedRootEntries`로 검사한다.
 - **UUID 규칙**: UUID PK 값은 `uuidv7()`로 생성한다. DB schema는 `uuid`
   컬럼을 선언하고 서비스가 insert 시 UUIDv7을 넣는다. (사실)
 - **DB 접근**: 앱 런타임의 모든 접근은 `DatabaseService`
-  (`src/domain/database`)를 통한다. 마이그레이션 실행기 외에 `pg`·별도 client·
+  (`src/core/database`)를 통한다. 마이그레이션 실행기 외에 `pg`·별도 client·
   DB-free fallback을 만들지 않는다 (architecture.spec.ts). (사실)
 - 컨벤션·정본 예시는 [07-codebase-guide.md](./07-codebase-guide.md)의
   "코드 컨벤션과 정본 예시" 표를 따른다.
@@ -101,7 +100,7 @@ Application Service는 유스케이스 순서와 여러 Domain Service의 협력
 - **입력 검증 = 계층 분리** (결정):
   - DTO/컨트롤러가 **구문 검증**(타입·필수·길이·enum·형식)을 class-validator +
     전역 ValidationPipe로 소유한다. 쿼리 파라미터는 컨트롤러에서 파싱한다
-    (정본 예: `src/service/search/search.controller.ts`).
+    (정본 예: `src/search/search.controller.ts`).
   - 도메인 서비스는 **비즈니스 불변식**(소유권·유일성·상태전이·정책)을 소유하며,
     구문상 유효한(타입) 입력은 신뢰한다.
   - **방어적 `unknown` 파싱은 DTO를 거치지 않는 진짜 비신뢰 입력에만** 쓴다 —
@@ -113,12 +112,12 @@ Application Service는 유스케이스 순서와 여러 Domain Service의 협력
   식별자·타입·API 필드는 영어.
 - **신규 도메인 추가 = 2단계 규칙** (결정):
   - 풀스택 도메인(기본): 새 테이블 또는 고유 비즈니스/조회 로직이 있으면
-    `src/domain/database/schema.ts` + `src/domain/<area>` + `src/service/<area>` +
-    `architecture.spec.ts`의 `expectedDomainEntries` 갱신. 절차 상세는
+    `src/core/database/schema.ts` + `src/<area>/` +
+    `architecture.spec.ts`의 `expectedRootEntries` 갱신. 절차 상세는
     [07-codebase-guide.md](./07-codebase-guide.md) "신규 도메인 추가" 참조.
   - 서비스-only(예외): 새 테이블 없이 기존 도메인 서비스 조합만 하는 순수 조회·
-    집계는 `src/service/<area>`만 만들고 schema·domain 폴더·spec 목록 갱신을
-    생략한다. 정본 예: `src/service/search`, `src/service/health`.
+    집계는 `src/<area>/`에 컨트롤러와 모듈을 만들며 schema·도메인 서비스는
+    추가하지 않는다. 새 기능 폴더는 `expectedRootEntries`에 등록한다. 정본 예: `src/search`, `src/health`.
 - **커밋/브랜치 = Conventional Commits + main 직커밋** (결정): `feat`/`fix`/
   `chore`/`refactor`/`docs` 프리픽스, main 브랜치 중심 직커밋.
 
@@ -141,7 +140,7 @@ DB를 가리킬 때 **아래 네 단어만 쓴다.** 문서·주석·커밋 메�
 
 - 동작 변경은 가치 있는 회귀 테스트 또는 그에 준하는 명시 검증을 요구한다.
   커버리지·관습만을 위한 테스트는 추가하지 않는다 (05-quality-rules 참조).
-- 공유 로직(예: `src/domain/database` 헬퍼, `AuthService`, `CreditsService`)
+- 공유 로직(예: `src/core/database` 헬퍼, `AuthService`, `CreditsService`)
   변경은 더 넓은 회귀 검증을 요구한다.
 - 스키마 변경은 [db-management.md](./db-management.md)의 Drizzle 절차와
   admin 미러 정합을 따른다.

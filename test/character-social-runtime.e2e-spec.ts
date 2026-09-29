@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Test, TestingModule } from "@nestjs/testing";
 import { eq } from "drizzle-orm";
-import { DatabaseService } from "../src/domain/database/database.service";
-import { DatabaseTransactionContext } from "../src/domain/database/database-transaction-context";
-import { CharacterService } from "../src/domain/characters/character.service";
+import { DatabaseService } from "../src/core/database/database.service";
+import { DatabaseTransactionContext } from "../src/core/database/database-transaction-context";
+import { CharacterService } from "../src/characters/character.service";
 import {
   characters,
   characterSocialActivityPolicies,
@@ -12,16 +12,16 @@ import {
   posts,
   postHashtags,
   postReactions,
-} from "../src/domain/database/schema";
-import { CharacterSocialActivityApplicationService } from "../src/domain/character-social/character-social-activity-application.service";
-import { CharacterSocialActivityJobService } from "../src/domain/character-social/character-social-activity-job.service";
-import { CharacterPostViewService } from "../src/domain/character-social/character-post-view.service";
-import { CharacterSocialModule } from "../src/domain/character-social/character-social.module";
+} from "../src/core/database/schema";
+import { CharacterSocialActivityApplicationService } from "../src/character-social/character-social-activity-application.service";
+import { CharacterSocialActivityJobService } from "../src/character-social/character-social-activity-job.service";
+import { CharacterPostViewService } from "../src/character-social/character-post-view.service";
+import { CharacterSocialModule } from "../src/character-social/character-social.module";
 import {
   CHARACTER_SOCIAL_WORKER_OPTIONS,
   CharacterSocialWorker,
   characterSocialWorkerOptions,
-} from "../src/domain/character-social/character-social.worker";
+} from "../src/character-social/character-social.worker";
 
 describe("character social activity runtime", () => {
   let database: DatabaseService;

@@ -4,9 +4,11 @@ Public service backend for OPOD.
 
 ## Structure
 
-- `src/service`: user-facing HTTP controllers and modules
-- `src/domain`: service domain logic and database access
-- `src/domain/database/schema.ts`: canonical Drizzle PostgreSQL schema
+- `src/<feature>/`: controllers, domain services, repositories, modules and unit tests
+- `src/<feature>/dto/`: HTTP request DTOs
+- `src/core/`: application wiring and database infrastructure
+- `src/shared/`: cross-cutting interceptors, Swagger and pure helpers
+- `src/core/database/schema.ts`: canonical Drizzle PostgreSQL schema
 - `drizzle`: reviewed SQL migrations and snapshots
 - `test`: service-only tests
 - `docker`: local PostgreSQL/service container config

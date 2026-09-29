@@ -7,8 +7,8 @@ import {
   SOCIAL_IDENTITY_PROVIDERS,
   SocialIdentityProvider,
   VerifiedSocialIdentity,
-} from "../src/domain/auth/social-identity.provider";
-import { DatabaseService } from "../src/domain/database/database.service";
+} from "../src/auth/social-identity.provider";
+import { DatabaseService } from "../src/core/database/database.service";
 import { TestDatabase } from "./test-database";
 
 describe("auth", () => {
