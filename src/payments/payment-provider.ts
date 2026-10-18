@@ -38,6 +38,7 @@ export type VerifiedPurchase = {
 export type PaymentEvent = {
   eventId: string;
   type: "paid" | "refunded" | "reversed" | "failed" | "ignored";
+  environment?: string;
   purchaseId?: string;
   transactionId?: string;
   transactionKey?: string;

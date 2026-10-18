@@ -7,6 +7,10 @@ jest.mock("@polar-sh/sdk");
 describe("PolarPaymentProvider", () => {
   const secret = "polar-webhook-test-secret";
 
+  beforeEach(() => {
+    process.env.POLAR_SERVER = "production";
+  });
+
   afterEach(() => {
     delete process.env.POLAR_ACCESS_TOKEN;
     delete process.env.POLAR_SANDBOX_API_KEY;
@@ -41,6 +45,50 @@ describe("PolarPaymentProvider", () => {
     };
   }
 
+  it.each([undefined, "", "prod", "Sandbox", " production "])(
+    "rejects an unset or invalid Polar server (%s) before using credentials",
+    async (server) => {
+      if (server === undefined) delete process.env.POLAR_SERVER;
+      else process.env.POLAR_SERVER = server;
+      process.env.POLAR_ACCESS_TOKEN = "production-token";
+      process.env.POLAR_SANDBOX_API_KEY = "sandbox-token";
+      const provider = new PolarPaymentProvider();
+      expect(() => provider.environment).toThrow(
+        "POLAR_SERVER must be sandbox or production",
+      );
+      await expect(
+        provider.createCheckout({
+          purchaseId: "purchase-1",
+          userId: "user-1",
+          providerProductId: "product-1",
+          currency: "KRW",
+        }),
+      ).rejects.toThrow("POLAR_SERVER must be sandbox or production");
+      await expect(provider.verifyEvent(signedEvent({}))).rejects.toThrow(
+        "POLAR_SERVER must be sandbox or production",
+      );
+      expect(Polar).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["sandbox", "production"])(
+    "does not fall back to the other environment's credential (%s)",
+    async (server) => {
+      process.env.POLAR_SERVER = server;
+      if (server === "sandbox") process.env.POLAR_ACCESS_TOKEN = "other-token";
+      else process.env.POLAR_SANDBOX_API_KEY = "other-token";
+      await expect(
+        new PolarPaymentProvider().createCheckout({
+          purchaseId: "purchase-1",
+          userId: "user-1",
+          providerProductId: "product-1",
+          currency: "KRW",
+        }),
+      ).rejects.toThrow("Polar is not configured");
+      expect(Polar).not.toHaveBeenCalled();
+    },
+  );
+
   it("normalizes signed Polar order amounts and currency", async () => {
     const provider = new PolarPaymentProvider();
 
@@ -59,6 +107,7 @@ describe("PolarPaymentProvider", () => {
     ).resolves.toMatchObject({
       eventId: "polar-event-1",
       type: "paid",
+      environment: "production",
       purchaseId: "purchase-1",
       transactionId: "polar-order-1",
       providerProductId: "polar-product-1",
@@ -169,6 +218,7 @@ describe("PolarPaymentProvider", () => {
     ).resolves.toEqual({
       eventId: "reconcile:polar-order-1",
       type: "paid",
+      environment: "production",
       purchaseId: "purchase-1",
       transactionId: "polar-order-1",
       providerProductId: "polar-product-1",
@@ -277,6 +327,7 @@ describe("PolarPaymentProvider", () => {
     ).resolves.toMatchObject({
       eventId: "polar-event-1",
       type: "refunded",
+      environment: "production",
       transactionId: "polar-order-1",
       netAmount: 4900,
       taxAmount: 490,

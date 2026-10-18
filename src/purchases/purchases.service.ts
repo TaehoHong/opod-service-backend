@@ -190,6 +190,7 @@ export class PurchasesService {
           purchaseId: created.id,
           channel: "web",
           provider: provider.name,
+          providerEnvironment: provider.environment,
           providerProductId: externalProduct,
           amount: mapping.priceAmount,
           currency,
@@ -356,17 +357,22 @@ export class PurchasesService {
       : null;
     if (!purchase) throw new NotFoundException("Purchase not found");
     const payment = purchase.payment;
+    if (payment) this.assertPaymentEnvironment(payment);
     if (
       purchase.status === "pending" &&
       payment &&
       ["pending", "verified", "processing"].includes(payment.status)
     ) {
-      const event = await this.payments.reconcileCheckout(payment.provider, {
-        checkoutId: normalized,
-        purchaseId: purchase.id,
-        userId,
-        providerProductId: payment.providerProductId,
-      });
+      const event = await this.payments.reconcileCheckout(
+        payment.provider,
+        {
+          checkoutId: normalized,
+          purchaseId: purchase.id,
+          userId,
+          providerProductId: payment.providerProductId,
+        },
+        payment.providerEnvironment,
+      );
       if (event) {
         await this.database.client.transaction(async (tx) =>
           this.applyEvent(tx, payment.provider, event),
@@ -405,7 +411,11 @@ export class PurchasesService {
           eq(creditRefund.idempotencyKey, idempotencyKey),
         ),
       );
-      if (existing) return { refund: existing, isNew: false };
+      if (existing) {
+        if (existing.purchase.payment)
+          this.assertPaymentEnvironment(existing.purchase.payment);
+        return { refund: existing, isNew: false };
+      }
       const quote = await this.refundQuoteWithClient(
         tx,
         input.userId,
@@ -439,6 +449,8 @@ export class PurchasesService {
       return { refund, isNew: true };
     });
     const refund = prepared.refund;
+    if (refund.purchase.payment)
+      this.assertPaymentEnvironment(refund.purchase.payment);
     if (refund.status === "payment_succeeded") {
       return this.completeRefund(refund.id);
     }
@@ -449,11 +461,15 @@ export class PurchasesService {
     if (!payment?.providerTransactionId)
       throw new ConflictException("Payment cannot be refunded");
     try {
-      const result = await this.payments.requestRefund(payment.provider, {
-        providerTransactionId: payment.providerTransactionId,
-        amount: refund.refundAmount,
-        refundId: refund.id,
-      });
+      const result = await this.payments.requestRefund(
+        payment.provider,
+        {
+          providerTransactionId: payment.providerTransactionId,
+          amount: refund.refundAmount,
+          refundId: refund.id,
+        },
+        payment.providerEnvironment,
+      );
       const status =
         result.status === "succeeded"
           ? "payment_succeeded"
@@ -483,6 +499,7 @@ export class PurchasesService {
   }
 
   private async applyEvent(tx: Tx, provider: string, event: PaymentEvent) {
+    this.payments.assertEnvironment(provider, event.environment ?? null);
     const [inbox] = await tx
       .insert(paymentProviderEvents)
       .values({
@@ -501,7 +518,8 @@ export class PurchasesService {
     if (inbox.eventType !== event.type) {
       throw new ConflictException("Provider event ID conflict");
     }
-    if (inbox.status === "processed") return { processed: true, replay: true };
+    if (inbox.status === "processed" && provider !== "polar")
+      return { processed: true, replay: true };
     if (event.type === "ignored") {
       await tx
         .update(paymentProviderEvents)
@@ -538,6 +556,8 @@ export class PurchasesService {
     await this.lockUser(tx, payment.purchase.userId);
     await this.lockPaymentReference(tx, provider, payment.id);
     payment = await this.requirePayment(tx, payment.id);
+    this.assertPaymentEnvironment(payment, event);
+    if (inbox.status === "processed") return { processed: true, replay: true };
     await tx
       .update(paymentProviderEvents)
       .set({ paymentId: payment.id })
@@ -972,6 +992,7 @@ export class PurchasesService {
     let refund = await this.requireRefundWithPurchase(tx, refundId);
     const initialPayment = refund.purchase.payment;
     if (!initialPayment) throw new ConflictException("Payment not found");
+    this.assertPaymentEnvironment(initialPayment, event);
     await this.lockUser(tx, refund.purchase.userId);
     await this.lockPaymentReference(
       tx,
@@ -979,9 +1000,10 @@ export class PurchasesService {
       initialPayment.id,
     );
     refund = await this.requireRefundWithPurchase(tx, refundId);
-    if (refund.status === "completed") return refund;
     const payment = refund.purchase.payment;
     if (!payment) throw new ConflictException("Payment not found");
+    this.assertPaymentEnvironment(payment, event);
+    if (refund.status === "completed") return refund;
     await this.credits.recordRefundRecoveryWithClient(tx, {
       userId: refund.purchase.userId,
       purchaseId: refund.purchaseId,
@@ -1047,6 +1069,7 @@ export class PurchasesService {
     if (!purchase) throw new NotFoundException("Purchase not found");
     if (purchase.payment?.channel !== "web")
       throw new ConflictException("Store managed refund");
+    this.assertPaymentEnvironment(purchase.payment);
     const [{ value: activeReservations }] = await tx
       .select({ value: count() })
       .from(creditReservations)
@@ -1195,6 +1218,20 @@ export class PurchasesService {
     );
   }
 
+  private assertPaymentEnvironment(payment: PaymentRow, event?: PaymentEvent) {
+    this.payments.assertEnvironment(
+      payment.provider,
+      payment.providerEnvironment,
+    );
+    if (
+      payment.provider === "polar" &&
+      event &&
+      event.environment !== payment.providerEnvironment
+    ) {
+      throw new ConflictException("Polar event environment mismatch");
+    }
+  }
+
   private async ensureCheckout(
     purchase: PurchaseRow,
     input: {
@@ -1205,6 +1242,7 @@ export class PurchasesService {
     },
   ) {
     if (!purchase.payment) throw new ConflictException("Payment not found");
+    this.assertPaymentEnvironment(purchase.payment);
     if (
       purchase.payment.amount === null ||
       !purchase.payment.currency?.trim()
@@ -1241,6 +1279,7 @@ export class PurchasesService {
     let checkout = await this.payments.findCheckout(
       purchase.payment.provider,
       checkoutInput,
+      purchase.payment.providerEnvironment,
     );
     if (!checkout) {
       if (claimed.length === 0) {
@@ -1248,6 +1287,7 @@ export class PurchasesService {
           this.database.client,
           purchase.payment.id,
         );
+        this.assertPaymentEnvironment(current);
         if (Date.now() - current.updatedAt.getTime() < 30_000) {
           throw new ConflictException("Checkout is being prepared");
         }
@@ -1255,6 +1295,7 @@ export class PurchasesService {
       checkout = await this.payments.createCheckout(
         purchase.payment.provider,
         checkoutInput,
+        purchase.payment.providerEnvironment,
       );
     }
     await this.database.client.transaction(async (tx) => {
@@ -1279,6 +1320,7 @@ export class PurchasesService {
       this.database.client,
       purchase.id,
     );
+    if (current.payment) this.assertPaymentEnvironment(current.payment);
     return {
       ...this.toPurchase(current),
       checkoutUrl: current.payment?.providerCheckoutUrl ?? checkout.checkoutUrl,
