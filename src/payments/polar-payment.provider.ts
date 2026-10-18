@@ -22,7 +22,13 @@ export class PolarPaymentProvider implements PaymentProvider {
   readonly channel = "web" as const;
 
   get environment() {
-    return process.env.POLAR_SERVER === "sandbox" ? "sandbox" : "production";
+    const server = process.env.POLAR_SERVER;
+    if (server !== "sandbox" && server !== "production") {
+      throw new ServiceUnavailableException(
+        "POLAR_SERVER must be sandbox or production",
+      );
+    }
+    return server;
   }
 
   private client() {
@@ -87,6 +93,7 @@ export class PolarPaymentProvider implements PaymentProvider {
   async reconcileCheckout(
     input: CheckoutReconciliationRequest,
   ): Promise<PaymentEvent | undefined> {
+    const environment = this.environment;
     const client = this.client();
     const checkout = await client.checkouts.get({ id: input.checkoutId });
     if (checkout.status !== "succeeded") return undefined;
@@ -118,6 +125,7 @@ export class PolarPaymentProvider implements PaymentProvider {
     return {
       eventId: `reconcile:${order.id}`,
       type: "paid",
+      environment,
       purchaseId: input.purchaseId,
       transactionId: order.id,
       providerProductId: order.productId,
@@ -133,6 +141,7 @@ export class PolarPaymentProvider implements PaymentProvider {
     body: Buffer;
     headers: Record<string, string>;
   }): Promise<PaymentEvent> {
+    const environment = this.environment;
     const secret = process.env.POLAR_WEBHOOK_SECRET?.trim();
     if (!secret) {
       throw new ServiceUnavailableException("Polar webhook is not configured");
@@ -181,6 +190,7 @@ export class PolarPaymentProvider implements PaymentProvider {
         return {
           eventId,
           type: "paid",
+          environment,
           purchaseId,
           transactionId: event.data.id,
           providerProductId: event.data.product_id ?? undefined,
@@ -224,6 +234,7 @@ export class PolarPaymentProvider implements PaymentProvider {
         return {
           eventId,
           type: "refunded",
+          environment,
           transactionId: event.data.id,
           netAmount,
           taxAmount,
@@ -237,6 +248,7 @@ export class PolarPaymentProvider implements PaymentProvider {
       return {
         eventId,
         type: "ignored",
+        environment,
         occurredAt: new Date(event.timestamp ?? Date.now()),
       };
     } catch (error) {

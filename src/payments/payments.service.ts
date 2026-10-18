@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   ServiceUnavailableException,
 } from "@nestjs/common";
@@ -47,6 +48,19 @@ export class PaymentsService {
     return provider;
   }
 
+  assertEnvironment(providerName: string, environment: string | null) {
+    if (providerName !== "polar") return;
+    const activeEnvironment = this.provider(providerName).environment;
+    if (!environment) {
+      throw new ConflictException(
+        "Polar payment environment is unknown; verified migration is required",
+      );
+    }
+    if (environment !== activeEnvironment) {
+      throw new ConflictException("Polar payment environment mismatch");
+    }
+  }
+
   async providerForChannel(channel: PaymentChannel) {
     if (channel === "web") return this.webProvider();
     return this.providers.find((provider) => provider.channel === channel)!;
@@ -55,7 +69,9 @@ export class PaymentsService {
   async createCheckout(
     providerName: string,
     input: Parameters<NonNullable<PaymentProvider["createCheckout"]>>[0],
+    environment: string | null,
   ) {
+    this.assertEnvironment(providerName, environment);
     const method = this.provider(providerName).createCheckout;
     if (!method)
       throw new BadRequestException("Provider does not support checkout");
@@ -65,7 +81,9 @@ export class PaymentsService {
   async findCheckout(
     providerName: string,
     input: Parameters<NonNullable<PaymentProvider["createCheckout"]>>[0],
+    environment: string | null,
   ) {
+    this.assertEnvironment(providerName, environment);
     const provider = this.provider(providerName);
     return provider.findCheckout?.(input);
   }
@@ -73,7 +91,9 @@ export class PaymentsService {
   async reconcileCheckout(
     providerName: string,
     input: Parameters<NonNullable<PaymentProvider["reconcileCheckout"]>>[0],
+    environment: string | null,
   ) {
+    this.assertEnvironment(providerName, environment);
     const provider = this.provider(providerName);
     return provider.reconcileCheckout?.(input);
   }
@@ -105,7 +125,9 @@ export class PaymentsService {
   async requestRefund(
     providerName: string,
     input: Parameters<NonNullable<PaymentProvider["requestRefund"]>>[0],
+    environment: string | null,
   ) {
+    this.assertEnvironment(providerName, environment);
     const provider = this.provider(providerName);
     if (!provider.requestRefund) {
       throw new BadRequestException("Provider does not support refunds");

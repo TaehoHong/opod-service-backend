@@ -20,6 +20,8 @@
 - 회사 귀책 환불에서는 구매 연계 프로모션을 유지한다.
 - 환불 요청 중인 크레딧은 잠가서 사용할 수 없게 한다.
 - 결제사 성공 응답을 확인한 시점을 환불 완료로 본다.
+- Polar 결제는 생성 시 저장한 환경, 현재 backend 환경, 검증된 event 환경이 일치해야 한다.
+  기존 NULL 환경은 현재 설정으로 추정하지 않고 검증된 이관 전까지 차단한다.
 
 계산식:
 
@@ -234,3 +236,20 @@ Polar 금액은 모두 세금 제외 누적 환불액이다. Polar가 관련 세
 | REC-06  | 후속 범위   | 운영자 중복 grant 탐지·보정 미구현                                                |
 | REC-07  | 자동화      | Polar 누적 환불 증가분·상한·replay를 원장과 함께 검증                             |
 | REC-08  | 후속 범위   | 정기 Store history reconciliation worker 미구현                                   |
+
+## Polar 환경 전환 회귀
+
+`test/polar-environment.e2e-spec.ts`는 격리된 Postgres와 실제 Nest HTTP 경로를 사용하고,
+Polar SDK transport만 대체한다. 서명된 webhook·금전 원장·크레딧 처리는 제품 코드를 통과한다.
+
+| 사전 상태 | 실행 | 기대 결과 |
+| --- | --- | --- |
+| sandbox 결제 생성 | 같은 환경에서 checkout 재사용, 결제 완료, 중복 webhook | 최초 환경 유지, 동일 URL 재사용, 크레딧 1회 지급 |
+| sandbox 결제 후 production 전환 | checkout 재사용·복구·조회·환불 요청 | 409, 이전 URL 반환·다른 환경 provider 호출·크레딧 변경 없음 |
+| 기존 Polar 결제 환경 NULL | checkout·정산·환불 요청 | 409, 임의 backfill 없음 |
+| 완료 결제·처리된 event·진행/완료 환불 | 다른 환경에서 멱등 재시도 | 기존 완료 상태를 이유로 환경 검증을 생략하지 않음 |
+| 같은 환경의 유효 결제·환불 | 서명된 event 재전송 | 금전 원장·크레딧 중복 처리 없음 |
+
+누락·오타 `POLAR_SERVER`의 503과 토큰 간 fallback 금지는 provider/service 단위 회귀에서 검증한다.
+실제 merchant credential, 과거 NULL 행의 환경 확정, sandbox 잔액 이관은 이 테스트로 증명되지 않는다.
+운영 전환의 선행 조건은 [배포 규칙](./03-deployment-rules.md#polar-운영-전환-게이트)을 따른다.
