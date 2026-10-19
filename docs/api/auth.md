@@ -80,6 +80,12 @@ email만 `user_accounts.email`에 저장·갱신하여 API `user.email`로 반�
 nonce 검증은 적용하지 않는다. ID 토큰 원문은 로그와 오류에 기록하지 않는다.
 Apple·Naver, 계정 연결, 소셜 계정 탈퇴와 provider revoke는 후속 범위다.
 
+### Apple 로그인 후속 계약 — 제안·미구현
+
+현재 소셜 provider 등록은 Google뿐이다. Apple IAP adapter는 Apple 로그인 지원을 뜻하지 않는다. 후속 Apple 로그인은 기존 `POST /auth/social/apple` 경계에서 ID token과 nonce를 받아 Apple 고정 issuer/JWKS, RS256 signature, 허용 audience, 만료·발급시각·sub를 검증해야 한다. nonce는 동일 값 비교와 shared storage의 TTL 소비로 replay를 막는 제안이다. 계정 identity는 email이 아닌 `(provider, sub)`이며 같은 email의 로컬/Google/Apple 계정을 자동 연결하지 않는다. 최초 이름·verified email이 후속 승인에 누락돼도 저장된 값을 빈 값으로 덮어쓰지 않는다.
+
+상세 제안은 외부 보관함의 [네이티브 연동 원본 계약](../../../../opod-evaluation-archive/2026-09-29-cleanup-recovery/documents/opod-service-backend/docs/native-integrations-handoff.md)에 보존한다. Apple web Service ID 포함 여부, nonce replay 저장소 및 JWKS cache/skew 값은 구현 전에 확정할 항목이다. 이 절은 현재 Google 요청 DTO에 nonce를 추가했거나 Apple 검증을 실행했다는 뜻이 아니다.
+
 ---
 
 ## PATCH /auth/password — 비밀번호 변경
@@ -87,8 +93,8 @@ Apple·Naver, 계정 연결, 소셜 계정 탈퇴와 provider revoke는 후속 �
 - 상태: **구현 완료 (2026-07-08)**
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §1](../account-support-policy.md)
-- 구현: `src/domain/auth/auth.service.ts` `changePasswordFromAuthorization`,
-  `src/service/auth/auth.controller.ts`, Swagger `/docs`에 예시 등록됨
+- 구현: `src/auth/auth.service.ts` `changePasswordFromAuthorization`,
+  `src/auth/auth.controller.ts`, Swagger `/docs`에 예시 등록됨
 
 ### 요청
 
@@ -174,7 +180,7 @@ Content-Type: application/json
 - 적용 범위: email/password 로컬 계정. 소셜 계정 탈퇴·provider revoke는 TODO
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §2](../account-support-policy.md)
-- 구현: `src/domain/auth/auth.service.ts` `deleteAccountFromAuthorization`,
+- 구현: `src/auth/auth.service.ts` `deleteAccountFromAuthorization`,
   스키마 `User.updatedAt/deletedAt` + `UserWithdrawal`, Swagger `/docs` 등록됨
 
 ### 요청

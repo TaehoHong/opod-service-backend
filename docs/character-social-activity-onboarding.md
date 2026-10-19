@@ -312,7 +312,7 @@ flowchart TD
 
 ## 6. 데이터 모델과 각 데이터가 필요한 이유
 
-전체 DDL은 [스키마 정본](../src/domain/database/schema.ts)과
+전체 DDL은 [스키마 정본](../src/core/database/schema.ts)과
 [소셜 활동 마이그레이션](../drizzle/20260918053849_character_social_activity/migration.sql)을 따른다.
 여기서는 구조를 외우기보다 왜 나뉘어 있는지 이해하는 데 집중한다.
 
@@ -713,13 +713,13 @@ classDiagram
 
 | 순서 | 코드                                                                                                                                                                                                                        | 확인할 내용                                             |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| 1    | [워커](../src/domain/character-social/character-social.worker.ts), [실행 옵션](../src/domain/character-social/character-social.options.ts)                                                                                  | 자동 루프와 회당 처리 상한                              |
-| 2    | [활동 Application Service](../src/domain/character-social/character-social-activity-application.service.ts)                                                                                                                 | 예약·점유·실행·실패의 조율                              |
-| 3    | [캐릭터 Service](../src/domain/characters/character.service.ts), [캐릭터 Repository](../src/domain/characters/character.repository.ts), [트랜잭션 컨텍스트](../src/domain/database/database-transaction-context.ts)         | 잠금과 트랜잭션의 시작, 현지 날짜, 비동기 컨텍스트 전파 |
-| 4    | [정책 Service](../src/domain/character-social/character-social-activity-policy.service.ts), [작업 Service](../src/domain/character-social/character-social-activity-job.service.ts)                                         | 활동 시간, 다음 예약, lease와 재시도 판단               |
-| 5    | [조회 Service](../src/domain/character-social/character-post-view.service.ts), [좋아요 Service](../src/domain/posts/post-reaction.service.ts), [팔로우 Service](../src/domain/character-social/character-follow.service.ts) | 각 행동의 정책과 다른 Service를 통한 협력               |
+| 1    | [워커](../src/character-social/character-social.worker.ts), [실행 옵션](../src/character-social/character-social.options.ts)                                                                                  | 자동 루프와 회당 처리 상한                              |
+| 2    | [활동 Application Service](../src/character-social/character-social-activity-application.service.ts)                                                                                                                 | 예약·점유·실행·실패의 조율                              |
+| 3    | [캐릭터 Service](../src/characters/character.service.ts), [캐릭터 Repository](../src/characters/character.repository.ts), [트랜잭션 컨텍스트](../src/core/database/database-transaction-context.ts)         | 잠금과 트랜잭션의 시작, 현지 날짜, 비동기 컨텍스트 전파 |
+| 4    | [정책 Service](../src/character-social/character-social-activity-policy.service.ts), [작업 Service](../src/character-social/character-social-activity-job.service.ts)                                         | 활동 시간, 다음 예약, lease와 재시도 판단               |
+| 5    | [조회 Service](../src/character-social/character-post-view.service.ts), [좋아요 Service](../src/posts/post-reaction.service.ts), [팔로우 Service](../src/character-social/character-follow.service.ts) | 각 행동의 정책과 다른 Service를 통한 협력               |
 | 6    | [관리자 Application Service](../../opod-admin/src/characters/character-social-activity-application.service.ts), [캐릭터 Service](../../opod-admin/src/characters/character.service.ts)                                      | 정책 변경·시간대 수정·비활성화 조율과 캐릭터 규칙       |
-| 7    | [스키마](../src/domain/database/schema.ts)                                                                                                                                                                                  | 복합 키, 작업 상태·lease 제약, 고유 인덱스              |
+| 7    | [스키마](../src/core/database/schema.ts)                                                                                                                                                                                  | 복합 키, 작업 상태·lease 제약, 고유 인덱스              |
 
 관리자도 같은 소유 원칙을 따른다. `CharacterSocialActivityApplicationService`가
 캐릭터·정책·작업 Service를 조합하고, 각 Service는 자기 Repository만 사용한다.

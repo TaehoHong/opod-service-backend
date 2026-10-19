@@ -54,54 +54,6 @@ Domain Service의 직접 DB 접근이나 Worker → Repository 등 미준수 경
   storageKey로 참조하고 공개 URL은 `S3_PUBLIC_BASE_URL`로 조립
   (`src/shared/media/media-url.ts`).
 
-## DM Reply Sequence (현재 구현)
-
-현재 DM 전송은 SSE나 토큰 스트리밍 없이 `POST /messages` 요청 하나가 Agent의
-답변 생성 완료까지 기다리는 동기 REST 흐름이다.
-
-```mermaid
-sequenceDiagram
-  actor User
-  participant Client
-  participant ServiceBackend
-  participant CreditsService
-  participant PostgreSQL
-  participant OpodAgent
-  participant LLMProvider
-
-  User->>Client: DM 입력
-  Client->>ServiceBackend: POST /messages
-  ServiceBackend->>ServiceBackend: JWT, 본문, 캐릭터 검증
-  ServiceBackend->>CreditsService: chat_reply 크레딧 예약
-  CreditsService->>PostgreSQL: reserved 상태 기록, TTL 5분
-  ServiceBackend->>PostgreSQL: 대화와 사용자 메시지 저장
-  ServiceBackend->>PostgreSQL: 전체 대화 이력 조회
-  ServiceBackend->>OpodAgent: Chat Completions 요청, 기본 timeout 300초
-  OpodAgent->>PostgreSQL: Persona와 관계 메모리 조회
-  OpodAgent->>LLMProvider: 프롬프트와 대화 전달
-  alt 생성 성공
-    LLMProvider-->>OpodAgent: 생성된 답변
-    OpodAgent-->>ServiceBackend: Chat Completions 응답
-    ServiceBackend->>PostgreSQL: 캐릭터 메시지 저장
-    ServiceBackend->>CreditsService: 예약 캡처
-    CreditsService->>PostgreSQL: usage 원장과 captured 상태 기록
-    ServiceBackend-->>Client: 대화 ID와 사용자, 캐릭터 메시지
-    Client-->>User: 캐릭터 답변 표시
-  else Agent 실패 또는 timeout
-    OpodAgent-->>ServiceBackend: 오류 응답 또는 응답 없음
-    ServiceBackend->>CreditsService: 예약 해제
-    CreditsService->>PostgreSQL: released 상태 기록
-    ServiceBackend->>PostgreSQL: MESSAGE_REPLY_FAILED 로그 기록
-    ServiceBackend-->>Client: 오류 응답
-    Client-->>User: 전송 실패 표시
-  end
-```
-
-- 크레딧 예약이 실패하면 대화와 사용자 메시지를 저장하지 않는다.
-- Agent 호출이 실패하면 이미 저장된 사용자 메시지는 유지하고 예약만 해제한다.
-- 크레딧 캡처는 캐릭터 메시지 저장 뒤에 실행되므로, 캡처 실패 시 캐릭터 메시지가
-  저장된 상태에서 요청이 실패할 수 있다.
-
 ## DM Reply Sequence (구현됨)
 
 DM 전송 요청은 **사용자 메시지와 영속 답변 작업 저장까지만 동기 처리**한다.
@@ -162,7 +114,7 @@ sequenceDiagram
   묶어 한 번만 답하는 동작은 범위에서 제외했다(2026-08-11). 되살릴 때 스키마는
   바뀌지 않는다 — `messages.reply_job_id`가 이미 N:1이다.
 - 같은 대화의 작업은 순서대로 하나씩 처리하고, 서로 다른 대화는 병렬 처리한다.
-  Agent 문맥에는 그 작업의 사용자 메시지보다 뒤에 도착한 메시지를 포함하지 않는다.
+  Agent 문맥은 현재 답변 작업까지의 논리 순서로 구성하며 미래 작업의 메시지는 제외한다.
 - 답변이 늦게 도착하므로 대화 전사는 시간순으로 [질문1, 질문2, 답변1, 답변2]처럼
   엇갈릴 수 있다. 어느 답변이 어느 질문의 것인지는 순서가 아니라 `turnId`가
   가리킨다.
@@ -189,6 +141,10 @@ sequenceDiagram
   찍어 현재 대화의 마지막 순서에 배치하고 새 크레딧 예약과 최대 3회·15분 정책을
   적용하며, 동시 재시도는 상태 가드로 하나만 살아남고 진 쪽은 예약을 되돌린다.
 
+### Agent에 전달하는 대화 순서
+
+답변 생성 중 다음 사용자 메시지가 먼저 저장될 수 있으므로 메시지 저장 시각을 그대로 Agent 문맥 순서로 쓰지 않는다. 현재 작업까지의 `replyJob.createdAt/id`로 작업 순서를 정하고, 같은 작업 안에서는 사용자 → 캐릭터 순으로 정렬한다. 따라서 저장 순서가 `user1 → user2 → assistant1`이어도 두 번째 작업의 입력은 `user1 → assistant1 → user2`다. 미래 작업 메시지는 제외한다. `replyJobId = null`인 레거시 메시지는 기존 사용자 턴의 시각·ID 경계를 사용하며, 작업 연결 정보가 없는 과거 행의 잘못된 순서를 추정해 복원하지 않는다.
+
 ### worker 실행
 
 worker는 새 스케줄러 의존성 없이 서비스 프로세스 안에서 재귀 `setTimeout` tick으로
@@ -198,8 +154,9 @@ worker는 새 스케줄러 의존성 없이 서비스 프로세스 안에서 재
 lease가 소유권을 표시한다. 동작 값은 `MESSAGE_REPLY_*` 환경변수로 조정하며,
 `MESSAGE_REPLY_WORKER_ENABLED=false`면 API만 뜨고 worker는 돌지 않는다.
 
-opod-web 코드, 폴링 주기, 화면 이탈 시 중단 조건, pending·failed 표시 방식은
-이번 service-backend 구현 범위에서 제외한다.
+opod-web의 `MessageThreadContent`는 pending 작업이 있는 동안 기존 cursor API를 폴링한다.
+일반 화면에서는 1.5초, document가 숨겨진 상태에서는 5초 간격이며 effect 정리 시 폴링을 중단한다.
+완료 답변은 대화에 병합하고 실패 턴은 알림을 표시한다. 이 코드 확인은 브라우저 E2E나 실기기 검증을 새로 실행했다는 뜻이 아니다.
 
 ### 전송 경계 (향후)
 
@@ -314,6 +271,27 @@ Kafka) 기반 전달로 교체한다. 이번 구현에서는 브로커 의존성
   disposable PostgreSQL database for filtering, local quotas, DST, concurrent
   workers, lease recovery and cancellation. No persistent local or development
   database is modified by these tests.
+
+### 네이티브 결제: 현재 서버 계약과 연결 공백
+
+현재 서버의 상품 조회는 `GET /purchases/products?channel=apple|google`, 계정 연결값은 인증된 `GET /purchases/account-token`이다. 검증 API는 `POST /purchases/in-app/apple/verify`와 `POST /purchases/in-app/google/verify`이고 본문은 `{ productId, proof }`다. `proof`는 Apple signed transaction 또는 Google purchase token이다. 서버는 상품 매핑과 store가 검증한 계정 연결값·상태를 확인하고, provider transaction key의 잠금·unique 제약 아래 구매·금전 원장·크레딧 지급을 함께 확정한다. 같은 사용자의 재요청은 기존 구매를 반환하며 다른 사용자의 재청구는 거절한다. store proof 원문을 DB에 보관하지 않는다.
+
+현재 Web `IapService`는 제안 계약인 `/credits/iap/catalog`, `/credits/iap/intents`, `/credits/iap/verify`를 호출하고 `canFinish`를 기대한다. 이 경로·intent·`canFinish` 응답은 현재 backend에 없다. 따라서 서버 adapter 구현과 native 구매 완료 연결은 구분한다. 지급 확인 전 native transaction을 finish하지 않는 것은 후속 클라이언트 계약의 목표다. 현재 Google adapter는 store 검증 중 consume을 실행한 뒤 내부 지급 transaction을 시작하므로, 이 순서와 지급 실패 시 복구도 미해결 사항이다. 양쪽 API를 맞추고 store sandbox·실기기 검증을 완료하기 전까지 전체 연동 완료로 표시하지 않는다.
+
+### Push 알림 후속 계약 — 제안·미구현
+
+현재 알림은 인앱 목록·읽음과 팔로우 알림 동기화다. push device 저장, sender, ticket/receipt worker는 구현하지 않았다. 후속 제안은 설치별 UUID `installationId`의 인증된 PUT/DELETE 등록이며 Expo Push Token을 transport로 사용한다. 동일 설치의 token rollover와 같은 기기의 계정 전환은 이전 association revoke와 신규 owner 연결을 원자적으로 처리한다. DELETE는 없거나 다른 사용자 소유여도 존재를 노출하지 않고 204로 멱등 처리한다. project/app allowlist, token 형식·길이·rate limit을 검증하고 raw token은 key version을 가진 암호문, 비교값은 keyed hash로 분리한다.
+
+발송은 public 임의-send API 대신 Notification 생성 트랜잭션의 outbox로 연결한다. device별 delivery uniqueness와 worker lease로 중복 처리를 막고, Expo ticket과 receipt를 구분해 저장한다. `DeviceNotRegistered` receipt는 device를 invalid 처리해 다음 발송에서 제외한다. payload는 임의 URL 대신 version/type/notificationId와 접근 권한을 검증한 typed target을 사용한다. timeout·429·5xx에는 제한된 backoff 재시도, permanent 오류와 최대 시도 초과에는 dead letter를 적용한다.
+
+worker 방식, dead-letter 운영 주체, ciphertext retention·key 관리·rotation, webhook/발송 지연 지표와 alert는 미결정이다. 앱은 권한·token 획득과 서버 등록을 구분하고 PUT이 성공하기 전 등록 완료를 표시하지 않는다. 구체적인 sample·오류 코드·제안 스키마·환경 변수는 외부 보관함의
+[네이티브 연동 원본 계약](../../../opod-evaluation-archive/2026-09-29-cleanup-recovery/documents/opod-service-backend/docs/native-integrations-handoff.md)에 보존한다.
+
+### Store 이벤트와 운영 검증 범위
+
+현재 webhook 진입점은 `/payments/webhooks/:provider`이며 `google`은 내부 provider `google_play`로 정규화한다. Apple은 notification과 nested transaction JWS를 검증한다. Google은 Pub/Sub OIDC audience·허용 service account·verified email과 package를 검사한 뒤 RTDN 종류를 내부 event로 변환한다.
+
+기존 제안의 Google Publisher API authoritative state 재조회, subscription allowlist와 Voided Purchases 정기 reconciliation은 현재 adapter에 없다. 미상 transaction의 durable retry/dead-letter, 이벤트 지연·실패 alert와 실기기/서명 sandbox 검증도 구현·실행 근거를 따로 확인해야 한다. 코드의 서명 검증 경로가 있다는 것만으로 이 후속 운영 계약까지 완료됐다고 표시하지 않는다.
 
 ## Operational Constraints
 
