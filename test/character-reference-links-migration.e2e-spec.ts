@@ -9,8 +9,8 @@ describe("character reference link schema", () => {
     await client.connect();
     try {
       await client.query(
-        "INSERT INTO opod.characters(id, public_id, display_name, bio, updated_at) VALUES ($1,$1,'Reference test','',now()),($2,$2,'Other reference test','',now())",
-        [first, second],
+        "INSERT INTO opod.characters(id, public_id, display_name, bio, updated_at) VALUES ($1,$3,'Reference test','',now()),($2,$4,'Other reference test','',now())",
+        [first, second, `reference-${first}`, `reference-${second}`],
       );
       const created = await client.query(
         "INSERT INTO opod.character_reference_links(character_id,url) VALUES ($1,'https://example.com/motif') RETURNING id, pg_typeof(id)::text AS type",
