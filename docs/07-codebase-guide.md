@@ -259,8 +259,10 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
   적용/legacy 데이터 보존을 확인한다. 배포 시 migration을 Admin 코드보다
   먼저 적용하며 코드 롤백 시 새 테이블과 이력은 보존한다.
 
-## Character reference link schema
+## Influencer reference library schema
 
-`drizzle/20261019002237_character_reference_links/`와 `characterReferenceLinks`는 관리자 캐릭터별 참조 URL의 별도 저장소다. 사용자 확정으로 링크 PK만 BIGINT IDENTITY를 사용하며, `character_id`는 기존 캐릭터 UUID FK다. 캐릭터별 URL unique index와 물리 삭제 cascade를 유지하고 URL CHECK는 만들지 않는다. URL 검증과 CRUD는 admin의 `CharacterReferenceLinkService`가 소유한다. 공개 service API나 대화/게시물 생성 입력에는 참조 링크를 추가하지 않는다.
+`drizzle/20261019042242_influencers/`가 influencers/character_influencers/influencer_media를 추가하고 기존 character_reference_links를 계정·캐릭터 매핑으로 이전한 뒤 제거한다. 정본은 schema.ts, Admin은 동일 mirror를 사용한다. 신규 entity ID는 BIGINT IDENTITY, character FK는 기존 UUID다. CHECK와 별도 게시물 테이블은 없다. 이미지 분석·벡터는 media에 nullable로 보관한다.
 
-검증 owner는 `test/character-reference-links-migration.e2e-spec.ts`의 BIGINT 생성·FK·캐릭터별 중복·cascade와 `test/drizzle-migrations.e2e-spec.ts`의 빈 DB/legacy 적용 및 이력 보존이다. 좁은 명령은 `npm run test:e2e -- test/character-reference-links-migration.e2e-spec.ts test/drizzle-migrations.e2e-spec.ts`다.
+전체 migration을 transaction으로 실행한다. 지원하지 않는 기존 URL이나 매핑 누락은 RAISE로 중단한다. old link ID/시각/URL 원문 표기는 최소 스키마에 남지 않으므로 개발 적용 전에 백업하고 기존 Admin 쓰기를 중지해야 한다. 공개 service API에는 새 기능을 추가하지 않는다. Admin이 계정 연결·미디어 등록·임베딩을 소유한다.
+
+검증 owner는 `test/character-reference-links-migration.e2e-spec.ts`의 중복 계정 통합·매핑 보존·미지원 URL 롤백과 `test/drizzle-migrations.e2e-spec.ts`의 전체 migration 적용이다. 실제 개발 DB 적용은 별도 절차다.

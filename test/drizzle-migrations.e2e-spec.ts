@@ -32,6 +32,14 @@ const contentProfileMigrationHash = createHash("sha256")
     ),
   )
   .digest("hex");
+const influencerMigrationName = "20261019042242_influencers";
+const influencerMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(projectRoot, "drizzle", influencerMigrationName, "migration.sql"),
+    ),
+  )
+  .digest("hex");
 const referenceLinksMigrationName = "20261019002237_character_reference_links";
 const referenceLinksMigrationHash = createHash("sha256")
   .update(
@@ -224,6 +232,7 @@ describe("Drizzle migrations", () => {
           name: referenceLinksMigrationName,
           hash: referenceLinksMigrationHash,
         },
+        { name: influencerMigrationName, hash: influencerMigrationHash },
       ]);
 
       const extension = await client.query(
