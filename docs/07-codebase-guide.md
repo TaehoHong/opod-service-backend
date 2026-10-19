@@ -253,3 +253,9 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
   지침 CHECK, revision 중복 차단, 참조 모델 삭제 제한과 기존 migration
   적용/legacy 데이터 보존을 확인한다. 배포 시 migration을 Admin 코드보다
   먼저 적용하며 코드 롤백 시 새 테이블과 이력은 보존한다.
+
+## Character reference link schema
+
+`drizzle/20261019002237_character_reference_links/`와 `characterReferenceLinks`는 관리자 캐릭터별 참조 URL의 별도 저장소다. 사용자 확정으로 링크 PK만 BIGINT IDENTITY를 사용하며, `character_id`는 기존 캐릭터 UUID FK다. 캐릭터별 URL unique index와 물리 삭제 cascade를 유지하고 URL CHECK는 만들지 않는다. URL 검증과 CRUD는 admin의 `CharacterReferenceLinkService`가 소유한다. 공개 service API나 대화/게시물 생성 입력에는 참조 링크를 추가하지 않는다.
+
+검증 owner는 `test/character-reference-links-migration.e2e-spec.ts`의 BIGINT 생성·FK·캐릭터별 중복·cascade와 `test/drizzle-migrations.e2e-spec.ts`의 빈 DB/legacy 적용 및 이력 보존이다. 좁은 명령은 `npm run test:e2e -- test/character-reference-links-migration.e2e-spec.ts test/drizzle-migrations.e2e-spec.ts`다.

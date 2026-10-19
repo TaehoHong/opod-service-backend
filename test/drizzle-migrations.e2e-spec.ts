@@ -32,6 +32,19 @@ const contentProfileMigrationHash = createHash("sha256")
     ),
   )
   .digest("hex");
+const referenceLinksMigrationName = "20261019002237_character_reference_links";
+const referenceLinksMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(
+        projectRoot,
+        "drizzle",
+        referenceLinksMigrationName,
+        "migration.sql",
+      ),
+    ),
+  )
+  .digest("hex");
 const postAgentMigrationName = "20260928080853_post_agent_prompts";
 const postAgentMigrationHash = createHash("sha256")
   .update(
@@ -207,6 +220,10 @@ describe("Drizzle migrations", () => {
           hash: contentProfileMigrationHash,
         },
         { name: postAgentMigrationName, hash: postAgentMigrationHash },
+        {
+          name: referenceLinksMigrationName,
+          hash: referenceLinksMigrationHash,
+        },
       ]);
 
       const extension = await client.query(
@@ -437,7 +454,7 @@ describe("Drizzle migrations", () => {
       const metadata = await client.query(
         "SELECT count(*)::integer AS count FROM drizzle.__drizzle_migrations",
       );
-      expect(metadata.rows[0].count).toBe(10);
+      expect(metadata.rows[0].count).toBe(11);
       const legacyMetadata = await client.query(
         "SELECT count(*)::integer AS count FROM opod._prisma_migrations",
       );

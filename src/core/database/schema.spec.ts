@@ -18,18 +18,18 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(71);
+    expect(tableConfigs).toHaveLength(72);
     expect(enums).toHaveLength(31);
-    expect(columns).toHaveLength(638);
+    expect(columns).toHaveLength(643);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(132);
+    ).toBe(133);
     expect(
       tableConfigs.reduce(
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(79);
+    ).toBe(80);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
@@ -97,7 +97,7 @@ describe("Drizzle schema", () => {
     expect(
       schema.characterContentProfiles.characterId.defaultFn,
     ).toBeUndefined();
-    expect(updatedAtColumns).toHaveLength(36);
+    expect(updatedAtColumns).toHaveLength(37);
     for (const { column, path } of updatedAtColumns) {
       expect({ onUpdateFn: column.onUpdateFn, path }).toEqual({
         onUpdateFn: expect.any(Function),
@@ -119,6 +119,7 @@ describe("Drizzle schema", () => {
     expect(bigintColumns.map(({ path }) => path).sort()).toEqual([
       "ai_models.id",
       "character_action_logs.id",
+      "character_reference_links.id",
       "character_social_activity_jobs.id",
       "console_logs.id",
       "llm_log_media.llm_log_id",
