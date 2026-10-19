@@ -261,7 +261,7 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
 
 ## Influencer reference library schema
 
-`drizzle/20261019042242_influencers/`가 influencers/character_influencers/influencer_media를 추가하고 기존 character_reference_links를 계정·캐릭터 매핑으로 이전한 뒤 제거한다. 정본은 schema.ts, Admin은 동일 mirror를 사용한다. 신규 entity ID는 BIGINT IDENTITY, character FK는 기존 UUID다. CHECK와 별도 게시물 테이블은 없다. 이미지 분석·벡터는 media에 nullable로 보관한다.
+`drizzle/20261019042242_influencers/`가 influencers/character_influencers/influencer_media를 추가하고 기존 character_reference_links를 계정·캐릭터 매핑으로 이전한 뒤 제거한다. 정본은 schema.ts, Admin은 동일 mirror를 사용한다. 신규 entity ID는 BIGINT IDENTITY, character FK는 기존 UUID다. CHECK와 별도 게시물 테이블은 없다. 이미지 분석·벡터는 media에 nullable로 보관한다. `drizzle/20261019060222_orange_warlock/`는 nullable text source_caption을 추가한다. Admin은 같은 게시물 슬라이드에 원본 캡션을 동기화하고 canonical schema mirror를 유지한다.
 
 전체 migration을 transaction으로 실행한다. 지원하지 않는 기존 URL이나 매핑 누락은 RAISE로 중단한다. old link ID/시각/URL 원문 표기는 최소 스키마에 남지 않으므로 개발 적용 전에 백업하고 기존 Admin 쓰기를 중지해야 한다. 공개 service API에는 새 기능을 추가하지 않는다. Admin이 계정 연결·미디어 등록·임베딩을 소유한다.
 
