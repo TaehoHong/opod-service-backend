@@ -1,0 +1,1 @@
+ALTER TABLE "opod"."character_visual_profile_references" ADD COLUMN "composition_analysis" jsonb;

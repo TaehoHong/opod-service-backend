@@ -266,3 +266,12 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
 전체 migration을 transaction으로 실행한다. 지원하지 않는 기존 URL이나 매핑 누락은 RAISE로 중단한다. old link ID/시각/URL 원문 표기는 최소 스키마에 남지 않으므로 개발 적용 전에 백업하고 기존 Admin 쓰기를 중지해야 한다. 공개 service API에는 새 기능을 추가하지 않는다. Admin이 계정 연결·미디어 등록·임베딩을 소유한다.
 
 검증 owner는 `test/character-reference-links-migration.e2e-spec.ts`의 중복 계정 통합·매핑 보존·미지원 URL 롤백과 `test/drizzle-migrations.e2e-spec.ts`의 전체 migration 적용이다. 실제 개발 DB 적용은 별도 절차다.
+
+
+## 캐릭터 비주얼 촬영 분석
+
+`drizzle/20261019084411_deep_ken_ellis/`는 character_visual_profile_references에 nullable
+`composition_analysis jsonb` 컬럼 하나를 추가한다. 기존 description과 이미지·연결·임베딩 행을 보존한다.
+Admin이 person-composition-v1 촬영 분석과 기존 벡터 컬럼의 재색인을 소유하며 공개 서비스 API는 바뀌지 않는다.
+Admin 미러는 정본 schema.ts와 동일하다. 컬럼 추가 후 Admin 코드를 배포하고 명시적인 분석·색인 작업으로 기존 데이터를 채운다.
+이번 변경의 통합 테스트는 사용자 지시로 실행하지 않았다.
