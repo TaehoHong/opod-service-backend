@@ -8,6 +8,7 @@ import { TestDatabase } from "./test-database";
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyError,
+  createMessageReplyProvider,
 } from "../src/messages/message-reply.provider";
 import { MessageReplyWorker } from "../src/messages/message-reply.worker";
 import { registerHuman } from "./human-auth";
@@ -33,7 +34,7 @@ describe("asynchronous DM replies", () => {
 
   beforeEach(() => {
     createReply.mockReset();
-    createReply.mockResolvedValue("Test reply");
+    createReply.mockResolvedValue({ body: "Test reply" });
   });
 
   async function character() {
@@ -113,6 +114,116 @@ describe("asynchronous DM replies", () => {
       }),
     ]);
     await expect(unreadCountFor(human.authHeaders)).resolves.toBe(1);
+  });
+
+  it("persists public experience and reloads the same fields in history and conversation previews", async () => {
+    const human = await registerHuman(app);
+    const target = await character();
+    const experience = {
+      thought: "반갑다.",
+      photo: {
+        id: "sample",
+        url: "https://example.com/scene.jpg",
+        alt: "거리 풍경",
+        isMock: true,
+      },
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: 0.4,
+        change: "closer",
+      },
+    };
+    const provider = createMessageReplyProvider(
+      { OPOD_AGENT_URL: "https://agent.local/chat" },
+      jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [
+            { message: { content: "안녕", reasoning_content: "private" } },
+          ],
+          opod: {
+            ...experience,
+            reasoning: "private",
+            debug: "private",
+            relationship: { ...experience.relationship, xp: 50 },
+          },
+        }),
+      }),
+    );
+    createReply.mockImplementation(provider.createReply);
+    await send(human.authHeaders, target.id, "hello");
+    await worker.runOnce();
+    const stored = await db.message.findFirst({
+      where: {
+        conversation: { userId: human.user.id },
+        senderType: "character",
+      },
+    });
+    expect(stored.experience).toEqual(experience);
+    const history = await messagesFor(human.authHeaders, target.id);
+    expect(
+      history.find((message) => message.senderType === "character"),
+    ).toMatchObject({ experience });
+    expect(
+      history.find((message) => message.senderType === "user"),
+    ).not.toHaveProperty("experience");
+    const previews = await request(app.getHttpServer())
+      .get("/messages/conversations")
+      .set(human.authHeaders)
+      .expect(200);
+    expect(previews.body.items[0].lastMessage.experience).toEqual(experience);
+
+    await send(human.authHeaders, target.id, "again");
+    await worker.runOnce();
+    expect(createReply.mock.calls[1][0].messages).toEqual([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "안녕" },
+      { role: "user", content: "again" },
+    ]);
+  });
+
+  it("completes and charges a valid body even when all public metadata is invalid", async () => {
+    const human = await registerHuman(app);
+    const target = await character();
+    const provider = createMessageReplyProvider(
+      { OPOD_AGENT_URL: "https://agent.local/chat" },
+      jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "안녕" } }],
+          opod: {
+            thought: [],
+            photo: { url: "file:///private/photo" },
+            relationship: { level: 99 },
+            reasoning: "private",
+          },
+        }),
+      }),
+    );
+    createReply.mockImplementation(provider.createReply);
+    await send(human.authHeaders, target.id, "hello");
+    await worker.runOnce();
+    const history = await messagesFor(human.authHeaders, target.id);
+    expect(
+      history.find((message) => message.senderType === "character"),
+    ).toMatchObject({
+      body: "안녕",
+      replyStatus: "completed",
+    });
+    expect(history.every((message) => !("experience" in message))).toBe(true);
+    const stored = await db.message.findFirst({
+      where: {
+        conversation: { userId: human.user.id },
+        senderType: "character",
+      },
+    });
+    expect(stored.experience).toBeNull();
+    await expect(
+      db.creditLedger.count({
+        where: { userId: human.user.id, type: "usage", reason: "chat_reply" },
+      }),
+    ).resolves.toBe(1);
   });
 
   it("charges one credit usage per turn, once", async () => {
@@ -196,7 +307,7 @@ describe("asynchronous DM replies", () => {
     ).resolves.toBe(0);
 
     // 재시도는 새 예약으로 다시 큐에 넣는다.
-    createReply.mockResolvedValue("다시 안녕");
+    createReply.mockResolvedValue({ body: "다시 안녕" });
     await request(app.getHttpServer())
       .post("/messages/retry")
       .set(human.authHeaders)
@@ -296,7 +407,9 @@ describe("message read receipts", () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(MESSAGE_REPLY_PROVIDER)
-      .useValue({ createReply: jest.fn().mockResolvedValue("Test reply") })
+      .useValue({
+        createReply: jest.fn().mockResolvedValue({ body: "Test reply" }),
+      })
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();

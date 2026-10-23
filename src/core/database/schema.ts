@@ -21,6 +21,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { v7 as createUuidV7 } from "uuid";
+import type { CharacterExperience } from "../../shared/character-experience";
 
 export const opod = pgSchema("opod");
 export const mediaType = opod.enum("media_type", ["image", "video"]);
@@ -2158,6 +2159,7 @@ export const messages = opod.table(
       }),
     senderType: messageSenderType("sender_role").notNull(),
     body: text("message_text").notNull(),
+    experience: jsonb().$type<CharacterExperience>(),
     createdAt: timestamp("sent_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),

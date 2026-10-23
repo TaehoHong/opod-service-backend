@@ -30,7 +30,7 @@ describe("message reply provider", () => {
         ],
         turnId: "message-human",
       }),
-    ).resolves.toBe("provider says hi");
+    ).resolves.toEqual({ body: "provider says hi" });
 
     expect(fetchReply).toHaveBeenCalledWith(
       "https://agent.local/v1/chat/completions",
@@ -54,6 +54,211 @@ describe("message reply provider", () => {
         { role: "user", content: "hello" },
       ],
     });
+  });
+
+  const input = {
+    userId: "human-1",
+    characterId: "ai-1",
+    conversationId: "conversation-1",
+    turnId: "turn-1",
+    messages: [{ role: "user" as const, content: "hello" }],
+  };
+
+  async function replyWith(opod: unknown) {
+    return createMessageReplyProvider(
+      { OPOD_AGENT_URL: "https://agent.local/v1/chat/completions" },
+      jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: " hello ",
+                reasoning_content: "secret",
+                tool_calls: [],
+              },
+            },
+          ],
+          reasoning: "secret",
+          opod,
+        }),
+      }),
+    ).createReply(input);
+  }
+
+  it("copies only public experience fields, never native reasoning or debug metadata", async () => {
+    const experience = {
+      thought: "조금 더 이야기하고 싶다.",
+      photo: {
+        id: "sample",
+        url: "https://images.example/scene.jpg",
+        alt: "거리 풍경",
+        isMock: true,
+      },
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: 0.4,
+        change: "closer",
+      },
+    };
+    await expect(
+      replyWith({
+        ...experience,
+        reasoning: "secret",
+        reasoning_content: "secret",
+        reasoning_details: ["secret"],
+        tool_calls: [{ arguments: "secret" }],
+        debug: { prompt: "secret" },
+        policy: "secret",
+        photo: { ...experience.photo, prompt: "secret" },
+        relationship: {
+          ...experience.relationship,
+          xp: 123,
+          explanation: "secret",
+        },
+      }),
+    ).resolves.toEqual({ body: "hello", experience });
+  });
+
+  it.each([
+    null,
+    [],
+    "metadata",
+    { reasoning: "private" },
+    { thought: ["not a string"] },
+    { thought: " " },
+    {
+      photo: {
+        id: "x".repeat(129),
+        url: "https://example.com/p",
+        alt: "photo",
+        isMock: true,
+      },
+    },
+    {
+      photo: {
+        id: "p",
+        url: `https://example.com/${"x".repeat(2048)}`,
+        alt: "photo",
+        isMock: true,
+      },
+    },
+    {
+      photo: {
+        id: "p",
+        url: "https://example.com/p",
+        alt: "x".repeat(501),
+        isMock: true,
+      },
+    },
+    {
+      relationship: {
+        level: 2,
+        label: "x".repeat(101),
+        progress: 0,
+        change: "steady",
+      },
+    },
+    {
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: NaN,
+        change: "steady",
+      },
+    },
+    { thought: "x".repeat(121) },
+    {
+      photo: {
+        id: "p",
+        url: "javascript:alert(1)",
+        alt: "photo",
+        isMock: true,
+      },
+    },
+    {
+      photo: {
+        id: "p",
+        url: "data:image/png;base64,abc",
+        alt: "photo",
+        isMock: true,
+      },
+    },
+    {
+      photo: {
+        id: "p",
+        url: "https://secret@example.com/p",
+        alt: "photo",
+        isMock: true,
+      },
+    },
+    {
+      photo: {
+        id: "p",
+        url: "https://example.com/p",
+        alt: "photo",
+        isMock: "true",
+      },
+    },
+    {
+      relationship: { level: 6, label: "친구", progress: 0, change: "steady" },
+    },
+    {
+      relationship: {
+        level: 1.5,
+        label: "친구",
+        progress: 0,
+        change: "steady",
+      },
+    },
+    {
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: -0.1,
+        change: "steady",
+      },
+    },
+    {
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: Infinity,
+        change: "steady",
+      },
+    },
+    {
+      relationship: {
+        level: 5,
+        label: "친구",
+        progress: 0.5,
+        change: "steady",
+      },
+    },
+    {
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: 0.5,
+        change: "better",
+      },
+    },
+  ])(
+    "keeps a valid reply when optional metadata is invalid (%j)",
+    async (opod) => {
+      await expect(replyWith(opod)).resolves.toEqual({ body: "hello" });
+    },
+  );
+
+  it("omits invalid optional sections without losing valid public sections", async () => {
+    await expect(
+      replyWith({
+        thought: "반갑다.",
+        photo: { url: "file:///private/photo" },
+        relationship: { level: "2" },
+      }),
+    ).resolves.toEqual({ body: "hello", experience: { thought: "반갑다." } });
   });
 
   it("requires an OPOD agent URL", () => {

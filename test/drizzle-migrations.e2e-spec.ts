@@ -98,6 +98,15 @@ describe("Drizzle migrations", () => {
       expect(baseline.rows).toEqual([
         { name: baselineName, hash: baselineHash },
       ]);
+      const experienceColumn = await client.query(
+        `SELECT data_type, is_nullable, column_default
+           FROM information_schema.columns
+          WHERE table_schema = 'opod' AND table_name = 'chat_messages'
+            AND column_name = 'experience'`,
+      );
+      expect(experienceColumn.rows).toEqual([
+        { data_type: "jsonb", is_nullable: "YES", column_default: null },
+      ]);
 
       const extension = await client.query(
         "SELECT extversion FROM pg_extension WHERE extname = 'vector'",

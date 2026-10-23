@@ -26,6 +26,10 @@ import {
 } from "../core/database/schema";
 import { isUuid } from "../shared/utils/uuid";
 import { EventsService } from "../events/events.service";
+import {
+  parseCharacterExperience,
+  type CharacterExperience,
+} from "../shared/character-experience";
 
 type MessageClient = Pick<
   DatabaseClient,
@@ -40,6 +44,7 @@ type Message = {
   conversationId: string;
   senderType: "user" | "character";
   body: string;
+  experience?: CharacterExperience;
   createdAt: string;
   turnId?: string;
   replyStatus?: ReplyStatus;
@@ -79,6 +84,7 @@ const messageSelection = {
   conversationId: messages.conversationId,
   senderType: messages.senderType,
   body: messages.body,
+  experience: messages.experience,
   createdAt: messages.createdAt,
   replyJobId: messages.replyJobId,
   replyJob: {
@@ -415,10 +421,12 @@ export class MessagesService {
     client: MessageClient,
     input: {
       conversationId: string;
-      senderType: Message["senderType"];
       body: string;
       replyJobId?: string;
-    },
+    } & (
+      | { senderType: "user"; experience?: never }
+      | { senderType: "character"; experience?: CharacterExperience }
+    ),
   ): Promise<MessageRow> {
     const [created] = await client
       .insert(messages)
@@ -426,6 +434,10 @@ export class MessagesService {
         conversationId: input.conversationId,
         senderType: input.senderType,
         body: input.body,
+        experience:
+          input.senderType === "character"
+            ? (parseCharacterExperience(input.experience) ?? null)
+            : null,
         replyJobId: input.replyJobId,
       })
       .returning();
@@ -530,12 +542,17 @@ export class MessagesService {
   }
 
   private toMessage(message: MessageRow): Message {
+    const experience =
+      message.senderType === "character"
+        ? parseCharacterExperience(message.experience)
+        : undefined;
     return {
       id: message.id,
       conversationId: message.conversationId,
       senderType: message.senderType,
       body: message.body,
       createdAt: message.createdAt.toISOString(),
+      ...(experience ? { experience } : {}),
       ...(message.replyJob
         ? {
             turnId: message.replyJob.turnId,

@@ -23,7 +23,9 @@ describe("credits, purchases and payments", () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(MESSAGE_REPLY_PROVIDER)
-      .useValue({ createReply: jest.fn().mockResolvedValue("Test reply") })
+      .useValue({
+        createReply: jest.fn().mockResolvedValue({ body: "Test reply" }),
+      })
       .compile();
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();

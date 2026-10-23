@@ -170,7 +170,8 @@ function createHarness(options: {
   };
   const replyProvider = {
     createReply:
-      options.reply ?? jest.fn().mockResolvedValue("provider says hi"),
+      options.reply ??
+      jest.fn().mockResolvedValue({ body: "provider says hi" }),
   };
   const worker = new MessageReplyWorker(
     database as never,
@@ -208,6 +209,41 @@ describe("MessageReplyWorker", () => {
     expect(
       harness.creditsService.captureReservationWithClient,
     ).toHaveBeenCalledWith(expect.anything(), { reference: "chat_reply:test" });
+  });
+
+  it("persists public experience with the charged character reply", async () => {
+    const experience = {
+      thought: "반갑다.",
+      photo: {
+        id: "sample",
+        url: "https://example.com/scene.jpg",
+        alt: "풍경",
+        isMock: true,
+      },
+      relationship: {
+        level: 2,
+        label: "친구",
+        progress: 0.2,
+        change: "closer",
+      },
+    };
+    const harness = createHarness({
+      reply: jest.fn().mockResolvedValue({ body: "안녕", experience }),
+    });
+    await harness.worker.runOnce();
+    expect(
+      harness.messagesService.appendMessageWithClient,
+    ).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        senderType: "character",
+        body: "안녕",
+        experience,
+      }),
+    );
+    expect(
+      harness.creditsService.captureReservationWithClient,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it("does not append a second reply when the job is no longer running", async () => {
