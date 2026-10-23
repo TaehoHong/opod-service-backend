@@ -113,7 +113,7 @@ migration 또는 검증된 백업 복구로 처리한다.
 | 테이블 | 역할 |
 | --- | --- |
 | `chat_conversations` | 사용자와 캐릭터 조합별 대화방 및 읽음·최신 메시지 시각 |
-| `chat_messages` | 사용자와 캐릭터가 주고받은 원문 메시지 |
+| `chat_messages` | 사용자와 캐릭터가 주고받은 원문 메시지. 캐릭터의 공개 속마음·선택 사진·관계 피드백은 nullable `experience` JSONB에 저장하며 사용자·기존 메시지는 비워 둔다 |
 | `chat_reply_generation_jobs` | 캐릭터 답변 생성 작업과 재시도 상태 |
 | `chat_memory_entries` | 대화에서 추출·추론한 검색 단위 장기 기억. `context_injection_mode`로 `always`와 `retrieved`를 구분 |
 | `chat_memory_consolidation_jobs` | 대화를 기억·요약으로 통합하는 비동기 작업 |

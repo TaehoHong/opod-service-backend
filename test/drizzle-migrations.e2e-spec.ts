@@ -61,6 +61,14 @@ const postAgentMigrationHash = createHash("sha256")
     ),
   )
   .digest("hex");
+const experienceMigrationName = "20261023022821_character_message_experience";
+const experienceMigrationHash = createHash("sha256")
+  .update(
+    readFileSync(
+      join(projectRoot, "drizzle", experienceMigrationName, "migration.sql"),
+    ),
+  )
+  .digest("hex");
 const characterSocialMigrationName = "20260918053849_character_social_activity";
 const characterSocialMigrationHash = createHash("sha256")
   .update(
@@ -233,6 +241,16 @@ describe("Drizzle migrations", () => {
           hash: referenceLinksMigrationHash,
         },
         { name: influencerMigrationName, hash: influencerMigrationHash },
+        { name: experienceMigrationName, hash: experienceMigrationHash },
+      ]);
+      const experienceColumn = await client.query(
+        `SELECT data_type, is_nullable, column_default
+           FROM information_schema.columns
+          WHERE table_schema = 'opod' AND table_name = 'chat_messages'
+            AND column_name = 'experience'`,
+      );
+      expect(experienceColumn.rows).toEqual([
+        { data_type: "jsonb", is_nullable: "YES", column_default: null },
       ]);
 
       const extension = await client.query(
