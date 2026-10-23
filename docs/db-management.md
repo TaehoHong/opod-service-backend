@@ -126,6 +126,14 @@ migration 또는 검증된 백업 복구로 처리한다.
 임베딩하지 않고, 장기 기억은 `chat_memory_entries.memory_text` 단위로 임베딩한다.
 항상 필요한 명시적 사용자 사실은 `always`, 그 외 기억은 `retrieved`로 저장한다.
 
+`20261023041721_character_experience_schema_sync`는 최신 main의 원본 캡션 snapshot에 이어
+공개 채팅 경험을 추가하고 admin의 기존 `composition_analysis` 정본 누락을 정합화한다.
+분석 컬럼은 이미 저장된 값을 교체하지 않도록 `IF NOT EXISTS`로 채택한다. 과거 배포 기록의
+`0ac8251`/`20261019084411_deep_ken_ellis` 원본은 현재 원격 Git에서 찾을 수 없어 기존 이력이나
+해시를 재작성하지 않는다. 실제 DB 적용은 별도 배포 절차이며, schema mirror는 admin의
+`src/core/database/schema.ts`와 바이트 단위로 일치시킨다.
+
+
 ## pgvector + Qwen 임베딩 설계
 
 1단계에서는 pgvector 저장 기반만 활성화한다. 임베딩 생성·백필·유사도 검색은

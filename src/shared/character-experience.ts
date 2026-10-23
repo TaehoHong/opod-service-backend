@@ -1,13 +1,9 @@
-export type CharacterExperience = {
-  thought?: string;
-  photo?: { id: string; url: string; alt: string; isMock: boolean };
-  relationship?: {
-    level: number;
-    label: string;
-    progress: number;
-    change: "closer" | "steady" | "distant";
-  };
-};
+import type { messages } from "../core/database/schema";
+
+/** The persisted public shape is owned by the canonical schema and its admin mirror. */
+export type CharacterExperience = NonNullable<
+  typeof messages.$inferSelect.experience
+>;
 
 function publicText(value: unknown, maxLength: number): value is string {
   return (
