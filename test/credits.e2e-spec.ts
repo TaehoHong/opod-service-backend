@@ -85,6 +85,7 @@ describe("credits, purchases and payments", () => {
       expect(createCheckout).toHaveBeenCalledWith(
         "local",
         expect.objectContaining({ customerIpAddress: "127.0.0.1" }),
+        "development",
       );
 
       express.set("trust proxy", 1);
@@ -100,6 +101,7 @@ describe("credits, purchases and payments", () => {
       expect(createCheckout).toHaveBeenCalledWith(
         "local",
         expect.objectContaining({ customerIpAddress: "203.0.113.10" }),
+        "development",
       );
     } finally {
       express.set("trust proxy", false);
@@ -570,6 +572,8 @@ describe("credits, purchases and payments", () => {
   });
 
   it("quotes a Polar refund and fee from the pre-tax payment amount", async () => {
+    const originalServer = process.env.POLAR_SERVER;
+    process.env.POLAR_SERVER = "sandbox";
     const human = await registerHuman(app);
     const checkout = await request(app.getHttpServer())
       .post("/purchases/checkouts")
@@ -585,22 +589,28 @@ describe("credits, purchases and payments", () => {
       where: { purchaseId: checkout.body.id },
       data: {
         provider: "polar",
+        providerEnvironment: "sandbox",
         netAmount: 4455,
         taxAmount: 445,
       },
     });
 
-    const quote = await request(app.getHttpServer())
-      .get(`/purchases/${checkout.body.id}/refund-quote`)
-      .set(human.authHeaders)
-      .expect(200);
+    try {
+      const quote = await request(app.getHttpServer())
+        .get(`/purchases/${checkout.body.id}/refund-quote`)
+        .set(human.authHeaders)
+        .expect(200);
 
-    expect(quote.body).toMatchObject({
-      provider: "polar",
-      grossAmount: 4455,
-      feeAmount: 222,
-      refundAmount: 4233,
-    });
+      expect(quote.body).toMatchObject({
+        provider: "polar",
+        grossAmount: 4455,
+        feeAmount: 222,
+        refundAmount: 4233,
+      });
+    } finally {
+      if (originalServer === undefined) delete process.env.POLAR_SERVER;
+      else process.env.POLAR_SERVER = originalServer;
+    }
   });
 
   it("resumes internal refund finalization without requesting the provider twice", async () => {

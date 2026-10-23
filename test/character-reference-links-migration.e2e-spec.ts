@@ -28,8 +28,8 @@ describe("influencer migration", () => {
     first = randomUUID();
     second = randomUUID();
     await client.query(
-      "INSERT INTO opod.characters(id,public_id,display_name,bio,updated_at) VALUES ($1,$1,'A','',now()),($2,$2,'B','',now())",
-      [first, second],
+      "INSERT INTO opod.characters(id,public_id,display_name,bio,updated_at) VALUES ($1,$2,'A','',now()),($3,$4,'B','',now())",
+      [first, first, second, second],
     );
   });
   afterEach(async () => {
