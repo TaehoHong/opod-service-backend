@@ -21,7 +21,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { v7 as createUuidV7 } from "uuid";
-import type { CharacterExperience } from "../../shared/character-experience";
 
 export const opod = pgSchema("opod");
 export const mediaType = opod.enum("media_type", ["image", "video"]);
@@ -916,6 +915,11 @@ export const characterVisualProfileReferences = opod.table(
       }),
     sortOrder: integer("sort_order").default(0).notNull(),
     description: text().default("").notNull(),
+    compositionAnalysis: jsonb("composition_analysis").$type<{
+      version: string;
+      model: string;
+      content: Record<string, string | number | null>;
+    }>(),
     embedding: vector({ dimensions: 1024 }),
     embeddingModel: text("embedding_model"),
     embeddedAt: timestamp("embedded_at", {
@@ -2154,7 +2158,16 @@ export const messages = opod.table(
       }),
     senderType: messageSenderType("sender_role").notNull(),
     body: text("message_text").notNull(),
-    experience: jsonb().$type<CharacterExperience>(),
+    experience: jsonb().$type<{
+      thought?: string;
+      photo?: { id: string; url: string; alt: string; isMock: boolean };
+      relationship?: {
+        level: number;
+        label: string;
+        progress: number;
+        change: "closer" | "steady" | "distant";
+      };
+    }>(),
     createdAt: timestamp("sent_at", { precision: 6, withTimezone: true })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),

@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "ab6aea9b-8da3-47f8-b84e-48d88f2c82a1",
+  "id": "7be0ed1f-7ce7-44ea-9f7f-d074c934f6b6",
   "prevIds": [
-    "07b61605-a3b9-41a5-9ab9-5732154e22e0"
+    "fba9d95d-4d12-435e-a521-1db2f6028771"
   ],
   "ddl": [
     {
@@ -405,6 +405,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "character_influencers",
+      "entityType": "tables",
+      "schema": "opod"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "character_location_references",
       "entityType": "tables",
       "schema": "opod"
@@ -562,6 +568,18 @@
     {
       "isRlsEnabled": false,
       "name": "hashtags",
+      "entityType": "tables",
+      "schema": "opod"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "influencer_media",
+      "entityType": "tables",
+      "schema": "opod"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "influencers",
       "entityType": "tables",
       "schema": "opod"
     },
@@ -1850,6 +1868,32 @@
       "entityType": "columns",
       "schema": "opod",
       "table": "character_follows"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "character_id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "character_influencers"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "influencer_id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "character_influencers"
     },
     {
       "type": "uuid",
@@ -3182,6 +3226,19 @@
       "generated": null,
       "identity": null,
       "name": "description",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "character_visual_profile_references"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "composition_analysis",
       "entityType": "columns",
       "schema": "opod",
       "table": "character_visual_profile_references"
@@ -5291,6 +5348,271 @@
       "entityType": "columns",
       "schema": "opod",
       "table": "hashtags"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": {
+        "type": "always",
+        "name": "influencer_media_id_seq",
+        "increment": "1",
+        "startWith": "1",
+        "minValue": "1",
+        "maxValue": "9223372036854775807",
+        "cache": 1,
+        "cycle": false
+      },
+      "name": "id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "influencer_id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "post_id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_caption",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "post_url",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "slide_index",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "asset_type",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "media_key",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sha256",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "analysis",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "analysis_model",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "analysis_version",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "vector(1024)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "embedding",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "embedding_model",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "timestamp(6) with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "CURRENT_TIMESTAMP",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": {
+        "type": "always",
+        "name": "influencers_id_seq",
+        "increment": "1",
+        "startWith": "1",
+        "minValue": "1",
+        "maxValue": "9223372036854775807",
+        "cache": 1,
+        "cycle": false
+      },
+      "name": "id",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencers"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "platform",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencers"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "username",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencers"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "url",
+      "entityType": "columns",
+      "schema": "opod",
+      "table": "influencers"
     },
     {
       "type": "uuid",
@@ -10781,6 +11103,69 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "influencer_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "post_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "slide_index",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "influencer_media_source_key",
+      "entityType": "indexes",
+      "schema": "opod",
+      "table": "influencer_media"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "platform",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "username",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "influencers_platform_username_key",
+      "entityType": "indexes",
+      "schema": "opod",
+      "table": "influencers"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "status",
           "isExpression": false,
           "asc": true,
@@ -12785,6 +13170,40 @@
       "table": "character_follows"
     },
     {
+      "nameExplicit": false,
+      "columns": [
+        "character_id"
+      ],
+      "schemaTo": "opod",
+      "tableTo": "characters",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "character_influencers_character_id_characters_id_fkey",
+      "entityType": "fks",
+      "schema": "opod",
+      "table": "character_influencers"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "influencer_id"
+      ],
+      "schemaTo": "opod",
+      "tableTo": "influencers",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "name": "character_influencers_influencer_id_influencers_id_fkey",
+      "entityType": "fks",
+      "schema": "opod",
+      "table": "character_influencers"
+    },
+    {
       "nameExplicit": true,
       "columns": [
         "location_id"
@@ -13344,6 +13763,23 @@
       "entityType": "fks",
       "schema": "opod",
       "table": "generation_jobs"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "influencer_id"
+      ],
+      "schemaTo": "opod",
+      "tableTo": "influencers",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "name": "influencer_media_influencer_id_influencers_id_fkey",
+      "entityType": "fks",
+      "schema": "opod",
+      "table": "influencer_media"
     },
     {
       "nameExplicit": true,
@@ -14095,6 +14531,17 @@
     },
     {
       "columns": [
+        "character_id",
+        "influencer_id"
+      ],
+      "nameExplicit": false,
+      "name": "character_influencers_pkey",
+      "entityType": "pks",
+      "schema": "opod",
+      "table": "character_influencers"
+    },
+    {
+      "columns": [
         "location_id",
         "media_id"
       ],
@@ -14502,6 +14949,26 @@
       "name": "hashtags_pkey",
       "schema": "opod",
       "table": "hashtags",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "influencer_media_pkey",
+      "schema": "opod",
+      "table": "influencer_media",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "influencers_pkey",
+      "schema": "opod",
+      "table": "influencers",
       "entityType": "pks"
     },
     {
