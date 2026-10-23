@@ -115,6 +115,11 @@ sequenceDiagram
   바뀌지 않는다 — `messages.reply_job_id`가 이미 N:1이다.
 - 같은 대화의 작업은 순서대로 하나씩 처리하고, 서로 다른 대화는 병렬 처리한다.
   Agent 문맥은 현재 답변 작업까지의 논리 순서로 구성하며 미래 작업의 메시지는 제외한다.
+- Agent 응답의 공개 `opod` 메타데이터는 provider가 `{ body, experience? }`로 정규화한다.
+  `parseCharacterExperience`가 thought·photo·relationship만 검증해 복사하며 native reasoning,
+  tool/debug 필드는 저장하지 않는다. 유효하지 않은 선택 메타데이터는 정상 답변을 실패시키지 않는다.
+  캐릭터 메시지의 nullable `experience`는 답변·크레딧 캡처·작업 완료와 함께 저장하고,
+  이력/폴링 조회로 반환한다. 다음 Agent 요청의 대화 문맥에는 원문 body만 전달한다.
 - 답변이 늦게 도착하므로 대화 전사는 시간순으로 [질문1, 질문2, 답변1, 답변2]처럼
   엇갈릴 수 있다. 어느 답변이 어느 질문의 것인지는 순서가 아니라 `turnId`가
   가리킨다.

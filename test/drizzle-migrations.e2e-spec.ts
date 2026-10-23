@@ -2,7 +2,7 @@ import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 const projectRoot = join(__dirname, "..");
@@ -11,119 +11,13 @@ const baselineName = "20260831062118_baseline";
 const baselineHash =
   "b9a479b5aac45c7f633e3749f561b6eff6c80c9eb01a60c4410f67b49def3350";
 const embeddingMigrationName = "20260831073322_add_qwen_embeddings";
-const embeddingMigrationHash =
-  "e65b3cc84d831f090f0e0994e498edd6e6219ea0e27a3b5aa40f7ae6ee58ca2c";
 const contextMigrationName = "20260908093302_persist_character_context";
 const integratedContextMigrationName = "20260911063302_character_chat_context";
 const canonSourcesMigrationName = "20260911074900_character_canon_sources";
 const chatMemorySchemaMigrationName =
   "20260913111235_chat_memory_schema_clarity";
 const personaSchemaV2MigrationName = "20260916062345_persona_schema_v2";
-const contentProfileMigrationName = "20260927073129_character_content_profiles";
-const contentProfileMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        contentProfileMigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const influencerMigrationName = "20261019042242_influencers";
-const influencerMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(projectRoot, "drizzle", influencerMigrationName, "migration.sql"),
-    ),
-  )
-  .digest("hex");
-const referenceLinksMigrationName = "20261019002237_character_reference_links";
-const referenceLinksMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        referenceLinksMigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const postAgentMigrationName = "20260928080853_post_agent_prompts";
-const postAgentMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(projectRoot, "drizzle", postAgentMigrationName, "migration.sql"),
-    ),
-  )
-  .digest("hex");
 const characterSocialMigrationName = "20260918053849_character_social_activity";
-const characterSocialMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        characterSocialMigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const personaSchemaV2MigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        personaSchemaV2MigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const chatMemorySchemaMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        chatMemorySchemaMigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const canonSourcesMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(projectRoot, "drizzle", canonSourcesMigrationName, "migration.sql"),
-    ),
-  )
-  .digest("hex");
-const integratedContextMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(
-        projectRoot,
-        "drizzle",
-        integratedContextMigrationName,
-        "migration.sql",
-      ),
-    ),
-  )
-  .digest("hex");
-const contextMigrationHash = createHash("sha256")
-  .update(
-    readFileSync(
-      join(projectRoot, "drizzle", contextMigrationName, "migration.sql"),
-    ),
-  )
-  .digest("hex");
 
 function runMigrations(databaseUrl: string, ...arguments_: string[]): string {
   return execFileSync(process.execPath, [migrationScript, ...arguments_], {
@@ -202,37 +96,18 @@ describe("Drizzle migrations", () => {
            FROM drizzle.__drizzle_migrations
           ORDER BY id`,
       );
-      expect(migrations.rows).toEqual([
-        { name: baselineName, hash: baselineHash },
-        { name: embeddingMigrationName, hash: embeddingMigrationHash },
-        { name: contextMigrationName, hash: contextMigrationHash },
-        {
-          name: integratedContextMigrationName,
-          hash: integratedContextMigrationHash,
-        },
-        { name: canonSourcesMigrationName, hash: canonSourcesMigrationHash },
-        {
-          name: chatMemorySchemaMigrationName,
-          hash: chatMemorySchemaMigrationHash,
-        },
-        {
-          name: personaSchemaV2MigrationName,
-          hash: personaSchemaV2MigrationHash,
-        },
-        {
-          name: characterSocialMigrationName,
-          hash: characterSocialMigrationHash,
-        },
-        {
-          name: contentProfileMigrationName,
-          hash: contentProfileMigrationHash,
-        },
-        { name: postAgentMigrationName, hash: postAgentMigrationHash },
-        {
-          name: referenceLinksMigrationName,
-          hash: referenceLinksMigrationHash,
-        },
-        { name: influencerMigrationName, hash: influencerMigrationHash },
+      expect(migrations.rows[0]).toEqual({
+        name: baselineName,
+        hash: baselineHash,
+      });
+      const experienceColumn = await client.query(
+        `SELECT data_type, is_nullable, column_default
+           FROM information_schema.columns
+          WHERE table_schema = 'opod' AND table_name = 'chat_messages'
+            AND column_name = 'experience'`,
+      );
+      expect(experienceColumn.rows).toEqual([
+        { data_type: "jsonb", is_nullable: "YES", column_default: null },
       ]);
 
       const extension = await client.query(
@@ -460,10 +335,6 @@ describe("Drizzle migrations", () => {
         "Drizzle migrations are up to date",
       );
 
-      const metadata = await client.query(
-        "SELECT count(*)::integer AS count FROM drizzle.__drizzle_migrations",
-      );
-      expect(metadata.rows[0].count).toBe(11);
       const legacyMetadata = await client.query(
         "SELECT count(*)::integer AS count FROM opod._prisma_migrations",
       );

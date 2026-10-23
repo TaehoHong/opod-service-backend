@@ -113,7 +113,7 @@ migration 또는 검증된 백업 복구로 처리한다.
 | 테이블 | 역할 |
 | --- | --- |
 | `chat_conversations` | 사용자와 캐릭터 조합별 대화방 및 읽음·최신 메시지 시각 |
-| `chat_messages` | 사용자와 캐릭터가 주고받은 원문 메시지 |
+| `chat_messages` | 사용자와 캐릭터가 주고받은 원문 메시지. 캐릭터의 공개 속마음·선택 사진·관계 피드백은 nullable `experience` JSONB에 저장하며 사용자·기존 메시지는 비워 둔다 |
 | `chat_reply_generation_jobs` | 캐릭터 답변 생성 작업과 재시도 상태 |
 | `chat_memory_entries` | 대화에서 추출·추론한 검색 단위 장기 기억. `context_injection_mode`로 `always`와 `retrieved`를 구분 |
 | `chat_memory_consolidation_jobs` | 대화를 기억·요약으로 통합하는 비동기 작업 |
@@ -125,6 +125,14 @@ migration 또는 검증된 백업 복구로 처리한다.
 원문 대화는 `chat_messages`가 정본이다. `chat_conversations` 행 하나를 통째로
 임베딩하지 않고, 장기 기억은 `chat_memory_entries.memory_text` 단위로 임베딩한다.
 항상 필요한 명시적 사용자 사실은 `always`, 그 외 기억은 `retrieved`로 저장한다.
+
+`20261023041721_character_experience_schema_sync`는 최신 main의 원본 캡션 snapshot에 이어
+공개 채팅 경험을 추가하고 admin의 기존 `composition_analysis` 정본 누락을 정합화한다.
+분석 컬럼은 이미 저장된 값을 교체하지 않도록 `IF NOT EXISTS`로 채택한다. 과거 배포 기록의
+`0ac8251`/`20261019084411_deep_ken_ellis` 원본은 현재 원격 Git에서 찾을 수 없어 기존 이력이나
+해시를 재작성하지 않는다. 실제 DB 적용은 별도 배포 절차이며, schema mirror는 admin의
+`src/core/database/schema.ts`와 바이트 단위로 일치시킨다.
+
 
 ## pgvector + Qwen 임베딩 설계
 

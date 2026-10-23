@@ -16,6 +16,7 @@ import {
 import {
   MESSAGE_REPLY_PROVIDER,
   MessageReplyError,
+  type MessageReply,
   MessageReplyProvider,
 } from "./message-reply.provider";
 import { MessagesService } from "./messages.service";
@@ -359,7 +360,7 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
    * 답변 저장, 크레딧 캡처, 작업 완료를 한 트랜잭션에 묶는다. 답변만 남고 캡처가
    * 빠지면 공짜 답변이 되고, 반대면 돈만 받고 답이 없다.
    */
-  private async complete(job: ClaimedJob, reply: string): Promise<void> {
+  private async complete(job: ClaimedJob, reply: MessageReply): Promise<void> {
     await this.database.client.transaction(async (tx) => {
       // running일 때만 닫는다. lease를 뺏긴 뒤 뒤늦게 돌아온 시도가 답변을 한 번
       // 더 붙이는 것을 막는다.
@@ -384,7 +385,8 @@ export class MessageReplyWorker implements OnModuleInit, OnModuleDestroy {
       await this.messagesService.appendMessageWithClient(tx, {
         conversationId: job.conversationId,
         senderType: "character",
-        body: reply,
+        body: reply.body,
+        ...(reply.experience ? { experience: reply.experience } : {}),
         replyJobId: job.id,
       });
 
