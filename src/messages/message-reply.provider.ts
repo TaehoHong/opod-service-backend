@@ -1,3 +1,8 @@
+import {
+  parseCharacterExperience,
+  type CharacterExperience,
+} from "../shared/character-experience";
+
 /**
  * Agent 호출 실패. `retryable`이 워커의 재시도 여부를 가른다 — 같은 요청을 세 번
  * 보내도 결과가 같을 실패(계약 불일치, 4xx)까지 재시도하면 크레딧을 잡아둔 채
@@ -21,8 +26,13 @@ export type MessageReplyInput = {
   turnId: string;
 };
 
+export type MessageReply = {
+  body: string;
+  experience?: CharacterExperience;
+};
+
 export type MessageReplyProvider = {
-  createReply(input: MessageReplyInput): Promise<string>;
+  createReply(input: MessageReplyInput): Promise<MessageReply>;
 };
 
 export const MESSAGE_REPLY_PROVIDER = Symbol("MESSAGE_REPLY_PROVIDER");
@@ -110,7 +120,12 @@ export function createMessageReplyProvider(
         throw new MessageReplyError("empty_reply", true);
       }
 
-      return parsed;
+      const experience = parseCharacterExperience(
+        typeof payload === "object" && payload !== null && "opod" in payload
+          ? payload.opod
+          : undefined,
+      );
+      return { body: parsed, ...(experience ? { experience } : {}) };
     },
   };
 }

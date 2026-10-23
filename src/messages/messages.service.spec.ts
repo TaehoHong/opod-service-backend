@@ -130,6 +130,86 @@ describe("MessagesService", () => {
     });
   });
 
+  it("reloads only allowlisted character experience and omits user and legacy metadata", async () => {
+    const experience = { thought: "반갑다." };
+    const { service } = harness({
+      selects: [
+        [{ id: conversation.id }],
+        [
+          {
+            ...humanMessage,
+            replyJob: null,
+            experience: { ...experience, reasoning: "private" },
+          },
+          {
+            ...humanMessage,
+            id: "reply",
+            senderType: "character",
+            replyJob: null,
+            experience: { ...experience, debug: "private" },
+          },
+          {
+            ...humanMessage,
+            id: "legacy",
+            senderType: "character",
+            replyJob: null,
+            experience: null,
+          },
+        ],
+      ],
+    });
+    const result = await service.getMessagesPage({
+      userId: "human-1",
+      characterId: "ai-1",
+      limit: 10,
+    });
+    expect(
+      result.items.find((message) => message.id === "reply")?.experience,
+    ).toEqual(experience);
+    expect(
+      result.items.find((message) => message.id === humanMessage.id),
+    ).not.toHaveProperty("experience");
+    expect(
+      result.items.find((message) => message.id === "legacy"),
+    ).not.toHaveProperty("experience");
+  });
+
+  it("strips private and invalid fields before persisting experience", async () => {
+    const { service, client } = harness({ inserts: [[humanMessage]] });
+    await service.appendMessageWithClient(client as never, {
+      conversationId: conversation.id,
+      senderType: "character",
+      body: "안녕",
+      experience: {
+        thought: "반갑다.",
+        reasoning: "private",
+        photo: { url: "javascript:alert(1)" },
+      } as never,
+    });
+    const insert = client.insert.mock.results[0].value as { values: jest.Mock };
+    expect(insert.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        experience: { thought: "반갑다." },
+      }),
+    );
+  });
+
+  it("never persists experience for a user message even if an untyped caller supplies it", async () => {
+    const { service, client } = harness({ inserts: [[humanMessage]] });
+    await service.appendMessageWithClient(
+      client as never,
+      {
+        conversationId: conversation.id,
+        senderType: "user",
+        body: "hello",
+        experience: { thought: "forged" },
+      } as never,
+    );
+    const insert = client.insert.mock.results[0].value as { values: jest.Mock };
+    expect(insert.values).toHaveBeenCalledWith(
+      expect.objectContaining({ experience: null }),
+    );
+  });
   it("requeues a failed reply with a fresh reservation", async () => {
     const { service, credits } = harness({
       selects: [
