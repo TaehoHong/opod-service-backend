@@ -779,6 +779,67 @@ export const characterPersonaCanonLinks = opod.table(
   ],
 );
 
+export const influencers = opod.table(
+  "influencers",
+  {
+    id: bigint({ mode: "bigint" }).primaryKey().generatedAlwaysAsIdentity(),
+    platform: text().notNull(),
+    username: text().notNull(),
+    url: text().notNull(),
+  },
+  (table) => [
+    uniqueIndex("influencers_platform_username_key").on(
+      table.platform,
+      table.username,
+    ),
+  ],
+);
+
+export const characterInfluencers = opod.table(
+  "character_influencers",
+  {
+    characterId: uuid("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    influencerId: bigint("influencer_id", { mode: "bigint" })
+      .notNull()
+      .references(() => influencers.id, { onDelete: "restrict" }),
+  },
+  (table) => [primaryKey({ columns: [table.characterId, table.influencerId] })],
+);
+
+export const influencerMedia = opod.table(
+  "influencer_media",
+  {
+    id: bigint({ mode: "bigint" }).primaryKey().generatedAlwaysAsIdentity(),
+    influencerId: bigint("influencer_id", { mode: "bigint" })
+      .notNull()
+      .references(() => influencers.id, { onDelete: "restrict" }),
+    postId: text("post_id").notNull(),
+    sourceCaption: text("source_caption"),
+    postUrl: text("post_url").notNull(),
+    slideIndex: integer("slide_index").notNull(),
+    assetType: text("asset_type").notNull(),
+    mediaKey: text("media_key").notNull(),
+    sha256: text().notNull(),
+    analysis: jsonb().$type<Record<string, string | number | null>>(),
+    analysisModel: text("analysis_model"),
+    analysisVersion: text("analysis_version"),
+    embedding: vector({ dimensions: 1024 }),
+    embeddingModel: text("embedding_model"),
+    createdAt: timestamp("created_at", { precision: 6, withTimezone: true })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("influencer_media_source_key").on(
+      table.influencerId,
+      table.postId,
+      table.slideIndex,
+    ),
+  ],
+);
+
 export const characterContentProfiles = opod.table(
   "character_content_profiles",
   {

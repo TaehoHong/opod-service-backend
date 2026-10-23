@@ -14,7 +14,8 @@
     각 메시지의 `replyStatus`가 pending·completed·failed를 알려준다.
   - 연속 발화를 하나로 묶어 한 번 답하는 동작은 범위에서 제외했다(2026-08-11).
     지금은 메시지 1건마다 답변 1건과 크레딧 1회다. (유보)
-  - opod-web 폴링 UX와 pending·failed 표시는 미구현. (gap)
+  - opod-web은 pending 작업을 cursor 폴링으로 조회하고 생성 중 표시·실패 알림을 제공한다.
+    현재 코드 근거이며 이번 문서 검토에서 브라우저 검증을 실행한 것은 아니다.
 
 ## Product Principles (제품 원칙)
 
@@ -49,6 +50,10 @@
 - 의존:
   - 결제 provider 운영 전환 (Polar/Apple/Google adapter 구현, credential·상품 ID
     등록과 sandbox 검증 필요). (구현됨/운영 설정 유보)
+  - 네이티브 연결: Apple 소셜 로그인과 push device/sender는 미구현. IAP backend는
+    `/purchases` 계약을 구현했지만 Web adapter는 `/credits/iap` 제안을 소비하여 연결이 맞지 않는다.
+    Google RTDN authoritative state 재조회·Voided Purchases worker와 실기기/sandbox 검증은 남아 있다.
+    (미해결, [아키텍처](06-architecture.md)의 네이티브 계약 참조)
   - 성인인증 provider 실연동 (현재 미구성 → NSFW 게이트 완성 전제). (미해결)
   - 이메일 발송 인프라 (이메일 인증·비밀번호 재설정·계정/비번 복구의 전제). (결정: 차후 연결)
 
@@ -95,6 +100,6 @@
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 동일 이메일 재가입 차단 + 이메일 원문 보관 | `auth.service.ts`(`deleteAccountFromAuthorization`가 `email=null`), `test/auth.e2e-spec.ts`(재가입 검증), `docs/api/auth.md`(즉시 재가입), `account-support-policy.md` 본문, `consent-policy.md`(재가입 재동의 문구, 경미) |
 | 1:1 문의 일일 제한 제거                    | `inquiries.service.ts`(하루 10건), `docs/api/support.md`(429), `account-support-policy.md` §1:1 문의                                                                                                                       |
-| 무기한 보존 통일                           | `db-management.md`("런타임 산출물은 보존 정책으로 정리")                                                                                                                                                                   |
+| 차지백·store revoke의 무상 보너스 회수 | `forceReversal`이 사용한 무상 지급까지 유상 부채로 잡아 `credit-policy.md`와 불일치. 취소·복원 이벤트도 미지원 |
 | `chat_reply` 원가 측정 + 가격 재확정       | `credit-policy.md`(가격표), `credit-pricing.ts`(`chat_reply: 2`) — 원가 산출 후 재검토                                                                                                                                     |
-| DM 답변 생성 비동기 전환                   | service-backend는 해소됨(2026-08-11). 남은 gap은 opod-web — 폴링 주기, 화면 이탈 시 중단, pending·failed 표시가 아직 없어 답변이 오는 것을 화면이 보여주지 못한다                                                          |
+| DM 답변 생성 비동기 전환                   | Backend 영속 작업과 Web cursor polling/생성 중 표시/실패 알림이 현재 코드에 있다. 실패 작업 수동 재시도의 Web 연결과 실제 사용자 흐름 검증은 별도로 확인해야 한다.                                                          |

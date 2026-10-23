@@ -1,7 +1,6 @@
 # OPOD 호감도 정책 (초안 — 확정 전)
 
 이 문서는 호감도(affinity)의 정의와 가감 규칙의 원본이다.
-용례 설계는 `opod-agent/docs/persona-memory-plan.md` Phase 2.
 
 ## 핵심 결정
 

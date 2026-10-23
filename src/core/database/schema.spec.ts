@@ -18,18 +18,18 @@ describe("Drizzle schema", () => {
   it("captures the complete application schema without the legacy migration table", () => {
     const enums = schemaValues.filter(isPgEnum);
 
-    expect(tableConfigs).toHaveLength(71);
+    expect(tableConfigs).toHaveLength(74);
     expect(enums).toHaveLength(31);
-    expect(columns).toHaveLength(638);
+    expect(columns).toHaveLength(658);
     expect(
       tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(132);
+    ).toBe(134);
     expect(
       tableConfigs.reduce(
         (count, table) => count + table.foreignKeys.length,
         0,
       ),
-    ).toBe(79);
+    ).toBe(82);
     expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
       new Set(["opod"]),
     );
@@ -119,8 +119,12 @@ describe("Drizzle schema", () => {
     expect(bigintColumns.map(({ path }) => path).sort()).toEqual([
       "ai_models.id",
       "character_action_logs.id",
+      "character_influencers.influencer_id",
       "character_social_activity_jobs.id",
       "console_logs.id",
+      "influencer_media.id",
+      "influencer_media.influencer_id",
+      "influencers.id",
       "llm_log_media.llm_log_id",
       "llm_logs.id",
       "post_agent_prompts.ai_model_id",

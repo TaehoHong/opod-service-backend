@@ -2,9 +2,9 @@
 
 - 정책 근거: [consent-policy.md](../consent-policy.md)
 - 상태: **구현 완료 (2026-07-27)** — 도메인 유닛 8건 통과
-- 구현: `src/domain/consents/consents.service.ts`,
-  `src/service/consents/terms.controller.ts`,
-  `src/service/consents/consents.controller.ts`, Swagger `/docs` 등록됨
+- 구현: `src/consents/consents.service.ts`,
+  `src/consents/terms.controller.ts`,
+  `src/consents/consents.controller.ts`, Swagger `/docs` 등록됨
 
 동의 유형은 `terms_of_service`, `privacy`, `age_14`, `marketing` 네 가지이며
 `marketing`만 선택 항목이다.

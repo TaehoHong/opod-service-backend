@@ -12,7 +12,7 @@ Status: 운영 중 (Drizzle v1 전환 2026-08-31)
 | ------------------------------------------------ | ------------- | ---------------------------------------------------------------------- |
 | 캐릭터 설정 (personas, memories, visual profile) | 정본          | 운영자가 admin UI로 수정. 벡터화의 원천                                |
 | 레퍼런스 캡션, (차후) 임베딩                     | 파생          | 정본에서 언제든 재생성 가능해야 한다 — 백필 멱등, 유실은 사고가 아니다 |
-| drafts, generation jobs, action logs             | 런타임 산출물 | append 중심 추적 데이터. 보존 정책으로 정리                            |
+| drafts, generation jobs, action logs             | 런타임 산출물 | append 중심 추적 데이터. 무기한 보존, 정리 배치 없음                            |
 | admin_settings                                   | 설정          | DB 값이 env보다 우선                                                   |
 
 핵심 원칙: **임베딩을 포함한 파생 데이터는 절대 정본이 아니다.** 재생성
@@ -24,13 +24,13 @@ Status: 운영 중 (Drizzle v1 전환 2026-08-31)
 공유 DB에 `db:push`로 직접 변경하면 적용 이력이 남지 않아 코드와 DB가 어긋난다.
 정본과 적용 책임은 다음처럼 고정한다.
 
-1. **backend schema 수정**: `src/domain/database/schema.ts`가 유일한 정본이다.
+1. **backend schema 수정**: `src/core/database/schema.ts`가 유일한 정본이다.
 2. **SQL 생성·검토**: `npm run db:generate`로 `drizzle/<timestamp>_<name>/`을
    만들고 `migration.sql`과 `snapshot.json`을 함께 검토·커밋한다. 데이터 백필이나
    seed가 필요하면 같은 migration SQL에 명시한다.
 3. **로컬 적용·검증**: `npm run db:migrate`로 로컬 DB에 적용하고 unit/E2E/build를
    통과시킨다. E2E는 매번 빈 PostgreSQL 16에 migration 전체를 적용한다.
-4. **admin 미러 갱신**: opod-admin의 `src/domain/database/schema.ts`를 동일하게
+4. **admin 미러 갱신**: opod-admin의 `src/core/database/schema.ts`를 동일하게
    맞추고 admin에서 `npm run schema:check`를 실행한다. admin은 migration을
    생성하거나 적용하지 않는다.
 5. **배포 적용**: backend 컨테이너가 시작 전에 `npm run db:migrate:deploy`를

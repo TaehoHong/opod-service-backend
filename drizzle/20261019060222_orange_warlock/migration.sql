@@ -1,0 +1,1 @@
+ALTER TABLE "opod"."influencer_media" ADD COLUMN "source_caption" text;

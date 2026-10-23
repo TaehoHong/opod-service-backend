@@ -10,7 +10,7 @@
 - 상태: **구현 완료 (2026-07-08)** — e2e 3건 통과
 - 인증: 불필요 (비로그인 공개 — 비번을 잊은 유저도 접근해야 함)
 - 정책: [account-support-policy.md §3](../account-support-policy.md)
-- 구현: `src/domain/faqs/faqs.service.ts`, `src/service/faqs/faqs.controller.ts`,
+- 구현: `src/faqs/faqs.service.ts`, `src/faqs/faqs.controller.ts`,
   Swagger `/docs` "고객지원" 태그 등록됨
 
 ### 요청
@@ -71,8 +71,8 @@ GET /faqs?category=credit
 - 상태: **구현 완료 (2026-07-08)** — e2e 2건 통과
 - 인증: 불필요 (비로그인 공개)
 - 정책: [account-support-policy.md §4](../account-support-policy.md)
-- 구현: `src/domain/notices/notices.service.ts`,
-  `src/service/notices/notices.controller.ts`, Swagger `/docs` 등록됨
+- 구현: `src/notices/notices.service.ts`,
+  `src/notices/notices.controller.ts`, Swagger `/docs` 등록됨
 
 ### 요청
 
@@ -178,8 +178,8 @@ uuid 형식이 아닌 id는 질의 전에 형식 검증으로 걸러 404로 정�
 - 상태: **구현 완료 (2026-07-08)** — 유닛 3건 + e2e 3건 통과
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §5](../account-support-policy.md)
-- 구현: `src/domain/inquiries/inquiries.service.ts`,
-  `src/service/inquiries/inquiries.controller.ts`, Swagger `/docs` 등록됨
+- 구현: `src/inquiries/inquiries.service.ts`,
+  `src/inquiries/inquiries.controller.ts`, Swagger `/docs` 등록됨
 
 ### 요청
 
@@ -308,7 +308,7 @@ GET /inquiries?cursor=<nextCursor>&limit=20
 - 인증: 필수 (Bearer access token)
 - 정책: [account-support-policy.md §5](../account-support-policy.md)
 - 구현: `InquiriesService.findInquiry`, uuid 검증은 공용 헬퍼
-  `src/domain/database/uuid.ts`(`isUuid`)로 추출 (notices와 공유),
+  `src/shared/utils/uuid.ts`(`isUuid`)로 추출 (notices와 공유),
   Swagger `/docs` 등록됨
 
 ### 요청

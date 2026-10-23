@@ -19,8 +19,9 @@
 ## Release Flow
 
 - 브랜치 전략: main 중심. (사실 — 현재 리포 상태)
-- 배포: `./deploy.sh` — 소스를 서버로 전송한 뒤 원격 Docker 이미지를 빌드하고
-  서버 소유 compose의 `api` 서비스를 재시작한다. 개발 서버 배포가 운영 전환을 뜻하지 않는다. (사실)
+- 배포: `./deploy.sh` — SSH로 개발 서버 Docker daemon에 build context를 보내
+  linux/amd64 이미지를 서버에서 빌드한 뒤 서버-로컬 compose의 `api` 서비스를
+  재시작하고 `/health`를 확인한다. 개발 서버 배포가 운영 전환을 뜻하지 않는다. (사실)
 - 스키마 마이그레이션: 컨테이너 시작 시 `npm run db:migrate:deploy` 자동 실행
   (`docker/Dockerfile` CMD). 미적용 마이그레이션만 순서대로 적용. (사실)
 - 배포 순서: 스키마 변경 포함 릴리스는 **backend 먼저** 배포(마이그레이션 적용)
@@ -40,10 +41,11 @@
   `DATABASE_URL`, `AUTH_JWT_SECRET`(≥32B), `ADULT_IDENTITY_HASH_SECRET`(별도
   안정 시크릿), `AUTH_REFRESH_TOKEN_TTL_SECONDS`, `OPOD_AGENT_URL`,
   `S3_PUBLIC_BASE_URL`, `PORT`, `PURCHASE_ACCOUNT_TOKEN_SECRET`, Polar/Apple/
-  Google provider credential. Web provider는 DB `admin_settings['payments.webProvider']`,
-  상품·가격·통화·provider 상품 ID는 `payment_product_mappings`가 정본이다.
-  Nginx 한 단계를 거치는 배포라면 `TRUST_PROXY_HOPS=1`로 실제 고객 IP를 복원한다.
-  실제 hop 수는 배포 토폴로지와 일치시켜야 한다. 정확한 키는 `.env.production.example`을 따른다. (사실)
+  Google provider credential. 상품 ID·가격·활성 채널 매핑은 환경변수가 아니라 DB
+  `credit_products`·`payment_product_mappings`에 저장하며 Web provider 선택은
+  `admin_settings.payments.webProvider`가 정본이다. Nginx 한 단계를 거치는 배포라면
+  `TRUST_PROXY_HOPS=1`로 실제 고객 IP를 복원한다. 실제 hop 수는 배포 토폴로지와
+  일치시켜야 한다. 정확한 키는 `.env.production.example`을 따른다. (사실)
 - Polar는 `POLAR_SERVER=sandbox|production`을 반드시 명시한다. 누락·오타는
   503으로 거절하며 production으로 추측하지 않는다. sandbox는 `POLAR_SANDBOX_API_KEY`,
   production은 `POLAR_ACCESS_TOKEN`만 사용하고 다른 환경의 토큰으로 fallback하지 않는다.
@@ -89,7 +91,7 @@
 ## Operations
 
 - Health checks: `GET /health` → `{ status: "ok", service: "ai-sns-backend" }`.
-  (사실 — `src/service/health/health.controller.ts`)
+  (사실 — `src/health/health.controller.ts`)
 - Logs:
   - 애플리케이션 로그: `RequestLoggingInterceptor` — 성공한 읽기(GET/HEAD/
     OPTIONS)는 로그하지 않고, 쓰기와 모든 실패만 남긴다. (사실)
