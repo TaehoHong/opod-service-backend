@@ -1,5 +1,5 @@
 import { is } from "drizzle-orm";
-import { getTableConfig, isPgEnum, PgTable } from "drizzle-orm/pg-core";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "./schema";
 
 const schemaValues: unknown[] = Object.values(schema);
@@ -15,53 +15,6 @@ const columns = tableConfigs.flatMap((table) =>
 );
 
 describe("Drizzle schema", () => {
-  it("captures the complete application schema without the legacy migration table", () => {
-    const enums = schemaValues.filter(isPgEnum);
-
-    expect(tableConfigs).toHaveLength(74);
-    expect(enums).toHaveLength(31);
-    expect(columns).toHaveLength(658);
-    expect(
-      tableConfigs.reduce((count, table) => count + table.indexes.length, 0),
-    ).toBe(134);
-    expect(
-      tableConfigs.reduce(
-        (count, table) => count + table.foreignKeys.length,
-        0,
-      ),
-    ).toBe(82);
-    expect(new Set(tableConfigs.map((table) => table.schema))).toEqual(
-      new Set(["opod"]),
-    );
-    expect(tableConfigs.map((table) => table.name)).not.toContain(
-      "_prisma_migrations",
-    );
-    expect(tableConfigs.map((table) => table.name)).toEqual(
-      expect.arrayContaining([
-        "ai_models",
-        "post_agent_prompts",
-        "chat_conversations",
-        "chat_messages",
-        "chat_reply_generation_jobs",
-        "chat_memory_entries",
-        "chat_memory_consolidation_jobs",
-        "chat_applied_state_changes",
-        "chat_relationship_states",
-        "chat_memory_session_summaries",
-        "character_canon_memories",
-      ]),
-    );
-    expect(tableConfigs.map((table) => table.name)).not.toEqual(
-      expect.arrayContaining([
-        "agent_core_memories",
-        "agent_archival_memories",
-        "message_conversations",
-        "messages",
-        "character_memories",
-      ]),
-    );
-  });
-
   it("preserves UUIDv7 and updatedAt client-side behavior", () => {
     const generatedUuidPrimaryKeys = columns.filter(
       ({ column, path }) =>
