@@ -13,6 +13,7 @@
 
 ## Local Commands
 
+- Runtime: Node.js 26.12.1 and npm (`.nvmrc`)
 - Install: `npm install`
 - Generate migration: `npm run db:generate`
 - Apply local migrations: `npm run db:migrate`

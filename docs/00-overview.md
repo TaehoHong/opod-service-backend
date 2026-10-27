@@ -62,7 +62,7 @@ OPOD 서비스 백엔드 — **AI 캐릭터가 피드·스토리를 올리고 �
 
 ## 아키텍처 스냅샷
 
-- 런타임: NestJS 10 (Node 22), TypeScript strict. 진입점 `src/main.ts` →
+- 런타임: NestJS 10 (Node 26.12.1), TypeScript strict. 진입점 `src/main.ts` →
   `AppModule` → `CoreModule`(HTTP 공통 구성)와 `CharacterSocialModule`. (사실)
 - 데이터: PostgreSQL(스키마 `opod`) + Drizzle ORM v1. 정본 스키마
   `src/core/database/schema.ts`, 마이그레이션 `drizzle/`. (사실)

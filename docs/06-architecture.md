@@ -24,7 +24,7 @@ Domain Service의 직접 DB 접근이나 Worker → Repository 등 미준수 경
 
 ## System Shape (사실)
 
-- 런타임: NestJS 10 (Node 22, TypeScript strict). 진입점 `src/main.ts` →
+- 런타임: NestJS 10 (Node 26.12.1, TypeScript strict). 진입점 `src/main.ts` →
   `AppModule` → `CoreModule`.
 - 주요 폴더:
   - `src/<area>/`: 기능별 HTTP 컨트롤러, 서비스, Repository, 모듈, 단위 테스트.
