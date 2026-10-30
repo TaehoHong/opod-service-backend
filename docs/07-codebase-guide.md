@@ -139,6 +139,10 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
 | HTTP/DB 계약  | `npm run test:e2e` (Docker 필요)      | 동일           | Testcontainers PostgreSQL 16에서 baseline·레거시 등록·HTTP e2e 통과 | `test/jest-e2e.json`, `test/drizzle-migrations.e2e-spec.ts` |
 | 아키텍처 규칙 | `npm run test -- architecture`        | —              | 계층·경계 유지                     | `src/architecture.spec.ts` |
 
+마이그레이션 회귀는 승인된 baseline 해시, 실제 컬럼·제약·시드와 기존 데이터 보존을
+검증한다. 전체 migration 이름·개수나 같은 SQL 파일에서 다시 계산한 해시를 정답으로
+복사하지 않는다. 최신 main에 추가된 migration도 같은 검증 경로로 실행한다.
+
 ## Excluded Paths
 
 | 경로                       | 이유                           | 정본                       |
