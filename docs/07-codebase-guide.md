@@ -280,3 +280,9 @@ DB 인프라는 `src/core/database/`, 공통 순수 헬퍼와 HTTP 도구는 `sr
 Admin이 person-composition-v1 촬영 분석과 기존 벡터 컬럼의 재색인을 소유하며 공개 서비스 API는 바뀌지 않는다.
 Admin 미러는 정본 schema.ts와 동일하다. 컬럼 추가 후 Admin 코드를 배포하고 명시적인 분석·색인 작업으로 기존 데이터를 채운다.
 이번 변경의 통합 테스트는 사용자 지시로 실행하지 않았다.
+
+공개 채팅 경험의 `20261023041721_character_experience_schema_sync`는 위 원본
+`20261019084411_deep_ken_ellis` snapshot 뒤에 연결한다. 이미 추가된 composition 컬럼을
+다시 만들지 않고 `chat_messages.experience` nullable JSONB와 컬럼 설명만 추가한다.
+기존 migration 이름·해시는 수정하지 않는다. 격리 PostgreSQL에서 기존 분석 JSON·description
+및 migration 이력 보존, 신규 컬럼과 재실행 멱등성을 확인했다.
